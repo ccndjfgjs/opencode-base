@@ -1,0 +1,2467 @@
+"""Работа с базой: поиск программ, создание новой базы, подключение.
+
+Модуль не зависит от окон — его можно проверить отдельно, без запуска
+графического интерфейса. Всё, что делает окно, сводится к вызовам отсюда.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+
+# ---------------------------------------------------------------- программы
+
+SKILL_MARKER = "SKILL.md"
+
+
+# Как программа относится к файлам базы. Состояний три, а не два, потому
+# что «не читает» и «мы не проверяли» — разные вещи. Обещать первое вместо
+# второго нельзя: человек будет искать базу там, где её в принципе нет.
+READS_YES = "yes"  # проверено: файлы с диска читает
+READS_NO = "no"  # проверено: файлы с диска не читает
+READS_UNKNOWN = "unknown"  # не проверяли
+
+
+@dataclass
+class Program:
+    """Программа-клиент, в которую можно подключить базу."""
+
+    ident: str
+    title: str
+    hint: str
+    supports_skills: bool = True
+    #: Читает ли программа файлы с диска.
+    reads_state: str = READS_UNKNOWN
+    #: Через что программа получает базу. Видно, откуда берётся память,
+    #: а не только «куда положили».
+    reads_via: str = ""
+    #: куда класть базу, если стандартной папки ещё нет
+    fallback: str = ""
+    #: Места, по которым программа только опознаётся: файлы туда не кладём.
+    #: Это папки установки приложений — писать в них нельзя.
+    detect_only: tuple[str, ...] = ()
+
+    def config_dir(self) -> Path:
+        """Папка настроек программы. Сначала ищем существующую."""
+        for candidate in self._candidates():
+            if candidate.is_dir():
+                return candidate
+        return self._fallback_path()
+
+    def _fallback_path(self) -> Path:
+        return expand(self.fallback)
+
+    def _candidates(self) -> list[Path]:
+        """Где у программы лежат настройки.
+
+        Пути ищутся от домашней папки и переменных среды, поэтому годится
+        на любом компьютере: имя пользователя нигде не вписано. Порядок
+        внутри списка — от самого вероятного места к редкому.
+        """
+        ident = self.ident
+        home = Path.home()
+        appdata = Path(os.environ.get("APPDATA", home / "AppData/Roaming"))
+        local = Path(os.environ.get("LOCALAPPDATA", home / "AppData/Local"))
+        table: dict[str, list[Path]] = {
+            "opencode": [
+                home / ".config/opencode",
+                appdata / "opencode",
+                local / "opencode",
+            ],
+            "harness": [dsh_home()],
+        }
+        return table.get(ident, [])
+
+    def _detect_only_places(self) -> list[Path]:
+        """Места, по которым программа опознаётся, но куда мы не пишем."""
+        return [expand(place) for place in self.detect_only]
+
+    def ability_note(self) -> str:
+        """Честное пояснение: увидит ли программа базу и через что."""
+        if self.reads_state == READS_YES:
+            if self.reads_via:
+                return f"Базу увидит: {self.reads_via}."
+            return "Базу увидит."
+        if self.reads_state == READS_NO:
+            return "Базу не увидит: файлы с диска не читает."
+        return "Не проверяли, читает ли эта программа файлы с диска."
+
+    def can_attach(self) -> bool:
+        """Можно ли вообще подключать базу к этой программе.
+
+        Отказ только один — когда проверено, что файлы программа не читает.
+        «Не проверяли» запретом не считается: пусть человек попробует.
+        """
+        return self.reads_state != READS_NO
+
+    def command(self) -> str | None:
+        """Путь к файлу-команде программы, если она есть в системе."""
+        names = {
+            "opencode": ["opencode.cmd", "opencode.exe"],
+            "harness": ["dsh.cmd", "dsh.exe"],
+        }.get(self.ident, [])
+        for name in names:
+            found = shutil.which(name)
+            if found:
+                return found
+        return None
+
+    def is_installed(self) -> bool:
+        if self.config_dir().is_dir() or self.command() is not None:
+            return True
+        return any(place.is_dir() for place in self._detect_only_places())
+
+
+def dsh_home() -> Path:
+    """Домашняя папка Harness: переменная DSH_HOME, иначе ~/.dsh."""
+    env = os.environ.get("DSH_HOME", "").strip().strip('"')
+    if env:
+        return Path(env)
+    return Path.home() / ".dsh"
+
+
+# Список программ, которые программа управления ищет сама. Пути нигде не
+# вписаны жёстко: всё считается от домашней папки и переменных среды, поэтому
+# база с этим файлом годится для любого компьютера и любого имени пользователя.
+#
+# Порядок не случаен: сперва те, что базу действительно читают, затем те,
+# про которые мы не проверяли, и в конце — те, что не читают вовсе.
+# Про каждую сказано честно, что именно она увидит.
+# Программа работает только с двумя: OpenCode и Harness (модификация
+# пользователя). Сторонних программ в списке нет по решению пользователя
+# (сентябрь 2026). Копия прежнего списка — в бэкапе базы.
+PROGRAMS: list[Program] = [
+    Program(
+        "opencode",
+        "OpenCode",
+        "основная: файлы-навигаторы, плагин памяти и навыки",
+        reads_state=READS_YES,
+        reads_via="файлы AGENTS.md и opencode.jsonc, плагин памяти и навыки",
+        fallback="~/.config/opencode",
+        detect_only=(
+            "%LOCALAPPDATA%/Programs/@opencode-aidesktop",
+            "~/.local/share/opencode",
+        ),
+    ),
+    Program(
+        "harness",
+        "Harness",
+        "твоя модификация: память через AGENTS.md, навыки и мост NCP",
+        reads_state=READS_YES,
+        reads_via="файл AGENTS.md, папка skills и мост NCP",
+        fallback="~/.dsh",
+    ),
+]
+
+PROGRAMS_BY_ID = {p.ident: p for p in PROGRAMS}
+
+
+def expand(value: str) -> Path:
+    """Разворачивает ~ и переменные среды в путь.
+
+    Тильда разворачивается только в самом начале пути. Внутри пути она
+    остаётся как есть: Windows выдаёт короткие имена вида DEDY_S~1, и
+    заменять там тильду нельзя — путь превратится в мусор.
+    """
+    text = str(value)
+    if text == "~":
+        text = str(Path.home())
+    elif text.startswith(("~/", "~\\")):
+        text = str(Path.home()) + text[1:]
+    text = os.path.expandvars(text)
+    return Path(text)
+
+
+# ---------------------------------------------------------------- плагин OpenCode
+
+# Файлы конфигурации, которые нужно положить в папку настроек OpenCode,
+# иначе он базу не увидит. Ровно этот набор раскладывает батник База.bat.
+CONFIG_FILES = ("opencode.jsonc", "AGENTS.md", "package.json", "package-lock.json")
+CONFIG_DIRS = ("plugins", "command")
+
+# Сам плагин памяти — «мозг», который читает базу и подхватывает скиллы.
+PLUGIN_REL = ("plugins", "memory-base.js")
+
+# Готовые зависимости плагина. Лежат рядом с конфигом в базе, поэтому
+# интернет для установки плагина не нужен.
+DEPS_MODULE = ("node_modules", "@opencode-ai", "plugin", "package.json")
+
+# Настройки, в которые вписываются пути к файлам базы.
+# Это и есть механизм авто-подключения базы к каждой сессии OpenCode.
+#
+# Файлы-навигаторы здесь не случайно: без них нейросеть видит только
+# профиль, проекты и факты — и не знает ни устройства базы, ни правил
+# поведения в ней. Проверено 16.09.2026: правила лежали в базе, но
+# в настройках их не было, поэтому до нейросети они не доходили.
+INSTRUCTIONS_FILE = "opencode.jsonc"
+
+# Пометка в файлах настроек, вместо которой подставляется настоящий путь
+# базы. Благодаря ей файлы в базе годятся для любого компьютера: имя
+# пользователя и папка установки в них не прописаны.
+BASE_PLACEHOLDER = "{{BASE}}"
+
+# Пометка рабочего стола. Нужна файлам команд: команда создания проекта
+# заводит папку проекта рядом с базой, на рабочем столе. Без пометки
+# в файле остался бы рабочий стол того, кто писал команду.
+DESKTOP_PLACEHOLDER = "{{DESKTOP}}"
+
+INSTRUCTION_TARGETS = (
+    "profile.md",
+    "projects.md",
+    "facts.md",
+    "библиотека/АКТИВНАЯ-ПАМЯТЬ.md",
+    "КАРТА-БАЗЫ.md",
+    "ПРАВИЛА-ИИ.md",
+)
+
+
+def find_config_source(base: Path) -> Path | None:
+    """Ищет папку config с плагином. Возвращает None, если её нет."""
+    for candidate in (base / "config", base):
+        if (candidate / Path(*PLUGIN_REL)).is_file():
+            return candidate
+    return None
+
+
+def has_plugin(cfg: Path) -> bool:
+    """Есть ли в папке конфигурации сам плагин памяти."""
+    return (cfg / Path(*PLUGIN_REL)).is_file()
+
+
+def build_instructions(base: Path) -> str:
+    """Собирает текст opencode.jsonc с путями именно к этой базе.
+
+    Батник берёт готовый файл из базы — и пути там от старого места,
+    если база переехала. Здесь файл собирается заново, поэтому пути
+    всегда указывают на настоящую папку базы.
+    """
+    base_posix = str(base).replace("\\", "/")
+    lines = [
+        "{",
+        '  "$schema": "https://opencode.ai/config.json",',
+        "  // Локальная база памяти пользователя — автоматически загружается",
+        "  // в КАЖДУЮ сессию (все модели, CLI и десктоп), без ручных действий.",
+        '  "instructions": [',
+    ]
+    items = [f"{base_posix}/{name}" for name in INSTRUCTION_TARGETS]
+    for index, item in enumerate(items):
+        comma = "," if index < len(items) - 1 else ""
+        lines.append(f'    "{item}"{comma}')
+    lines.append("  ]")
+    lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
+def substitute_base(path: Path, base: Path, desktop: Path | None = None) -> bool:
+    """Подставляет настоящие пути вместо пометок {{BASE}} и {{DESKTOP}}.
+
+    Нужна для файлов настроек и команд, которые кладутся в программу как
+    есть (AGENTS.md, opencode.jsonc, файлы в папке command): в базе они
+    лежат с пометкой, поэтому годятся для любого компьютера, а настоящие
+    пути появляются только при подключении.
+
+    {{DESKTOP}} — рабочий стол. Он нужен там, где команда создаёт папку
+    проекта рядом с базой: без пометки в файле осталось бы имя чужого
+    пользователя. Возвращает True, если файл изменён.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    if BASE_PLACEHOLDER not in text and DESKTOP_PLACEHOLDER not in text:
+        return False
+    fixed = text.replace(BASE_PLACEHOLDER, str(base).replace("\\", "/"))
+    if DESKTOP_PLACEHOLDER in fixed:
+        table = Path(desktop) if desktop is not None else desktop_dir()
+        fixed = fixed.replace(DESKTOP_PLACEHOLDER, str(table).replace("\\", "/"))
+    if fixed == text:
+        return False
+    try:
+        path.write_text(fixed, encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
+def install_plugin(base: Path, dest: Path, progress=None) -> tuple[list[str], list[str]]:
+    """Кладёт в папку настроек плагин, настройки и команды.
+
+    Возвращает два списка: сообщения и ошибки. Ничего не удаляет —
+    прежние файлы уходят в _previous-version.
+    """
+    messages: list[str] = []
+    errors: list[str] = []
+
+    def say(text: str) -> None:
+        messages.append(text)
+        if progress:
+            progress(text)
+
+    cfg = find_config_source(base)
+    if cfg is None:
+        errors.append(
+            "В базе нет папки config с плагином памяти — "
+            "OpenCode не сможет её читать."
+        )
+        return messages, errors
+
+    say(f"Плагин найден: {cfg}")
+    dest.mkdir(parents=True, exist_ok=True)
+
+    # Прежние настройки сохраняем, чтобы ничего не потерялось.
+    old = [f for f in CONFIG_FILES if (dest / f).is_file()]
+    if old:
+        backup = dest / "_previous-version"
+        backup.mkdir(exist_ok=True)
+        for name in old:
+            try:
+                shutil.copy2(dest / name, backup / name)
+            except OSError as exc:
+                errors.append(f"Не удалось сохранить копию {name}: {exc}")
+        say(f"Прежние настройки сохранены ({len(old)} шт.)")
+
+    # Файлы настроек. opencode.jsonc не перезаписываем поверх живущего
+    # в программе: там могут быть провайдеры и мосты. Его разберём
+    # отдельно — переведём на эту базу, ничего не стирая.
+    copied = 0
+    for name in CONFIG_FILES:
+        if name == INSTRUCTIONS_FILE:
+            continue
+        src = cfg / name
+        if src.is_file():
+            try:
+                shutil.copy2(src, dest / name)
+                copied += 1
+            except OSError as exc:
+                errors.append(f"Не удалось скопировать {name}: {exc}")
+    say(f"Файлы настроек: {copied} из {len(CONFIG_FILES) - 1}")
+
+    # opencode.jsonc: если в программе его ещё нет, кладём образец из базы.
+    # Если уже есть — переписываем только пути, оставляя остальные
+    # настройки человека в целости.
+    cfg_target = dest / INSTRUCTIONS_FILE
+    if not cfg_target.is_file():
+        src = cfg / INSTRUCTIONS_FILE
+        if src.is_file():
+            try:
+                shutil.copy2(src, cfg_target)
+            except OSError as exc:
+                errors.append(f"Не удалось скопировать {INSTRUCTIONS_FILE}: {exc}")
+        else:
+            try:
+                cfg_target.write_text(build_instructions(base), encoding="utf-8")
+            except OSError as exc:
+                errors.append(f"Не удалось записать {INSTRUCTIONS_FILE}: {exc}")
+    if cfg_target.is_file():
+        if substitute_base(cfg_target, base):
+            say(f"Путь к базе подставлен: {INSTRUCTIONS_FILE}")
+        try:
+            from opencode_caps import set_instructions  # noqa: PLC0415
+
+            text = cfg_target.read_text(encoding="utf-8")
+            cfg_target.write_text(set_instructions(text, base), encoding="utf-8")
+            say("Пути к базе прописаны в настройках")
+        except (OSError, ValueError) as exc:
+            try:
+                cfg_target.write_text(build_instructions(base), encoding="utf-8")
+                say("Пути к базе прописаны заново — прежний файл не читался")
+            except OSError as exc2:
+                errors.append(f"Не удалось записать {INSTRUCTIONS_FILE}: {exc2}")
+
+    # В остальных файлах настроек путь стоит пометкой — заменяем
+    # на настоящий. Так файлы в базе остаются переносимыми.
+    for name in CONFIG_FILES:
+        if name == INSTRUCTIONS_FILE:
+            continue
+        target = dest / name
+        if target.is_file() and substitute_base(target, base):
+            say(f"Путь к базе подставлен: {name}")
+
+    # Папки plugins и command — плагин и готовые команды.
+    for folder in CONFIG_DIRS:
+        src = cfg / folder
+        if src.is_dir():
+            try:
+                shutil.copytree(
+                    src, dest / folder, dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("__pycache__"),
+                )
+            except OSError as exc:
+                errors.append(f"Не удалось скопировать папку {folder}: {exc}")
+
+    # В готовых командах путь тоже стоит пометкой — иначе команда,
+    # написанная на одном компьютере, на другом будет искать чужую папку.
+    # Проходим и по папке command, и по её подпапкам.
+    for folder in CONFIG_DIRS:
+        root = dest / folder
+        if not root.is_dir():
+            continue
+        for target in sorted(root.rglob("*")):
+            if target.is_file() and substitute_base(target, base):
+                say(f"Путь к базе подставлен: {folder}/{target.name}")
+
+    if has_plugin(dest):
+        say("Плагин памяти установлен")
+    else:
+        errors.append("Плагин памяти не установился — база не будет читаться.")
+
+    # Готовые зависимости: без них плагин не запустится.
+    deps_src = cfg / "node_modules"
+    if (deps_src / "@opencode-ai" / "plugin" / "package.json").is_file():
+        try:
+            shutil.copytree(
+                deps_src, dest / "node_modules", dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns("__pycache__"),
+            )
+            say("Зависимости плагина перенесены (интернет не нужен)")
+        except OSError as exc:
+            errors.append(f"Не удалось перенести зависимости: {exc}")
+    elif (dest / Path(*DEPS_MODULE)).is_file():
+        say("Зависимости плагина уже на месте")
+    else:
+        say("Зависимостей нет — понадобится npm install (нужен интернет)")
+
+    return messages, errors
+
+
+# ---------------------------------------------------------------- Harness
+
+HARNESS_AGENTS_BEGIN = "<!-- == OpenCode_Base: harness == -->"
+HARNESS_AGENTS_END = "<!-- == OpenCode_Base: конец harness == -->"
+
+
+def harness_agents_block(base: Path) -> str:
+    """Блок для AGENTS.md в Harness: пути к файлам базы."""
+    posix = str(base).replace("\\", "/")
+    files = "\n".join(f"- {name}: {posix}/{name}" for name in INSTRUCTION_TARGETS)
+    return (
+        f"{HARNESS_AGENTS_BEGIN}\n"
+        "# База пользователя (подключена программой управления)\n"
+        "Память лежит в базе, читай эти файлы:\n"
+        f"{files}\n"
+        f"Навыки: {posix}/skills/<имя>/SKILL.md\n"
+        "Карты подсказок: "
+        f"{posix}/знания/Техника/Безопасность/_подсказки-безопасность.md, "
+        f"{posix}/знания/Учёба/_подсказки-программисту.md\n"
+        f"{HARNESS_AGENTS_END}\n"
+    )
+
+
+def install_harness_agents(
+    base: Path, dest: Path, progress=None
+) -> tuple[list[str], list[str]]:
+    """Вписывает базу в AGENTS.md у Harness. Чужое не трогает.
+
+    Прежний AGENTS.md уходит копией в _previous-version. Наш блок живёт
+    между метками: повторная установка его заменяет, а не двоит.
+    """
+    messages: list[str] = []
+    errors: list[str] = []
+
+    def say(text: str) -> None:
+        messages.append(text)
+        if progress:
+            progress(text)
+
+    dest.mkdir(parents=True, exist_ok=True)
+    target = dest / "AGENTS.md"
+    block = harness_agents_block(base)
+    try:
+        text = target.read_text(encoding="utf-8") if target.is_file() else ""
+    except (OSError, UnicodeDecodeError) as exc:
+        errors.append(f"AGENTS.md не читается: {exc}")
+        return messages, errors
+    if target.is_file():
+        backup_dir = dest / "_previous-version"
+        try:
+            backup_dir.mkdir(exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            shutil.copy2(target, backup_dir / f"AGENTS.md-{stamp}")
+            say("Копия AGENTS.md сохранена в _previous-version")
+        except OSError as exc:
+            errors.append(f"Не сохранилась копия AGENTS.md: {exc}")
+            return messages, errors
+    pattern = re.compile(
+        re.escape(HARNESS_AGENTS_BEGIN)
+        + r".*?"
+        + re.escape(HARNESS_AGENTS_END)
+        + r"\n?",
+        re.DOTALL,
+    )
+    if pattern.search(text):
+        text = pattern.sub(block, text)
+        say("Блок базы в AGENTS.md обновлён")
+    else:
+        if text and not text.endswith("\n"):
+            text += "\n"
+        text = text + ("\n" if text else "") + block
+        say("Блок базы дописан в AGENTS.md")
+    try:
+        target.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        errors.append(f"AGENTS.md не записался: {exc}")
+        return messages, errors
+    if HARNESS_AGENTS_BEGIN not in target.read_text(encoding="utf-8"):
+        errors.append("AGENTS.md не читается после записи — откат вручную из _previous-version")
+    return messages, errors
+
+
+# ---------------------------------------------------------------- создание базы
+
+# Файлы, без которых база не считается базой.
+REQUIRED_FILES = ("profile.md", "facts.md", "projects.md", "ОБРАЗЕЦ-БАЗЫ.md")
+
+# Файлы-навигаторы. Они появились в расширенной структуре: без них
+# нейросеть видит только profile/facts и не знает про остальные разделы.
+NAV_FILES = ("КАРТА-БАЗЫ.md", "ПРАВИЛА-ИИ.md")
+
+# Папки, которые создаются в новой базе.
+# Список отражает расширенную структуру: память, личное, журнал решений,
+# настройки и знания по областям. Совпадает с базой-образцом в корне.
+NEW_DIRS = (
+    # служебные разделы базы
+    "библиотека",
+    "библиотека/записи",
+    "библиотека/архив",
+    "библиотека/входящие",
+    "библиотека/журнал",
+    "библиотека/шаблоны",
+    "память",
+    "память/архив",
+    "журнал-решений",
+    "настройки",
+    "личное",
+    "личное/дневник",
+    "знания",
+    "projects",
+    "sessions",
+    "skills",
+    "инструкции",
+)
+
+# Области знаний. Создаются внутри «знания» — по одной папке на область.
+# В каждой области лежит файл «_О-ПАПКЕ.md» с объяснением, что туда кладут.
+KNOWLEDGE_AREAS = (
+    "Техника",
+    "Деньги",
+    "Здоровье",
+    "Учёба",
+    "Дом-и-быт",
+    "Документы",
+    # личные данные: люди, вещи и то, что нужно в беде
+    "Люди",
+    "Имущество",
+    "Экстренное",
+)
+
+# Подпапки внутри областей. Нужны там, где одной папки мало:
+# у людей — группы («Семья», «Друзья»), у имущества — виды вещей.
+KNOWLEDGE_SUBDIRS = {
+    "Люди": ("Семья", "Друзья", "Родня", "Коллеги", "Специалисты"),
+    "Имущество": ("Техника", "Транспорт", "Недвижимость", "Гарантии-и-чеки"),
+}
+
+
+def knowledge_folders() -> list[str]:
+    """Все папки внутри «знания»: сами области и их подпапки.
+
+    Один список на все случаи: создание базы, пояснения «_О-ПАПКЕ.md»
+    и копирование шаблонов из образца.
+    """
+    places = [f"знания/{area}" for area in KNOWLEDGE_AREAS]
+    for area, subs in KNOWLEDGE_SUBDIRS.items():
+        places += [f"знания/{area}/{sub}" for sub in subs]
+    return places
+
+# Имена, занятые в Windows. Такую папку создать нельзя.
+RESERVED = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+FORBIDDEN_CHARS = set('<>:"/\\|?*')
+
+
+class NameError_(ValueError):
+    """Имя базы не годится."""
+
+
+def validate_name(name: str) -> str:
+    """Проверяет имя папки и возвращает его без лишних пробелов.
+
+    Бросает NameError_ с понятным объяснением, если имя не годится.
+    """
+    name = (name or "").strip().strip(".")
+    if not name:
+        raise NameError_("Имя не может быть пустым.")
+    if len(name) > 100:
+        raise NameError_("Слишком длинное имя — до 100 знаков.")
+    bad = sorted({ch for ch in name if ch in FORBIDDEN_CHARS})
+    if bad:
+        shown = " ".join(bad)
+        raise NameError_(
+            f"Эти знаки в имени папки Windows не разрешает: {shown}\n"
+            "Уберите их."
+        )
+    if any(ord(ch) < 32 for ch in name):
+        raise NameError_("В имени есть невидимые служебные знаки. Уберите их.")
+    if name.upper() in RESERVED:
+        raise NameError_(
+            f"Имя «{name}» занято самой Windows — под него нельзя создать папку.\n"
+            "Возьмите другое, например «{0}-база».".format(name)
+        )
+    if name in (".", ".."):
+        raise NameError_("Такое имя использовать нельзя.")
+    return name
+
+
+@dataclass
+class CreationPlan:
+    """Что именно сделает создание базы — показывается до записи."""
+
+    target: Path
+    name: str
+    files: list[str] = field(default_factory=list)
+    dirs: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    template_from: Path | None = None
+
+
+def build_plan(parent: Path, name: str, template: Path | None) -> CreationPlan:
+    """Готовит план создания базы, ничего не записывая на диск."""
+    name = validate_name(name)
+    target = Path(parent) / name
+    plan = CreationPlan(target=target, name=name)
+
+    if target.exists():
+        if any((target / f).exists() for f in REQUIRED_FILES):
+            raise NameError_(
+                f"В папке «{name}» уже лежит база — там есть "
+                f"{REQUIRED_FILES[0]}.\nВыберите другое имя или другую папку."
+            )
+        if any(target.iterdir()):
+            plan.warnings.append(
+                "Папка уже существует и в ней есть посторонние файлы. "
+                "Они останутся на месте — новые файлы добавятся к ним."
+            )
+    else:
+        plan.dirs.append(str(target))
+
+    if template and (template / REQUIRED_FILES[0]).is_file():
+        plan.template_from = template
+        plan.files = [
+            "profile.md (из образца)",
+            "facts.md (из образца)",
+            "projects.md (из образца)",
+            "ОБРАЗЕЦ-БАЗЫ.md",
+            "библиотека/ (пустая, с активной памятью)",
+            "skills/ (пустая — наполните копированием)",
+            "заготовки личных данных (_ШАБЛОН-….md)",
+        ]
+        plan.dirs += [str(target / d) for d in NEW_DIRS]
+    else:
+        plan.files = [f"{f} (пустой шаблон)" for f in REQUIRED_FILES]
+        plan.dirs += [str(target / d) for d in NEW_DIRS]
+    return plan
+
+
+BLANK = {
+    "profile.md": "# Профиль пользователя\n\n- Зовут: \n- Язык общения: русский.\n",
+    "facts.md": "# Факты и правила (приоритетные)\n\n- [{}] База создана.\n".format(
+        datetime.now().strftime("%Y-%m-%d")
+    ),
+    "projects.md": "# Проекты\n\nСписок появится по мере работы.\n",
+    "ОБРАЗЕЦ-БАЗЫ.md": (
+        "# Образец базы — как она устроена\n\n"
+        "База — это папка с текстовыми файлами. Начинать знакомство\n"
+        "нужно с `КАРТА-БАЗЫ.md` — там написано, что где лежит.\n\n"
+        "## Корень — самое важное\n\n"
+        "- `КАРТА-БАЗЫ.md` — навигатор: что где лежит, куда что писать;\n"
+        "- `ПРАВИЛА-ИИ.md` — как ассистент должен себя вести;\n"
+        "- `profile.md` — кто пользователь, как с ним общаться;\n"
+        "- `facts.md` — правила и решения (самое важное);\n"
+        "- `projects.md` — список проектов, по строке на проект.\n\n"
+        "## Разделы\n\n"
+        "- `память/` — короткая сводка «на чём остановились»;\n"
+        "- `библиотека/` — знания с поиском, ведёт ассистент;\n"
+        "- `знания/` — материалы по областям: "
+        + ", ".join(KNOWLEDGE_AREAS) + ";\n"
+        "- `projects/` — по папке на каждый проект;\n"
+        "- `личное/` — цели, привычки, идеи, дневник;\n"
+        "- `sessions/` — что делали, по месяцам;\n"
+        "- `журнал-решений/` — почему так решили;\n"
+        "- `настройки/` — стиль общения, запреты, разрешения;\n"
+        "- `skills/` — умения ассистента: `skills/<имя>/SKILL.md`;\n"
+        "- `инструкции/` — подробные объяснения по разделам.\n\n"
+        "## Правила ведения\n\n"
+        "- Ничего не удалять — только дополнять.\n"
+        "- Одна мысль — одна строка, с датой в квадратных скобках.\n"
+        "- Пароли, номера карт и сканы документов сюда не писать.\n\n"
+        "В каждой папке лежит файл `_О-ПАПКЕ.md` — объяснение, что туда кладут.\n"
+    ),
+}
+
+#: Содержимое файлов-навигаторов для пустой базы (без образца).
+#: Для базы из образца они копируются как есть.
+NAV_BLANK = {
+    "КАРТА-БАЗЫ.md": (
+        "# Карта базы — что здесь лежит\n\n"
+        "Путеводитель по базе. Читается в начале работы.\n\n"
+        "## Куда что писать\n\n"
+        "| Что случилось | Куда писать |\n"
+        "|---|---|\n"
+        "| Факт о пользователе | `profile.md` |\n"
+        "| Решение, о котором нельзя забыть | `facts.md` |\n"
+        "| Новый проект | `projects/<Имя>/` + строка в `projects.md` |\n"
+        "| Знание по теме | `знания/<Область>/` |\n"
+        "| Задача про код или безопасность | сначала карты `знания/Техника/Безопасность/_подсказки-безопасность.md` и `знания/Учёба/_подсказки-программисту.md`, потом нужные файлы из них |\n"
+        "| Ценная мысль | `библиотека/записи/<Тема>/` |\n"
+        "| Что сделано | `sessions/<месяц>.md` |\n"
+        "| Почему так решили | `журнал-решений/<месяц>.md` |\n\n"
+        "## Разделы\n\n"
+        "- `память/` — короткая сводка «на чём остановились»;\n"
+        "- `библиотека/` — знания с поиском: `записи/`, `входящие/`,\n"
+        "  `архив/`, `журнал/`, `шаблоны/`;\n"
+        "- `знания/` — области: "
+        + ", ".join(KNOWLEDGE_AREAS) + ";\n"
+        "- `projects/` — по папке на проект, внутри `_проект.md`;\n"
+        "- `личное/` — `цели.md`, `привычки.md`, `идеи.md`, `дневник/`;\n"
+        "- `sessions/` — что делали, по месяцам;\n"
+        "- `журнал-решений/` — почему так решили;\n"
+        "- `настройки/` — `стиль-общения.md`, `запреты.md`, `разрешения.md`;\n"
+        "- `skills/` — умения ассистента;\n"
+        "- `инструкции/` — подробные объяснения.\n\n"
+        "Подробный образец устройства — в `ОБРАЗЕЦ-БАЗЫ.md`.\n"
+    ),
+    "ПРАВИЛА-ИИ.md": (
+        "# Правила для ассистента\n\n"
+        "Как вести себя в этой базе. Что где лежит — в `КАРТА-БАЗЫ.md`.\n\n"
+        "## Главное\n\n"
+        "- Пользователь — не программист: объяснять простым языком,\n"
+        "  термины пояснять бытовыми аналогиями.\n"
+        "- Отвечать по-русски. Код и имена файлов не переводить.\n\n"
+        "## Как вести базу\n\n"
+        "- Ничего не удалять — только дополнять. Устаревшее в архив.\n"
+        "- Без дубликатов: перед записью проверить, нет ли такого факта.\n"
+        "- Только стойкое. Временные детали не пишутся.\n"
+        "- С датой в квадратных скобках.\n"
+        "- Одна мысль — одна строка.\n\n"
+        "## Перед большой работой\n\n"
+        "1. Открыть `память/АКТИВНАЯ-ПАМЯТЬ.md` — что было в прошлый раз.\n"
+        "2. Посмотреть `facts.md` — правила и ограничения.\n\n"
+        "## После большой работы\n\n"
+        "1. Обновить `память/АКТИВНАЯ-ПАМЯТЬ.md`.\n"
+        "2. Дописать в `sessions/<месяц>.md`.\n"
+        "3. Если поменяли правило — в `журнал-решений/<месяц>.md` причину.\n\n"
+        "## Не гадай — сначала знания\n\n"
+        "Если запрос касается темы, под которую в базе есть справочник знаний,\n"
+        "— сначала открой его, потом отвечай. Это обязательный шаг.\n"
+        "- безопасность/сети/веб/Windows/Linux/macOS/реверс/крипта/приватность/ИИ\n"
+        "  → `знания/Техника/Безопасность/_подсказки-безопасность.md`, затем файлы;\n"
+        "- общие знания программиста → `знания/Учёба/Программисту-знать.md`;\n"
+        "- задача с кодом → `знания/Учёба/_подсказки-программисту.md`.\n"
+        "Если этих файлов в базе нет — так и сказать, а не выдумывать.\n\n"
+        "## Осторожность\n\n"
+        "- Внешние действия (письма, публикации) — только с разрешения.\n"
+        "- Файлы пользователя не удалять без прямой просьбы.\n"
+        "- Секреты (пароли, номера карт) в базу не писать.\n"
+    ),
+}
+
+ACTIVE_MEMORY = """# Активная память NCP
+
+> Этот файл читается в начале каждой сессии. Держать кратким.
+
+- **Последняя контрольная точка:** не создана
+- **Текущая цель:** база создана
+- **Текущий статус:** пустая, готова к наполнению
+
+## Важные решения
+
+- База создана программой управления базами.
+
+## Незавершённое
+
+- Наполнить профиль и правила.
+"""
+
+LIBRARY_INDEX = {
+    "schema": "ncp-library-index-v1",
+    "updated": "",
+    "count": 0,
+    "topics": {},
+    "entries": [],
+}
+
+#: Имя файла внутри базы, на который вешается ярлык.
+#: Ярлык не может открыть папку, зато открывает файл — поэтому в базе
+#: лежит небольшой файл-открывалка, показывающий, что это за база.
+OPENER_NAME = "Открыть-базу.cmd"
+
+
+def opener_body(base: Path) -> str:
+    """Содержимое файла-открывалки внутри базы.
+
+    Показывает папку базы в Проводнике и короткую справку.
+    """
+    return (
+        "@echo off\r\n"
+        "rem Этот файл создан программой управления базой.\r\n"
+        "rem На него удобно вешать ярлык: двойной щелчок откроет папку\r\n"
+        "rem с этой базой в Проводнике.\r\n"
+        "setlocal\r\n"
+        'set "ЗДЕСЬ=%~dp0"\r\n'
+        "echo.\r\n"
+        "echo   База:  %ЗДЕСЬ%\r\n"
+        "echo.\r\n"
+        "echo   Открываю папку базы...\r\n"
+        'start "" explorer "%ЗДЕСЬ%"\r\n'
+        "exit /b 0\r\n"
+    )
+
+
+def create_base(plan: CreationPlan, progress=None) -> list[str]:
+    """Выполняет план: создаёт папки и файлы. Возвращает список сообщений."""
+    log: list[str] = []
+
+    def say(text: str) -> None:
+        log.append(text)
+        if progress:
+            progress(text)
+
+    target = plan.target
+    target.mkdir(parents=True, exist_ok=True)
+    say(f"Создана папка: {target}")
+
+    for name in NEW_DIRS:
+        folder = target / name
+        folder.mkdir(parents=True, exist_ok=True)
+    say(f"Создано папок: {len(NEW_DIRS)}")
+
+    # Области знаний — по папке на область, чтобы сразу было видно,
+    # куда раскладывать материалы. Создаются только если их ещё нет.
+    areas_made = 0
+    for area in KNOWLEDGE_AREAS:
+        folder = target / "знания" / area
+        if not folder.is_dir():
+            folder.mkdir(parents=True, exist_ok=True)
+            areas_made += 1
+    if areas_made:
+        say(f"Областей знаний создано: {areas_made}")
+
+    # Подпапки внутри областей — группы людей и виды имущества.
+    subs_made = 0
+    for area, subs in KNOWLEDGE_SUBDIRS.items():
+        for sub in subs:
+            folder = target / "знания" / area / sub
+            if not folder.is_dir():
+                folder.mkdir(parents=True, exist_ok=True)
+                subs_made += 1
+    if subs_made:
+        say(f"Подпапок в областях создано: {subs_made}")
+
+    if plan.template_from:
+        copied = _copy_template(plan.template_from, target)
+        say(f"Скопировано из образца: {', '.join(copied)}")
+    else:
+        for name, body in BLANK.items():
+            (target / name).write_text(body, encoding="utf-8")
+        say(f"Создано файлов: {len(BLANK)}")
+        # Наполнение пустой базы из главной базы (где живёт программа):
+        # справочники знаний, скиллы, конфиг с плагином и записи библиотеки.
+        # Личные файлы (profile/facts/projects) остаются пустыми заготовками.
+        filled = (
+            _copy_service_files(app_root(), target)
+            + _copy_ref_files(app_root(), target)
+            + _copy_lib_docs(app_root(), target)
+            + _copy_lib_records(app_root(), target)
+            + _copy_skills(app_root(), target)
+            + _copy_instructions(app_root(), target)
+            + _copy_config(app_root(), target)
+        )
+        if filled:
+            say(f"Наполнено из главной базы: {', '.join(filled)}")
+
+    # Файлы-навигаторы. Нужны в любом случае: у базы из образца они
+    # уже скопированы, у пустой — создаются здесь.
+    nav_made = 0
+    for name, body in NAV_BLANK.items():
+        dest = target / name
+        if not dest.exists():
+            dest.write_text(body, encoding="utf-8")
+            nav_made += 1
+    if nav_made:
+        say(f"Создано файлов-навигаторов: {nav_made}")
+
+    # Пояснения «_О-ПАПКЕ.md» — если их не принёс образец, пишем краткие
+    # заготовки, чтобы папки не выглядели пустыми и брошенными.
+    # Проверяем не «папка пуста», а «нет ли уже пояснения»: у папки
+    # с подпапками внутри файла может не быть.
+    hints_made = 0
+    folders = list(NEW_DIRS) + knowledge_folders()
+    for name in folders:
+        folder = target / name
+        if not folder.is_dir():
+            continue
+        hint = folder / "_О-ПАПКЕ.md"
+        if hint.exists():
+            continue
+        note = name.replace("/", " → ")
+        hint.write_text(
+            f"# Папка «{note}»\n\n"
+            "Что сюда кладут и как этим пользоваться — в файле\n"
+            "`КАРТА-БАЗЫ.md` в корне базы.\n",
+            encoding="utf-8",
+        )
+        hints_made += 1
+    if hints_made:
+        say(f"Создано пояснений к папкам: {hints_made}")
+
+    memory = target / "библиотека/АКТИВНАЯ-ПАМЯТЬ.md"
+    if not memory.exists():
+        memory.write_text(ACTIVE_MEMORY, encoding="utf-8")
+
+    index = target / "библиотека/index.json"
+    if not index.exists():
+        data = dict(LIBRARY_INDEX)
+        data["updated"] = datetime.now().isoformat(timespec="seconds")
+        index.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+    marker = target / "база.json"
+    marker.write_text(
+        json.dumps(
+            {
+                "kind": "opencode-base",
+                "name": plan.name,
+                "created": datetime.now().isoformat(timespec="seconds"),
+                "created_by": "tools/dbapp",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    say("Записана отметка о создании базы")
+
+    opener = target / OPENER_NAME
+    opener.write_text(opener_body(target), encoding="utf-8")
+    say(f"Создан файл для ярлыка: {OPENER_NAME}")
+
+    # запоминаем базу в списке, чтобы её было легко найти при подключении
+    remember_base(target)
+    say("База записана в список созданных")
+    return log
+
+
+def _copy_ref_files(source: Path, target: Path) -> list[str]:
+    """Справочники знаний: Программисту-знать + вся папка Безопасности.
+
+    Только .md, картинок в образце нет — вес маленький (~14 МБ текста).
+    """
+    copied: list[str] = []
+    ref_files: list = [source / "знания/Учёба/Программисту-знать.md"]
+    src_bez = source / "знания/Техника/Безопасность"
+    if src_bez.is_dir():
+        ref_files += sorted(src_bez.rglob("*.md"))
+    for src in ref_files:
+        try:
+            rel = src.relative_to(source)
+        except ValueError:
+            continue
+        if not src.is_file():
+            continue
+        dest = target / rel
+        if dest.exists():
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+    if (target / "знания/Учёба/Программисту-знать.md").is_file():
+        copied.append("знания/Учёба/Программисту-знать.md")
+    if any((target / "знания/Техника/Безопасность").rglob("*.md")):
+        copied.append("знания/Техника/Безопасность (текст)")
+    return copied
+
+
+def _copy_lib_records(source: Path, target: Path) -> list[str]:
+    """Записи библиотеки NCP: указатели, чтобы поиск работал сразу."""
+    copied: list[str] = []
+    src_lib = source / "библиотека/записи"
+    if not src_lib.is_dir():
+        return copied
+    lib_records = sorted(src_lib.rglob("*.md"))
+    for src in lib_records:
+        rel = src.relative_to(source)
+        dest = target / rel
+        if dest.exists():
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+    if lib_records:
+        copied.append(f"библиотека/записи ({len(lib_records)} файлов)")
+    return copied
+
+
+def _copy_lib_docs(source: Path, target: Path) -> list[str]:
+    """Служебные файлы самой библиотеки: протокол, каталог, память."""
+    copied: list[str] = []
+    src_lib = source / "библиотека"
+    dst_lib = target / "библиотека"
+    if not src_lib.is_dir():
+        return copied
+    for name in ("NCP.md", "README.md", "АКТИВНАЯ-ПАМЯТЬ.md", "КАТАЛОГ.md"):
+        src = src_lib / name
+        if src.is_file() and not (dst_lib / name).exists():
+            shutil.copy2(src, dst_lib / name)
+            copied.append(f"библиотека/{name}")
+    return copied
+
+
+def _copy_instructions(source: Path, target: Path) -> list[str]:
+    """Человеческие инструкции по устройству базы."""
+    copied: list[str] = []
+    src_inst = source / "инструкции"
+    dst_inst = target / "инструкции"
+    if not src_inst.is_dir():
+        return copied
+    for item in sorted(src_inst.glob("*.md")):
+        if not (dst_inst / item.name).exists():
+            shutil.copy2(item, dst_inst / item.name)
+            copied.append(f"инструкции/{item.name}")
+    return copied
+
+
+def _copy_service_files(source: Path, target: Path) -> list[str]:
+    """Служебные файлы папок: пояснения «_О-ПАПКЕ.md» и заготовки
+    «_ШАБЛОН-….md». Имя, начинающееся с «_», — признак служебного
+    файла: свои записи пользователь так не называет. Поэтому копируем
+    именно по этому признаку и ничего лишнего не задеваем.
+    """
+    copied: list[str] = []
+    places = list(NEW_DIRS) + knowledge_folders()
+    for name in places:
+        folder = source / name
+        if not folder.is_dir():
+            continue
+        for src in sorted(folder.glob("_*.md")):
+            dest = target / name / src.name
+            if dest.exists():
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest)
+            copied.append(f"{name}/{src.name}")
+    return copied
+
+
+def _copy_skills(source: Path, target: Path) -> list[str]:
+    """Скиллы: папки с SKILL.md, не задевая уже имеющиеся."""
+    copied: list[str] = []
+    src_skills = source / "skills"
+    if not src_skills.is_dir():
+        return copied
+    dst_skills = target / "skills"
+    for item in sorted(src_skills.iterdir()):
+        if not item.is_dir():
+            continue
+        if not (item / SKILL_MARKER).is_file():
+            continue
+        sub = item.name
+        if sub.startswith("."):
+            continue
+        dest = dst_skills / sub
+        if dest.exists():
+            continue
+        shutil.copytree(item, dest, ignore=shutil.ignore_patterns("__pycache__"))
+        copied.append(f"скилл {sub}")
+    return copied
+
+
+def _copy_config(source: Path, target: Path) -> list[str]:
+    """Папка config с плагином памяти и зависимостями.
+
+    Пути в настройках переписываем под новое место базы: в источнике
+    они указывают на старую папку и после копирования станут ложными.
+    """
+    copied: list[str] = []
+    src_cfg = find_config_source(source)
+    if src_cfg is None:
+        return copied
+    dst_cfg = target / "config"
+    for name in CONFIG_FILES + (".gitignore",):
+        src = src_cfg / name
+        if src.is_file() and not (dst_cfg / name).exists():
+            dst_cfg.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst_cfg / name)
+            copied.append(f"config/{name}")
+    for folder in CONFIG_DIRS:
+        src = src_cfg / folder
+        if src.is_dir():
+            try:
+                shutil.copytree(
+                    src, dst_cfg / folder, dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("__pycache__"),
+                )
+                copied.append(f"config/{folder}")
+            except OSError:
+                pass
+    # Готовые зависимости — чтобы плагин работал без интернета.
+    src_deps = src_cfg / "node_modules"
+    if (src_deps / "@opencode-ai" / "plugin" / "package.json").is_file():
+        try:
+            shutil.copytree(
+                src_deps, dst_cfg / "node_modules", dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns("__pycache__"),
+            )
+            copied.append("config/node_modules")
+        except OSError:
+            pass
+    if (dst_cfg / INSTRUCTIONS_FILE).is_file():
+        try:
+            (dst_cfg / INSTRUCTIONS_FILE).write_text(
+                build_instructions(target), encoding="utf-8"
+            )
+            copied.append("config/opencode.jsonc (пути обновлены)")
+        except OSError:
+            pass
+    return copied
+
+
+def _copy_template(template: Path, target: Path) -> list[str]:
+    """Переносит образец базы, не перезаписывая существующее."""
+    copied: list[str] = []
+    for name in REQUIRED_FILES:
+        src = template / name
+        if src.is_file():
+            shutil.copy2(src, target / name)
+            copied.append(name)
+
+    # Файлы-навигаторы: карта базы и правила поведения. Без них нейросеть
+    # не знает об устройстве базы и не пользуется её разделами.
+    for name in NAV_FILES:
+        src = template / name
+        if src.is_file() and not (target / name).exists():
+            shutil.copy2(src, target / name)
+            copied.append(name)
+
+    copied += _copy_service_files(template, target)
+    copied += _copy_ref_files(template, target)
+    copied += _copy_lib_records(template, target)
+
+    copied += _copy_skills(template, target)
+
+    copied += _copy_config(template, target)
+
+    copied += _copy_lib_docs(template, target)
+    copied += _copy_instructions(template, target)
+    return copied
+
+
+# ---------------------------------------------------------------- скиллы
+
+#: Скиллы, которые лежат в базе, но в папку программы не переносятся.
+#: Здесь — имена для будущих исключений.
+SKILLS_SKIP = ()
+
+
+def list_skills(base: Path) -> list[dict[str, str]]:
+    """Возвращает скиллы базы: имя, описание, папка.
+
+    Скиллом считается папка с файлом SKILL.md. Описание берётся
+    из шапки этого файла — чтобы в окне было видно, что скилл делает,
+    а не только его название.
+    """
+    folder = Path(base) / "skills"
+    found: list[dict[str, str]] = []
+    if not folder.is_dir():
+        return found
+    for item in sorted(folder.iterdir(), key=lambda p: p.name.lower()):
+        if not item.is_dir() or item.name.startswith("."):
+            continue
+        if not (item / SKILL_MARKER).is_file():
+            continue
+        if item.name in SKILLS_SKIP:
+            continue
+        found.append({
+            "name": item.name,
+            "title": skill_title(item) or item.name,
+            "description": skill_description(item),
+            "path": str(item),
+        })
+    return found
+
+
+def skill_title(skill_dir: Path) -> str:
+    """Читает поле name из шапки SKILL.md."""
+    head = _read_skill_head(skill_dir)
+    for line in head:
+        text = line.strip()
+        if text.lower().startswith("name:"):
+            return text.split(":", 1)[1].strip().strip('"').strip("'")
+    return ""
+
+
+def skill_description(skill_dir: Path) -> str:
+    """Читает поле description из шапки SKILL.md.
+
+    Описание бывает перенесено на следующую строку (YAML-складка,
+    значок «>»), поэтому собираем продолжение, пока идут отступы.
+    """
+    head = _read_skill_head(skill_dir)
+    parts: list[str] = []
+    collecting = False
+    for line in head:
+        text = line.rstrip()
+        if text.strip().lower().startswith("description:"):
+            parts.append(text.split(":", 1)[1].strip().lstrip(">|-").strip())
+            collecting = True
+            continue
+        if collecting:
+            # продолжение — строки с отступом; пустая строка или новое
+            # поле вида «license:» означают конец описания
+            if not text.strip() or not text.startswith((" ", "\t")):
+                break
+            parts.append(text.strip())
+    text = " ".join(p for p in parts if p).strip()
+    return text
+
+
+def _read_skill_head(skill_dir: Path) -> list[str]:
+    """Первые строки SKILL.md до второго разделителя «---»."""
+    try:
+        raw = (skill_dir / SKILL_MARKER).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    lines = raw.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return lines[:20]
+    head: list[str] = []
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        head.append(line)
+    return head
+
+
+# ---------------------------------------------------------------- подключение
+
+
+@dataclass
+class AttachResult:
+    ok: bool
+    messages: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    skills_dir: Path | None = None
+
+
+def ncp_bridge_dir(base: Path) -> Path:
+    """Папка моста NCP внутри базы."""
+    return base / "tools" / "ncp-bridge"
+
+
+def _console_python() -> str:
+    """Консольный Python для MCP-сервера.
+
+    Мост печатает ответы в поток вывода, поэтому pythonw.exe (без консоли)
+    не годится: заменяем его на python.exe рядом, а если нет — ищем python
+    в пути.
+    """
+    exe = sys.executable
+    if exe.lower().endswith("pythonw.exe"):
+        candidate = exe[:-4] + ".exe"
+        if os.path.isfile(candidate):
+            return candidate
+    for name in ("python", "python3"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return exe
+
+
+def configure_ncp_bridge(base: Path) -> list[str]:
+    """Вписывает путь к библиотеке в config.json моста NCP внутри базы.
+
+    Образец моста лежит в tools/ncp-bridge и приезжает с пометкой {LIBRARY}
+    вместо настоящего пути: без него сервер не откроет библиотеку. Путь уже
+    верный — ничего не меняем.
+    """
+    messages: list[str] = []
+    config_file = ncp_bridge_dir(base) / "config.json"
+    if not config_file.is_file():
+        return messages
+    try:
+        config = json.loads(config_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        messages.append("Мост NCP: config.json не читается — путь не вписан")
+        return messages
+    library = (base / "библиотека").as_posix()
+    current = str(config.get("library_path", "")).replace("\\", "/")
+    if current in ("", "{{LIBRARY}}", "/"):
+        config["library_path"] = library
+    elif current != library:
+        config["library_path"] = library
+        messages.append(f"Мост NCP: путь к библиотеке обновлён (было: {current})")
+    else:
+        return messages
+    try:
+        config_file.write_text(
+            json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        messages.append("Мост NCP: вписан путь к библиотеке")
+    except OSError as exc:
+        messages.append(f"Мост NCP: не удалось записать путь: {exc}")
+    return messages
+
+
+def attach_base(
+    base: Path,
+    program: Program,
+    progress=None,
+    skills: list[str] | None = None,
+) -> AttachResult:
+    """Подключает созданную базу к выбранной программе.
+
+    Копирует файлы и папки базы в папку настроек программы, ничего не удаляя:
+    прежние одноимённые файлы уходят в _previous-version.
+
+    `skills` — какие скиллы перенести. None означает «все, что есть в базе».
+    Пустой список означает «ни одного». Неотмеченные скиллы, уже лежавшие
+    в папке программы, уходят в _previous-version/skills, а не в корзину —
+    поэтому выбор всегда можно переиграть.
+    """
+    result = AttachResult(ok=True)
+    messages = result.messages
+    errors = result.errors
+
+    def say(text: str) -> None:
+        messages.append(text)
+        if progress:
+            progress(text)
+
+    if not (base / REQUIRED_FILES[0]).is_file():
+        result.ok = False
+        errors.append(f"Папка {base} не похожа на базу: нет {REQUIRED_FILES[0]}.")
+        return result
+
+    # Отказ до всякого копирования: защита от записи в чужую папку.
+    if not program.can_attach():
+        result.ok = False
+        errors.append(
+            f"{program.title} файлы с диска не читает — база ему не видна. "
+            "Это не ошибка настройки и не поломка: приложение показывает "
+            "сайт в рамке, а папки на компьютере не читает. "
+            "Ничего не скопировано."
+        )
+        return result
+
+    dest = program.config_dir()
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        result.ok = False
+        errors.append(f"Не удалось создать папку назначения: {exc}")
+        return result
+    say(f"Папка программы: {dest}")
+
+    # Защита: если выбранная папка — служебная папка пакетов, брать её нельзя.
+    if dest.name.lower() in ("npm", "node_modules"):
+        result.ok = False
+        errors.append(
+            "Папка программы определилась как служебная папка пакетов "
+            f"({dest.name}). Запись туда запрещена."
+        )
+        return result
+
+    existing = [f for f in REQUIRED_FILES if (dest / f).is_file()]
+    if existing:
+        backup = dest / "_previous-version"
+        backup.mkdir(exist_ok=True)
+        for name in existing:
+            try:
+                shutil.copy2(dest / name, backup / name)
+            except OSError as exc:
+                errors.append(f"Не удалось сохранить копию {name}: {exc}")
+        say(f"Прежние файлы сохранены в _previous-version ({len(existing)} шт.)")
+
+    copied_any = False
+    for name in REQUIRED_FILES:
+        src = base / name
+        if src.is_file():
+            try:
+                shutil.copy2(src, dest / name)
+                copied_any = True
+            except OSError as exc:
+                errors.append(f"Не удалось скопировать {name}: {exc}")
+    say("Файлы памяти перенесены" if copied_any else "Файлы памяти не найдены")
+
+    for folder in ("знания", "библиотека", "projects", "инструкции", "sessions"):
+        src = base / folder
+        if src.is_dir():
+            try:
+                shutil.copytree(
+                    src, dest / folder, dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("__pycache__"),
+                )
+            except OSError as exc:
+                errors.append(f"Не удалось скопировать папку {folder}: {exc}")
+    say("Папки базы перенесены")
+
+    if program.supports_skills:
+        available = list_skills(base)
+        names_available = [s["name"] for s in available]
+        if skills is None:
+            chosen = names_available
+        else:
+            chosen = [n for n in names_available if n in set(skills)]
+            skipped = [n for n in skills if n not in set(names_available)]
+            for name in skipped:
+                errors.append(
+                    f"Скилл «{name}» отмечен, но в базе его нет — пропущен."
+                )
+        src_skills = base / "skills"
+        dest_skills = dest / "skills"
+        count = 0
+        if not names_available:
+            # В базе навыков нет вовсе. Убирать то, что уже стоит
+            # в программе, не станем: иначе подключение пустой базы
+            # выглядело бы как потеря всех навыков.
+            say("В базе навыков нет — в программе ничего не тронуто")
+        elif src_skills.is_dir():
+            dest_skills.mkdir(parents=True, exist_ok=True)
+
+            # Неотмеченные скиллы не удаляем: убираем в _previous-version,
+            # чтобы выбор можно было переиграть в любой момент.
+            removed: list[str] = []
+            for item in sorted(dest_skills.iterdir()):
+                if not item.is_dir() or item.name.startswith("."):
+                    continue
+                if item.name in chosen:
+                    continue
+                if not (item / SKILL_MARKER).is_file():
+                    continue
+                backup = dest / "_previous-version" / "skills" / item.name
+                try:
+                    backup.parent.mkdir(parents=True, exist_ok=True)
+                    if backup.exists():
+                        shutil.rmtree(backup)
+                    shutil.move(str(item), str(backup))
+                    removed.append(item.name)
+                except OSError as exc:
+                    errors.append(f"Скилл {item.name}: не удалось убрать: {exc}")
+            if removed:
+                say(
+                    f"Убрано из программы (сохранено в _previous-version): "
+                    f"{len(removed)}"
+                )
+
+            for name in chosen:
+                item = src_skills / name
+                if not (item / SKILL_MARKER).is_file():
+                    continue
+                try:
+                    shutil.copytree(
+                        item, dest_skills / name, dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns("__pycache__"),
+                    )
+                    count += 1
+                except OSError as exc:
+                    errors.append(f"Скилл {name}: {exc}")
+            result.skills_dir = dest_skills
+        say(f"Скиллов перенесено: {count} из {len(names_available)}")
+        if not chosen and names_available:
+            say("Отмеченных скиллов не было — переносить нечего")
+    else:
+        say(f"{program.title} скиллы не читает — пропущено")
+
+    marker = dest / "memory-base-path.txt"
+    try:
+        marker.write_text(str(base).replace("\\", "/"), encoding="utf-8")
+        say("Указан путь к базе")
+    except OSError as exc:
+        errors.append(f"Не удалось записать путь к базе: {exc}")
+
+    # Плагин и настройки — только для OpenCode: именно они заставляют
+    # программу читать базу и подхватывать скиллы. Без них файлы базы
+    # просто лежат в папке и ни на что не влияют.
+    # Для Harness — свой блок в AGENTS.md (install_harness_agents).
+    if program.ident == "opencode":
+        if find_config_source(base) is None:
+            say("Плагин: в базе нет папки config — пропущено")
+        else:
+            _, plugin_errors = install_plugin(base, dest, progress)
+            errors.extend(plugin_errors)
+        # Мосты настраиваются сами: в config.json моста NCP вписываем путь
+        # к библиотеке, а в настройках opencode переводим instructions
+        # и мосты ncp/pc с правами на эту базу. Без этого выбранная база
+        # осталась бы «подключённой на словах».
+        for message in configure_ncp_bridge(base):
+            say(message)
+        cfg_target = dest / INSTRUCTIONS_FILE
+        if cfg_target.is_file():
+            try:
+                from opencode_caps import rewire_config  # noqa: PLC0415
+
+                for message in rewire_config(dest, base):
+                    say(message)
+            except (ValueError, OSError) as exc:
+                errors.append(f"Мосты opencode не переведены: {exc}")
+    elif program.ident == "harness":
+        _, harness_errors = install_harness_agents(base, dest, progress)
+        errors.extend(harness_errors)
+
+    result.ok = not errors
+    # Память о подключении: база появляется в списке на вкладке
+    # «Подключить существующую», чтобы её можно было выбрать снова.
+    if program.ident in PROGRAMS_BY_ID:
+        remember_base(base, program.ident)
+    return result
+
+
+def sync_selected_skills(
+    base: Path,
+    dest: Path,
+    chosen: list[str],
+    progress=None,
+) -> tuple[list[str], list[str]]:
+    """Ставит в программу только отмеченные скиллы, остальные — в запас.
+
+    Отмеченные копируются из базы целиком. Неотмеченные, уже лежавшие
+    в программе, переезжают в _previous-version/skills, а не в корзину:
+    выбор всегда можно переиграть. То же правило, что в attach_base,
+    только без прочего подключения.
+    """
+    messages: list[str] = []
+    errors: list[str] = []
+
+    def say(text: str) -> None:
+        messages.append(text)
+        if progress:
+            progress(text)
+
+    available = [s["name"] for s in list_skills(base)]
+    if not available:
+        say("В базе навыков нет — в программе ничего не тронуто")
+        return messages, errors
+    want = [n for n in chosen if n in available]
+    for name in chosen:
+        if name not in available:
+            errors.append(f"Скилл «{name}» отмечен, но в базе его нет — пропущен.")
+    src_skills = base / "skills"
+    dest_skills = dest / "skills"
+    dest_skills.mkdir(parents=True, exist_ok=True)
+    removed = 0
+    for item in sorted(dest_skills.iterdir()):
+        if not item.is_dir() or item.name.startswith("."):
+            continue
+        if item.name in want:
+            continue
+        if not (item / SKILL_MARKER).is_file():
+            continue
+        backup = dest / "_previous-version" / "skills" / item.name
+        try:
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            if backup.exists():
+                shutil.rmtree(backup)
+            shutil.move(str(item), str(backup))
+            removed += 1
+        except OSError as exc:
+            errors.append(f"Скилл {item.name}: не удалось убрать: {exc}")
+    if removed:
+        say(f"Убрано в _previous-version: {removed}")
+    count = 0
+    for name in want:
+        try:
+            shutil.copytree(
+                src_skills / name, dest_skills / name, dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns("__pycache__"),
+            )
+            count += 1
+        except OSError as exc:
+            errors.append(f"Скилл {name}: {exc}")
+    say(f"Навыков поставлено: {count} из {len(available)}")
+    return messages, errors
+
+
+def count_skills(base: Path) -> int:
+    folder = base / "skills"
+    if not folder.is_dir():
+        return 0
+    return sum(
+        1
+        for item in folder.iterdir()
+        if item.is_dir() and (item / SKILL_MARKER).is_file()
+    )
+
+
+def base_info(base: Path) -> dict[str, object]:
+    """Короткая сводка о базе — для показа в окне."""
+    return {
+        "exists": base.is_dir(),
+        "is_base": (base / REQUIRED_FILES[0]).is_file(),
+        "files": [f for f in REQUIRED_FILES if (base / f).is_file()],
+        "skills": count_skills(base),
+        "size": dir_size(base) if base.is_dir() else 0,
+        "marker": read_marker(base),
+    }
+
+
+def current_base(program: str = "opencode") -> Path | None:
+    """Какая база сейчас основная для программы.
+
+    Смотрится по маркеру memory-base-path.txt в папке настроек программы.
+    Возвращает None, если маркера нет или он ведёт в несуществующую базу.
+    Ничего не меняет.
+    """
+    prog = PROGRAMS_BY_ID.get(program)
+    if prog is None:
+        return None
+    marker = prog.config_dir() / "memory-base-path.txt"
+    try:
+        raw = marker.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    folder = Path(raw)
+    if not folder.is_dir() or not (folder / REQUIRED_FILES[0]).is_file():
+        return None
+    return folder
+
+
+def read_marker(base: Path) -> dict | None:
+    marker = base / "база.json"
+    if not marker.is_file():
+        return None
+    try:
+        return json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def dir_size(path: Path) -> int:
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            try:
+                total += (Path(root) / name).stat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def human_size(bytes_: int) -> str:
+    value = float(bytes_)
+    for unit in ("Б", "КБ", "МБ", "ГБ"):
+        if value < 1024 or unit == "ГБ":
+            return f"{value:.0f} {unit}" if unit == "Б" else f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} ГБ"
+
+
+def open_in_explorer(path: Path) -> None:
+    """Открывает папку в проводнике Windows."""
+    try:
+        os.startfile(str(path))  # type: ignore[attr-defined]
+    except AttributeError:
+        subprocess.run(["explorer", str(path)], check=False)
+
+
+# ---------------------------------------------------------------- список баз
+
+#: Файл со списком баз, созданных этой программой. Лежит в корне программы,
+#: чтобы список не терялся при переносе базы.
+BASES_FILE = "созданные-базы.json"
+
+#: Временная подмена файла списка. Нужна проверкам: без неё они пишут
+#: в настоящий список и оставляют в окне мусорные базы.
+_BASES_OVERRIDE: Path | None = None
+
+
+def use_bases_file(path: Path | None) -> None:
+    """Подменяет файл списка (None — вернуть настоящий)."""
+    global _BASES_OVERRIDE
+    _BASES_OVERRIDE = Path(path) if path is not None else None
+
+
+def bases_file() -> Path:
+    """Где хранится список созданных баз."""
+    if _BASES_OVERRIDE is not None:
+        return _BASES_OVERRIDE
+    return app_root() / BASES_FILE
+
+
+def read_bases() -> list[dict]:
+    """Читает список баз, созданных программой.
+
+    Возвращает только те записи, которые ещё существуют на диске —
+    удалённые базы из списка пропадают сами.
+    """
+    path = bases_file()
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+
+    alive: list[dict] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        raw = str(item.get("path", "")).strip()
+        if not raw:
+            continue
+        folder = Path(raw)
+        if (folder / REQUIRED_FILES[0]).is_file():
+            item["path"] = str(folder)
+            alive.append(item)
+    return alive
+
+
+def remember_base(base: Path, program: str = "") -> None:
+    """Записывает созданную базу в список. Повтор не создаёт дубликат."""
+    base = Path(base)
+    entries = read_bases()
+    key = str(base).lower()
+    for item in entries:
+        if str(item.get("path", "")).lower() == key:
+            item["when"] = datetime.now().isoformat(timespec="seconds")
+            if program:
+                item["program"] = program
+            break
+    else:
+        entries.append(
+            {
+                "name": base.name,
+                "path": str(base),
+                "when": datetime.now().isoformat(timespec="seconds"),
+                "program": program,
+            }
+        )
+    _write_bases(entries)
+
+
+def forget_base(base: Path) -> None:
+    """Убирает базу из списка (сама папка не трогается)."""
+    key = str(Path(base)).lower()
+    entries = [e for e in read_bases() if str(e.get("path", "")).lower() != key]
+    _write_bases(entries)
+
+
+def _write_bases(entries: list[dict]) -> None:
+    """Сохраняет список баз. Ошибка записи не должна ломать работу."""
+    try:
+        path = bases_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except OSError:
+        pass
+
+
+# ---------------------------------------------------------------- ярлыки
+
+#: Куда можно положить ярлык. Порядок = порядок в списке окна.
+SHORTCUT_PLACES: list[tuple[str, str]] = [
+    ("desktop", "Рабочий стол"),
+    ("base", "Внутри папки базы"),
+    ("project", "Корень программы управления"),
+    ("parent", "Рядом с базой (в папке-родителе)"),
+    ("custom", "Своя папка…"),
+]
+
+
+def desktop_dir() -> Path:
+    """Папка рабочего стола. На разных сборках Windows называется по-разному."""
+    for candidate in (
+        Path.home() / "Desktop",
+        Path.home() / "Рабочий стол",
+        Path.home() / "OneDrive" / "Desktop",
+        Path.home() / "OneDrive" / "Рабочий стол",
+    ):
+        if candidate.is_dir():
+            return candidate
+    return Path.home() / "Desktop"
+
+
+def app_root() -> Path:
+    """Корень программы управления базой — папка двумя уровнями выше core.py.
+
+    core.py лежит в <корень>/tools/dbapp, значит корень — на два уровня выше.
+    """
+    return Path(__file__).resolve().parent.parent.parent
+
+
+def shortcut_target_folder(base: Path) -> Path:
+    """Папка, которую открывает ярлык, — сама база."""
+    return Path(base)
+
+
+def resolve_shortcut_folder(place: str, base: Path, custom: str = "") -> Path:
+    """Превращает выбранное место в настоящую папку.
+
+    Бросает NameError_, если папку выбрать нельзя.
+    """
+    base = Path(base)
+    if place == "desktop":
+        return desktop_dir()
+    if place == "base":
+        return base
+    if place == "project":
+        return app_root()
+    if place == "parent":
+        return base.parent
+    if place == "custom":
+        raw = (custom or "").strip()
+        if not raw:
+            raise NameError_("Не указана своя папка для ярлыка.")
+        folder = expand(raw)
+        if not folder.is_dir():
+            raise NameError_(f"Такой папки нет: {folder}\nВыберите другую.")
+        return folder
+    raise NameError_(f"Неизвестное место для ярлыка: {place}")
+
+
+def make_folder_shortcut(link: Path, folder: Path, description: str = "") -> bool:
+    """Создаёт ярлык, открывающий папку. Возвращает True при успехе.
+
+    Ярлык делается через сам Windows, но не через его командную строку.
+    Командная строка при чужой кодировке портит русские буквы и длинное
+    тире в путях — из-за этого ярлык получался битым и вёл в несуществующую
+    папку. Здесь путь передаётся напрямую, поэтому остаётся правильным.
+    """
+    link = Path(link)
+    folder = Path(folder)
+    try:
+        link.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+
+    # основной способ: напрямую, без командной строки
+    try:
+        import pythoncom
+        import win32com.client
+
+        pythoncom.CoInitialize()
+        try:
+            shell = win32com.client.Dispatch("WScript.Shell")
+            shortcut = shell.CreateShortcut(str(link))
+            shortcut.TargetPath = str(folder)
+            shortcut.WorkingDirectory = str(folder.parent)
+            shortcut.Description = description or folder.name
+            shortcut.IconLocation = (
+                "%SystemRoot%" + "\\System32\\shell32.dll,3"
+            )
+            shortcut.Save()
+        finally:
+            pythoncom.CoUninitialize()
+        if link.is_file():
+            return True
+    except Exception:
+        pass
+
+    # запасной способ: через командную строку Windows. Может испортить
+    # русские буквы в пути, поэтому применяется только если первый не смог
+    return _shortcut_via_windows(link, folder, description)
+
+
+def _shortcut_via_windows(
+    link: Path, folder: Path, description: str = ""
+) -> bool:
+    """Запасной способ создать ярлык: через программу Windows."""
+    script = (
+        "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{link}');"
+        "$s.TargetPath='{target}';"
+        "$s.WorkingDirectory='{work}';"
+        "$s.Description='{desc}';"
+        "$s.IconLocation='%SystemRoot%\\System32\\shell32.dll,3';"
+        "$s.Save()"
+    ).format(
+        link=str(link),
+        target=str(folder),
+        work=str(folder.parent),
+        desc=(description or folder.name).replace("'", " "),
+    )
+
+    for exe in ("powershell.exe", "pwsh.exe"):
+        try:
+            done = subprocess.run(
+                [
+                    exe,
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy", "Bypass",
+                    "-Command", script,
+                ],
+                capture_output=True,
+                timeout=60,
+            )
+        except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+            continue
+        if done.returncode == 0 and link.is_file():
+            return True
+    return False
+
+
+def shortcut_target(link: Path) -> Path | None:
+    """Куда ведёт ярлык — читаем из самого файла, без командной строки.
+
+    Через командную строку путь читается с искажениями (русские буквы и
+    длинное тире портятся), поэтому читаем напрямую.
+    """
+    link = Path(link)
+    if not link.is_file():
+        return None
+
+    try:
+        import pythoncom
+        import win32com.client
+
+        pythoncom.CoInitialize()
+        try:
+            shell = win32com.client.Dispatch("WScript.Shell")
+            shortcut = shell.CreateShortcut(str(link))
+            path = shortcut.TargetPath
+        finally:
+            pythoncom.CoUninitialize()
+        if path:
+            return Path(path)
+    except Exception:
+        pass
+
+    # запасной способ: через библиотеку разбора ярлыков
+    try:
+        import pylnk3
+
+        parsed = pylnk3.parse(str(link))
+        path = getattr(parsed, "path", None)
+        if path:
+            return Path(path)
+    except Exception:
+        pass
+    return None
+
+
+def safe_link_name(name: str) -> str:
+    """Имя ярлыка без знаков, которые Windows в именах файлов не разрешает."""
+    cleaned = "".join("_" if ch in '<>:"/\\|?*' else ch for ch in name).strip()
+    cleaned = cleaned.strip(".").strip()
+    if not cleaned:
+        cleaned = "база"
+    if len(cleaned) > 90:
+        cleaned = cleaned[:90]
+    return cleaned
+
+
+@dataclass
+class ShortcutResult:
+    ok: bool
+    link: Path | None = None
+    error: str = ""
+
+
+def create_base_shortcut(
+    base: Path,
+    place: str,
+    custom: str = "",
+    name: str = "",
+) -> ShortcutResult:
+    """Создаёт ярлык на созданную базу в выбранном месте.
+
+    Ярлык ведёт не на папку (двойной щелчок по такой ссылке окно не
+    открывает), а на файл-открывалку внутри базы. Если её нет — создаём.
+    """
+    base = Path(base)
+    try:
+        folder = resolve_shortcut_folder(place, base, custom)
+    except NameError_ as exc:
+        return ShortcutResult(False, None, str(exc))
+
+    label = safe_link_name(name or base.name)
+    link = folder / f"{label}.lnk"
+
+    if link.exists():
+        return ShortcutResult(
+            False, link,
+            f"Ярлык с таким именем уже есть: {link}\n"
+            "Он не тронут — переименуйте существующий или выберите "
+            "другое место.",
+        )
+
+    # цель ярлыка — файл-открывалка внутри базы
+    opener = base / OPENER_NAME
+    if not opener.is_file():
+        try:
+            opener.write_text(opener_body(base), encoding="utf-8")
+        except OSError as exc:
+            return ShortcutResult(
+                False, link, f"Не удалось создать файл для ярлыка: {exc}"
+            )
+
+    made = make_folder_shortcut(
+        link, opener, description=f"База {label}"
+    )
+    if not made:
+        return ShortcutResult(
+            False, link,
+            "Ярлык создать не удалось. Его можно сделать вручную: "
+            f"правый щелчок по файлу {opener} → «Отправить» → "
+            "«Рабочий стол (создать ярлык)».",
+        )
+
+    # проверяем, что ярлык ведёт именно на файл этой базы: иначе он
+    # откроет не то место, и лучше сказать об этом сразу
+    points_to = shortcut_target(link)
+    if points_to is not None:
+        try:
+            same = points_to.resolve() == opener.resolve()
+        except OSError:
+            same = str(points_to).lower() == str(opener).lower()
+        if not same:
+            return ShortcutResult(
+                False, link,
+                "Ярлык создан, но ведёт не на ту базу:\n"
+                f"  должно быть {opener}\n  получилось {points_to}\n"
+                "Пользуйтесь папкой базы напрямую или сделайте ярлык вручную.",
+            )
+    return ShortcutResult(True, link, "")
+
+
+# ---------------------------------------------------------------- мост NCP
+#
+# Мост — это маленькая программа-переводчик: она даёт нейросети доступ
+# к библиотеке NCP по протоколу MCP. Здесь он создаётся, проверяется и
+# вписывается в настройки программы-клиента.
+#
+# Главное правило этого раздела: НИ ОДНОГО ВПИСАННОГО ПУТИ. Всё, что
+# зависит от человека и его компьютера, вычисляется на месте. Иначе мост
+# не заработает на другом компьютере, а именно за этим он и делается.
+
+
+BRIDGE_TEMPLATE_DIR = ("tools", "ncp-bridge")
+BRIDGE_FILES = (
+    "server.py",
+    "ncp_core.py",
+    "config.json",
+    "requirements.txt",
+    "install.bat",
+    "ЧИТАТЬ-МЕНЯ.txt",
+)
+BRIDGE_SERVER = "server.py"
+BRIDGE_CORE = "ncp_core.py"
+BRIDGE_LIBRARY_PLACEHOLDER = "{{LIBRARY}}"
+BRIDGE_LOOK_NAMES = ("NCP-мост", "ncp-bridge")
+BRIDGE_DEFAULT_NAME = "NCP-мост"
+
+
+def bridge_template_dir() -> Path:
+    """Образец моста внутри программы.
+
+    Лежит в самой базе, поэтому едет вместе с ней на любой компьютер —
+    ничего скачивать из интернета не нужно.
+    """
+    return app_root().joinpath(*BRIDGE_TEMPLATE_DIR)
+
+
+def bridge_default_dir() -> Path:
+    """Куда предлагать положить мост. Человек может выбрать другое."""
+    return desktop_dir() / BRIDGE_DEFAULT_NAME
+
+
+def library_dir(base: Path) -> Path:
+    """Папка библиотеки NCP внутри базы."""
+    return Path(base) / "библиотека"
+
+
+def library_ready(base: Path) -> bool:
+    """Развёрнута ли библиотека NCP в этой базе."""
+    lib = library_dir(base)
+    return (lib / "index.json").is_file() or (lib / "NCP.md").is_file()
+
+
+def resolve_library(path: Path) -> Path:
+    """Приводит выбранный путь к папке библиотеки.
+
+    Принимает и базу целиком, и саму папку библиотеки: человек может
+    выбрать любое из двух, и оба варианта должны работать.
+    """
+    path = Path(path)
+    inside = path / "библиотека"
+    if (inside / "index.json").is_file() or (inside / "NCP.md").is_file():
+        return inside
+    return path
+
+
+def looks_like_bridge(folder: Path) -> bool:
+    """Наша ли это папка моста. Узнаём по двум файлам, а не по имени."""
+    folder = Path(folder)
+    return (folder / BRIDGE_SERVER).is_file() and (folder / BRIDGE_CORE).is_file()
+
+
+def find_bridges() -> list[Path]:
+    """Все папки моста, которые видны рядом с базой и на рабочем столе."""
+    roots = [desktop_dir(), app_root(), app_root().parent]
+    found: list[Path] = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for name in BRIDGE_LOOK_NAMES:
+            folder = root / name
+            if looks_like_bridge(folder) and folder not in found:
+                found.append(folder)
+        try:
+            for folder in sorted(root.iterdir()):
+                if folder.is_dir() and looks_like_bridge(folder):
+                    if folder not in found:
+                        found.append(folder)
+        except OSError:
+            pass
+    return found
+
+
+# ---- поиск Python
+
+
+def python_candidates() -> list[Path]:
+    """Где искать Python. Вписанных путей нет — всё считается от дома.
+
+    Первым идёт тот, на котором работает сама эта программа: он заведомо
+    есть и заведомо запускается. Дальше — обычные установки, потом PATH.
+    """
+    home = Path.home()
+    patterns = (
+        ".workbuddy-ai/binaries/python/versions/*/python.exe",
+        ".workbuddy-ai/binaries/python/envs/*/Scripts/python.exe",
+        "AppData/Local/Programs/Python/Python*/python.exe",
+        "AppData/Local/Python/bin/python.exe",
+    )
+    seen: list[str] = []
+    out: list[Path] = []
+
+    def add(path) -> None:
+        if not path:
+            return
+        text = str(path)
+        if text.lower() in seen:
+            return
+        seen.append(text.lower())
+        out.append(Path(path))
+
+    add(sys.executable)
+    for pattern in patterns:
+        for path in sorted(home.glob(pattern)):
+            add(path)
+    for name in ("python.exe", "py.exe"):
+        which = shutil.which(name)
+        if which:
+            add(which)
+    return out
+
+
+def python_works(path: Path) -> bool:
+    """Настоящий ли это Python.
+
+    Заглушка из Microsoft Store отвечает на запрос версии и делает вид,
+    что всё хорошо, но мост запустить не может. Поэтому её отсеиваем по
+    слову WindowsApps в пути.
+    """
+    text = str(path)
+    if "WindowsApps" in text:
+        return False
+    try:
+        done = subprocess.run(
+            [text, "-c", "import sys; print(sys.version_info[:2])"],
+            capture_output=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0
+
+
+def find_python() -> Path | None:
+    """Первый Python, который действительно запускается."""
+    for candidate in python_candidates():
+        if python_works(candidate):
+            return candidate
+    return None
+
+
+# ---- состояние моста
+
+
+@dataclass
+class BridgeStatus:
+    """Что сейчас в папке моста."""
+
+    folder: Path
+    exists: bool = False
+    missing: list[str] = field(default_factory=list)
+    library: str = ""
+    allow_save: bool = True
+    problem: str = ""
+
+    @property
+    def server_py(self) -> Path:
+        return Path(self.folder) / BRIDGE_SERVER
+
+
+def bridge_status(folder: Path) -> BridgeStatus:
+    """Смотрит, что уже лежит в выбранной папке."""
+    folder = Path(folder)
+    status = BridgeStatus(folder=folder)
+    if not folder.is_dir():
+        return status
+    if not looks_like_bridge(folder):
+        try:
+            inside = [p.name for p in folder.iterdir()]
+        except OSError:
+            inside = []
+        if inside:
+            status.problem = (
+                "Папка занята посторонними файлами: "
+                + ", ".join(sorted(inside)[:6])
+            )
+        return status
+
+    status.exists = True
+    status.missing = [name for name in BRIDGE_FILES if not (folder / name).is_file()]
+
+    config_file = folder / "config.json"
+    if config_file.is_file():
+        try:
+            config = json.loads(config_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            status.problem = f"config.json не читается: {exc}"
+            return status
+        status.library = str(config.get("library_path") or "")
+        status.allow_save = bool(config.get("allow_save", True))
+        if status.library == BRIDGE_LIBRARY_PLACEHOLDER:
+            status.problem = (
+                "Путь к библиотеке не подставлен: в config.json осталась "
+                f"пометка {BRIDGE_LIBRARY_PLACEHOLDER}."
+            )
+    else:
+        status.problem = "Нет файла config.json — путь к библиотеке неизвестен."
+    return status
+
+
+# ---- создание
+
+
+@dataclass
+class BridgeResult:
+    """Итог создания моста."""
+
+    ok: bool
+    folder: Path | None = None
+    python: Path | None = None
+    messages: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    checked: bool = False
+
+    @property
+    def server_py(self) -> Path | None:
+        return (Path(self.folder) / BRIDGE_SERVER) if self.folder else None
+
+
+def create_bridge(
+    folder: Path,
+    library: Path,
+    python_exe: Path | None = None,
+    progress=None,
+) -> BridgeResult:
+    """Создаёт мост в выбранной папке.
+
+    Копирует образец из программы и подставляет путь к библиотеке.
+    В чужую непустую папку не пишет: там могут быть нужные файлы.
+    """
+
+    def say(text: str) -> None:
+        if progress:
+            progress(text)
+
+    folder = Path(folder)
+    library = resolve_library(library)
+    result = BridgeResult(ok=False, folder=folder)
+
+    template = bridge_template_dir()
+    if not template.is_dir():
+        result.errors.append(
+            f"В программе нет образца моста: {template}\n"
+            "Похоже, папка tools\\ncp-bridge потерялась."
+        )
+        return result
+
+    if not library_ready(library.parent):
+        result.errors.append(
+            f"В этой базе нет библиотеки NCP: {library}\n"
+            "Сначала создайте базу заново или проверьте путь."
+        )
+        return result
+
+    # --- папка
+    if folder.exists():
+        if not folder.is_dir():
+            result.errors.append(f"По этому пути лежит файл, а не папка: {folder}")
+            return result
+        try:
+            inside = [p.name for p in folder.iterdir()]
+        except OSError as exc:
+            result.errors.append(f"Не удалось заглянуть в папку: {exc}")
+            return result
+        if inside and not looks_like_bridge(folder):
+            result.errors.append(
+                f"Папка не пустая, и моста в ней нет:\n{folder}\n"
+                f"Внутри: {', '.join(sorted(inside)[:6])}\n\n"
+                "Выберите пустую папку или новую — чужое не тронем."
+            )
+            return result
+        if looks_like_bridge(folder):
+            say("В папке уже есть мост — обновляем файлы.")
+    else:
+        try:
+            folder.mkdir(parents=True)
+        except OSError as exc:
+            result.errors.append(f"Не удалось создать папку:\n{folder}\n{exc}")
+            return result
+        say(f"Папка создана: {folder}")
+
+    # --- файлы
+    copied = 0
+    for name in BRIDGE_FILES:
+        source = template / name
+        if not source.is_file():
+            continue
+        try:
+            shutil.copy2(source, folder / name)
+            copied += 1
+        except OSError as exc:
+            result.errors.append(f"Не удалось скопировать {name}: {exc}")
+    say(f"Файлов скопировано: {copied}")
+
+    if not looks_like_bridge(folder):
+        result.errors.append(
+            "Мост скопирован не полностью: нет server.py или ncp_core.py."
+        )
+        return result
+
+    # --- путь к библиотеке
+    config_file = folder / "config.json"
+    try:
+        config = json.loads(config_file.read_text(encoding="utf-8"))
+        config["library_path"] = str(library).replace("\\", "/")
+        config.pop("installed_at", None)
+        config["installed_at"] = datetime.now().isoformat(timespec="seconds")
+        config_file.write_text(
+            json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        result.errors.append(f"Не удалось записать путь в config.json: {exc}")
+        return result
+    say(f"Путь к библиотеке записан: {library}")
+
+    # --- python
+    python = Path(python_exe) if python_exe else find_python()
+    if python is None:
+        result.errors.append(
+            "Python не найден. Мост создан, но запускать его нечем.\n"
+            "Поставьте Python 3.8 или новее с сайта python.org — при "
+            "установке отметьте галочку «Add Python to PATH» — и создайте "
+            "мост заново."
+        )
+        result.ok = False
+        return result
+    result.python = python
+    say(f"Python найден: {python}")
+
+    # --- проверка
+    say("Проверка моста на временной копии библиотеки…")
+    ok, output = bridge_selftest(folder, python)
+    result.checked = ok
+    if ok:
+        say("Проверка пройдена: все 18 проверок.")
+    else:
+        result.errors.append(
+            "Мост создан, но проверка не прошла. Вот что он ответил:\n" + output
+        )
+
+    result.ok = looks_like_bridge(folder) and not result.errors
+    return result
+
+
+def bridge_selftest(folder: Path, python_exe: Path | None = None) -> tuple[bool, str]:
+    """Прогоняет проверку моста. Настоящую библиотеку не трогает."""
+    python = Path(python_exe) if python_exe else find_python()
+    if python is None:
+        return False, "Python не найден — проверить нечем."
+    server = Path(folder) / BRIDGE_SERVER
+    if not server.is_file():
+        return False, f"В этой папке нет {BRIDGE_SERVER}: {folder}"
+    try:
+        done = subprocess.run(
+            [str(python), str(server), "--selftest"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=300,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"Запустить проверку не удалось: {exc}"
+    output = (done.stdout or "") + (done.stderr or "")
+    return done.returncode == 0, output.strip()
+
+
+# ---- подпись настроек моста (показать человеку)
+
+
+def mcp_entry(python_exe: Path, server_py: Path) -> dict:
+    """Одна запись сервера MCP — стандартный вид для stdio-сервера."""
+    return {
+        "command": str(python_exe),
+        "args": [str(server_py)],
+        "transportType": "stdio",
+    }
+
+
+def mcp_snippet(python_exe: Path, server_py: Path) -> str:
+    """Тот же набор настроек, но текстом — показать человеку."""
+    return json.dumps(
+        {"ncp": mcp_entry(python_exe, server_py)},
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def harness_overlay_snippet(python_exe: Path, server_py: Path) -> str:
+    """Оверлей моста NCP для Harness: применить как dsh --patch <файл>.
+
+    Формат — из примеров Harness (apps/cli/config/examples/mcp-memory):
+    MCP-клиент dsh-mcp-client, транспорт stdio, запуск нашим server.py.
+    """
+    exe = str(python_exe).replace("\\", "/")
+    srv = str(server_py).replace("\\", "/")
+    return (
+        "# Мост NCP для Harness: применить как dsh --patch <этот-файл>\n"
+        "# или вмержить в $DSH_HOME/cordis.patch.yml (копию прежнего — в _previous-version).\n"
+        "- insert:\n"
+        "  - id: memory-ncp\n"
+        "    name: '@deepseek-ai/dsh-mcp-client'\n"
+        "    config:\n"
+        "      serverName: ncp\n"
+        "      transport: stdio\n"
+        f'      command: ["{exe}", "{srv}"]\n'
+    )
+

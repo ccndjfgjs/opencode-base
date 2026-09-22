@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Отчёт самопроверки содержит реальные пути машины — не публикуется
+selftest-report.txt
+
+# Ярлыки
+*.lnk
+
+# Служебное
+Thumbs.db
+Desktop.ini
