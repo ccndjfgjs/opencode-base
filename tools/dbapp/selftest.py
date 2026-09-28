@@ -175,6 +175,54 @@ def main() -> int:
         check("по-русски" in rules_text, "в правилах закреплён русский язык")
         check("Ничего не удалять" in rules_text, "в правилах запрещено удаление")
 
+        # Нейросеть должна знать, каким скиллом и агентом работать, и что
+        # делать, если результат не устроил. Без этого всё хозяйство —
+        # скиллы, агенты, skills-index.json — лежит мёртвым грузом.
+        skill_doc = "инструкции/Скиллы-и-агенты.md"
+        check((target / skill_doc).is_file(),
+              f"новая база получила {skill_doc}")
+        if (target / skill_doc).is_file():
+            _inst = (target / skill_doc).read_text(encoding="utf-8")
+            for _needle, _what in (
+                ("skills-index.json", "ссылка на индекс скиллов"),
+                ("systematic-debugging", "скилл для багов"),
+                ("brainstorming", "скилл перед творческой работой"),
+                ("@retsenzent", "агент-рецензент"),
+                ("@proektirovschik", "агент-проектировщик"),
+                ("Если результат не устроил", "разбор плохого результата"),
+                ("verification-before-completion", "проверка перед «сделано»"),
+            ):
+                if _needle not in _inst:
+                    check(False, f"в {skill_doc} нет: {_what}")
+                    break
+            else:
+                check(True, f"{skill_doc} отвечает и на «какой скилл», и на «что делать»")
+        # каждый файл из INSTRUCTION_TARGETS обязан существовать, иначе
+        # opencode не сможет подключить инструкции
+        for _name in core.INSTRUCTION_TARGETS:
+            if not (target / _name).is_file():
+                check(False, f"подключаемая инструкция не найдена: {_name}")
+                break
+        else:
+            check(True, f"все {len(core.INSTRUCTION_TARGETS)} подключаемых инструкций на месте")
+        check(skill_doc in "".join(core.INSTRUCTION_TARGETS),
+              "новая инструкция вписана в INSTRUCTION_TARGETS (грузится в каждой сессии)")
+        check("память\\АКТИВНАЯ-ПАМЯТЬ.md" not in rules_text
+              and "память/АКТИВНАЯ-ПАМЯТЬ.md" not in rules_text,
+              "правила не указывают на вытесненную папку память/")
+        check("Скиллы-и-агенты.md" in rules_text,
+              "в правилах есть отсылка к выбору скилла и агента")
+        # AGENTS.md в корне: без него подключение вычистит правила из настроек
+        check((target / "AGENTS.md").is_file(),
+              "в корне новой базы есть AGENTS.md (правила не будут стёрты)")
+        if (target / "AGENTS.md").is_file():
+            _ag = (target / "AGENTS.md").read_text(encoding="utf-8").lower()
+            check("скилл" in _ag and "агент" in _ag,
+                  "AGENTS.md рассказывает про скиллы и агентов")
+        # агенты едут с базой, как мосты
+        _n_agents = len(list((target / "tools" / "agents").glob("*.md")))
+        check(_n_agents >= 12, f"агенты едут с базой: {_n_agents} штук")
+
         # области знаний и пояснения к папкам
         for area in core.KNOWLEDGE_AREAS:
             if not (target / "знания" / area).is_dir():
