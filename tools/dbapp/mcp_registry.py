@@ -41,6 +41,11 @@ PROGRAMS_IN_REGISTRY = {
 #: мгновенной; если зависла — значит это не проверка версии.
 CHECK_TIMEOUT = 8
 
+#: Сколько ждать прогрева кэша npx. Холодная скачка пакета занимает до
+#: минуты; если за это время не уложились, кэш считаем прогретым и
+#: продолжаем: opencode всё равно попробует сам.
+WARM_UP_TIMEOUT = 180
+
 
 @dataclass
 class Requirement:
@@ -332,7 +337,61 @@ def _write_config(dest: Path, text: str) -> str:
     return str(backup)
 
 
-def enable(dest: Path, server: Server) -> tuple[list[str], list[str]]:
+def warm_up(server: Server, progress=None) -> str:
+    """Прогревает кэш npx: скачивает пакет заранее, до вписывания блока.
+
+    Зачем это. Первый запуск через npx качает пакет около минуты, а
+    opencode на старт сервера даёт 30 секунд и показывает «Не удалось».
+    То есть платить за скачивание должен тот, кто его инициирует, а не
+    opencode при следующем запуске. Здесь команда стартует, успевает
+    скачать и тут же останавливается — кэш прогрет, дальше старт 2–3 с.
+
+    Возвращает пустую строку, если прогрев не нужен или не удался:
+    отсутствие прогрева не повод отказывать во включении.
+    """
+    conn = server.raw.get("connection")
+    if not isinstance(conn, dict) or not conn.get("warm_up"):
+        return ""
+    command = [str(part) for part in (conn.get("command") or [])]
+    if not command:
+        return ""
+
+    def say(text: str) -> None:
+        if progress:
+            progress(text)
+
+    say(f"Первый запуск «{server.name}»: скачиваю пакет, это до минуты…")
+    exe = shutil.which(command[0]) or command[0]
+    argv = [exe, *command[1:]]
+    if exe.lower().endswith((".cmd", ".bat")):
+        argv = [os.environ.get("COMSPEC") or "cmd.exe", "/c", exe, *command[1:]]
+    try:
+        proc = subprocess.Popen(
+            argv, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace",
+        )
+    except OSError as exc:
+        return f"Прогрев не запустился: {exc}"
+    try:
+        try:
+            proc.wait(timeout=WARM_UP_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            # Сервер успешно стартовал и молча ждёт команды — значит
+            # пакет уже скачан. Останавливаем, как и планировали.
+            proc.kill()
+        say(f"Пакет «{server.name}» скачан, кэш прогрет.")
+        return ""
+    finally:
+        for stream in (proc.stdout, proc.stderr):
+            if stream is not None:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+
+
+def enable(dest: Path, server: Server, progress=None) -> tuple[list[str], list[str]]:
     """Включает сервер. Возвращает (сообщения, ошибки).
 
     Порядок именно такой: сначала проверка требований, потом запись.
@@ -356,6 +415,12 @@ def enable(dest: Path, server: Server) -> tuple[list[str], list[str]]:
     block = build_block(server)
     if not block:
         return ([], ["Команда подключения пустая — проверь реестр."])
+
+    # Прогрев до вписывания: иначе opencode на своём старте не дождётся
+    # скачивания и покажет «Не удалось».
+    note = warm_up(server, progress)
+    if note:
+        errors.append(note)
 
     cfg = Path(dest) / "opencode.jsonc"
     try:

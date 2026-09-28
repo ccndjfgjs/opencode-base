@@ -2323,7 +2323,7 @@ class CapsTab(ScrollPage):
             return
 
         def job(progress):
-            return mcp_registry.enable(dest, server)
+            return mcp_registry.enable(dest, server, progress=progress)
 
         self._start(job, "registry")
 
