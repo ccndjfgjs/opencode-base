@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import sys
 import tempfile
@@ -329,12 +330,55 @@ def main() -> int:
         # инструменты мостов упомянуты
         for _tool in ("ncp_status", "ncp_search", "ncp_read", "ncp_save",
                       "ncp_update", "ncp_checkpoint", "ncp_reindex",
+                      "memory_save", "memory_read", "memory_search",
+                      "memory_log_work", "library_status", "library_search",
                       "pc_status", "pc_files_read", "pc_apps_list", "pc_screenshot"):
             if _tool not in _inst_all:
                 check(False, f"инструмент {_tool} не упомянут в инструкциях")
                 break
         else:
-            check(True, "все 11 инструментов мостов упомянуты в инструкциях")
+            check(True, "все инструменты мостов упомянуты в инструкциях")
+
+        # ---- 5г. инструменты памяти едут в мосте, а не в плагине.
+        # Найдено 28.09: с версии opencode 1.18 плагин обязан отдавать
+        # объект {id, setup}. Старая форма отвергается, и 12 инструментов
+        # memory_* и library_* исчезли, хотя инструкции их требовали.
+        # Теперь они в мосте NCP — его версия opencode не касается.
+        echo("\n--- 5г. Инструменты памяти в мосте, плагин под v2 ---")
+        _bridge = target / "tools" / "ncp-bridge"
+        check((_bridge / "memory_tools.py").is_file(),
+              "модуль инструментов памяти лежит в базе вместе с мостом")
+        _srv_text = (_bridge / "server.py").read_text(encoding="utf-8")
+        _missing_in_bridge = [
+            t for t in ("memory_save", "memory_read", "memory_search", "memory_log_work")
+            if f'"{t}"' not in _srv_text
+        ]
+        check(not _missing_in_bridge,
+              f"мост объявляет все инструменты памяти (нет: {_missing_in_bridge})")
+        for _alias in ("library_status", "library_checkpoint", "library_reindex"):
+            if _alias not in _srv_text:
+                check(False, f"псевдоним {_alias} не объявлен в мосте")
+                break
+        else:
+            check(True, "псевдонимы library_* объявлены в мосте, а не только в бумаге")
+
+        # Плагин обязан соответствовать схеме v2. Проверяем текстом:
+        # Node в самопроверке не запускаем, а формат экспорта виден
+        # в исходнике, и ломается он как раз молча.
+        for _where, _plugin in (
+            ("конструктор", core.program_root() / "config" / "plugins" / "memory-base.js"),
+            ("база", target / "config" / "plugins" / "memory-base.js"),
+        ):
+            if not _plugin.is_file():
+                check(False, f"плагин не найден: {_where}")
+                continue
+            _text = _plugin.read_text(encoding="utf-8")
+            _ok = ("export default {" in _text
+                   and re.search(r"^\s*id:\s*[\"']", _text, re.M)
+                   and re.search(r"^\s*setup\(", _text, re.M))
+            check(_ok, f"плагин ({_where}) отдаёт объект с id и setup — схема v2")
+            check("export default MemoryBasePlugin" not in _text,
+                  f"плагин ({_where}) больше не отдаёт функцию — её opencode отвергает")
 
         # области знаний и пояснения к папкам
         for area in core.KNOWLEDGE_AREAS:

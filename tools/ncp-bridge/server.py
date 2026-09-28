@@ -6,7 +6,13 @@
 стандартная библиотека Python. Поэтому ничего не нужно устанавливать,
 и ничего нельзя сломать в других программах.
 
-Три инструмента: ncp_status, ncp_search, ncp_save.
+Инструменты:
+    ncp_status, ncp_search, ncp_save, ncp_read, ncp_update,
+    ncp_checkpoint, ncp_reindex — работа с библиотекой NCP;
+    memory_save, memory_read, memory_search, memory_log_work — профиль,
+    проекты, факты и журнал работы (живут в memory_tools.py);
+    library_* — псевдонимы под старыми именами, на которые записаны
+    инструкции в базе. Новые тексты должны называть ncp_*.
 
 Режимы запуска:
     server.py               — работа как сервер MCP (так запускает Qwen)
@@ -32,6 +38,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+import memory_tools  # noqa: E402
 import ncp_core  # noqa: E402
 
 CONFIG_FILE = HERE / "config.json"
@@ -177,6 +184,123 @@ def find_library() -> Path | None:
 #   ncp_search  = library_search      ncp_update      = library_update
 #   ncp_save    = library_save        ncp_checkpoint  = library_checkpoint
 #                                     ncp_reindex     = library_reindex
+#
+# Пара «инструмент виден, но не работает» из этого списка убрана 28.09:
+# псевдонимы library_* теперь не описание, а настоящий вызов.
+
+
+def _alias_spec(old: str, new: str) -> dict:
+    """Описание псевдонима: видно в списке, но честно называет настоящее имя."""
+    return {
+        "name": old,
+        "description": (
+            f"Псевдоним: то же самое, что {new}. Оставлен, потому что на это имя "
+            f"записаны инструкции в базе. В новых записях называй {new}."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": True},
+    }
+
+
+MEMORY_TOOL_SPECS = [
+    {
+        "name": "memory_save",
+        "description": (
+            "Сохранить стойкий факт о пользователе в базу OpenCode_Base. Для "
+            "долговременных фактов: проекты, предпочтения, правила, решения, "
+            "статус работ. Не использовать для временных деталей задачи."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "file": {
+                    "type": "string",
+                    "enum": list(memory_tools.PROFILE_FILES),
+                    "description": (
+                        "Куда сохранить: profile — о пользователе, "
+                        "projects — про проекты, facts — правила и решения"
+                    ),
+                },
+                "text": {"type": "string", "description": "Факт одной фразой на русском"},
+            },
+            "required": ["file", "text"],
+        },
+    },
+    {
+        "name": "memory_read",
+        "description": (
+            "Прочитать файлы базы памяти OpenCode_Base. Без аргумента читает "
+            "все три основных файла."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "file": {
+                    "type": "string",
+                    "enum": list(memory_tools.PROFILE_FILES),
+                    "description": "Какой файл прочитать; если не указан — все три",
+                },
+            },
+        },
+    },
+    {
+        "name": "memory_search",
+        "description": (
+            "Поиск по всей базе памяти OpenCode_Base: профиль, проекты, факты, "
+            "папки проектов и журналы нейросетей. Бэкапы и кэши не читаются."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Что искать, без учёта регистра"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "memory_log_work",
+        "description": (
+            "Зафиксировать выполненную работу по проекту: что сделано, какие "
+            "файлы изменены, итог. Вызывать после каждого завершённого этапа."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "Что сделано: задачи, изменения, результаты — 1–3 предложения",
+                },
+                "project": {
+                    "type": "string",
+                    "description": (
+                        "Имя проекта из projects/index.json, например opencode-base. "
+                        "Обязательно: мост не знает, в какой папке ты работаешь. "
+                        "Русское имя «проект» тоже принимается."
+                    ),
+                },
+                "folder": {
+                    "type": "string",
+                    "description": (
+                        "Вместо project можно передать папку, в которой идёт "
+                        "работа — проект найдётся по ней. Русское «папка» "
+                        "тоже принимается."
+                    ),
+                },
+                "ai": {
+                    "type": "string",
+                    "description": (
+                        "Имя нейросети для папки в проекте. Если не указать — "
+                        "«Нейросеть»."
+                    ),
+                },
+            },
+            "required": ["text"],
+        },
+    },
+]
+
+ALIAS_TOOL_SPECS = [
+    _alias_spec(old, new) for old, new in memory_tools.LIBRARY_ALIASES.items()
+]
 
 
 TOOLS = [
@@ -322,6 +446,8 @@ TOOLS = [
         ),
         "inputSchema": {"type": "object", "properties": {}},
     },
+    *MEMORY_TOOL_SPECS,
+    *ALIAS_TOOL_SPECS,
 ]
 
 
@@ -436,7 +562,43 @@ def run_tool(params: dict, config: dict) -> dict:
     arguments = params.get("arguments")
     if not isinstance(arguments, dict):
         arguments = {}
+    # Псевдоним library_* разворачиваем в ncp_* до всего остального,
+    # иначе пришлось бы дублировать семь одинаковых веток.
+    if name in memory_tools.LIBRARY_ALIASES:
+        name = memory_tools.LIBRARY_ALIASES[name]
     try:
+        # Инструментам памяти библиотека NCP не нужна — им достаточно
+        # папки базы, но путь всё равно проверяем: иначе при неверном
+        # config.json ошибка вылезет позже и невнятно.
+        raw_path = library_path(config)
+        if not raw_path or raw_path == PLACEHOLDER:
+            open_library(config)
+        if name in ("memory_save", "memory_read", "memory_search", "memory_log_work"):
+            base = memory_tools.base_path(Path(raw_path))
+            if name == "memory_save":
+                answer = memory_tools.memory_save(
+                    base,
+                    arguments.get("file") or "",
+                    arguments.get("text") or "",
+                )
+            elif name == "memory_read":
+                answer = memory_tools.memory_read(base, arguments.get("file") or "")
+            elif name == "memory_search":
+                answer = memory_tools.memory_search(base, arguments.get("query") or "")
+            else:
+                answer = memory_tools.memory_log_work(
+                    base,
+                    arguments.get("text") or arguments.get("описание") or "",
+                    # Русские имена тоже принимаем: инструкции в базе
+                    # написаны по-русски, и модель может назвать так.
+                    project=str(arguments.get("project") or arguments.get("проект") or ""),
+                    folder=str(arguments.get("folder") or arguments.get("папка") or ""),
+                    ai=str(arguments.get("ai") or arguments.get("нейросеть") or ""),
+                )
+            # Журнал сессий. Раньше это делал хук события opencode,
+            # а в новой схеме плагинов v2 такого хука нет.
+            memory_tools.note_session(base, name)
+            return tool_result(answer, {"ok": True, "tool": name})
         library = open_library(config)
         if name == "ncp_status":
             data = library.status()
@@ -512,6 +674,8 @@ def run_tool(params: dict, config: dict) -> dict:
             {"ok": False, "reason": "неизвестный инструмент"},
             is_error=True,
         )
+    except memory_tools.MemoryError as exc:
+        return tool_result(str(exc), {"ok": False, "reason": str(exc)}, is_error=True)
     except ncp_core.NcpError as exc:
         return tool_result(str(exc), {"ok": False, "reason": str(exc)}, is_error=True)
     except Exception as exc:  # noqa: BLE001 — сервер не должен падать из-за одной ошибки
@@ -687,6 +851,18 @@ def mode_install(asked: str) -> int:
     return code
 
 
+def _first_text(answer: dict) -> str:
+    """Человеческий текст из ответа инструмента, без служебного JSON."""
+    blocks = (answer.get("result") or {}).get("content") or []
+    for block in blocks:
+        text = str(block.get("text") or "")
+        if "```json" in text:
+            text = text.split("```json", 1)[0]
+        if text.strip():
+            return text
+    return ""
+
+
 def mode_selftest(config: dict) -> int:
     """Три шага проверки. Идут на временной библиотеке — настоящая не тронута."""
     results: list[tuple[bool, str]] = []
@@ -754,9 +930,19 @@ def mode_selftest(config: dict) -> int:
             {"jsonrpc": "2.0", "id": 0, "method": "tools/list"}, test_config
         ) or {}
         names = [tool["name"] for tool in (listing.get("result") or {}).get("tools", [])]
-        check(names == ["ncp_status", "ncp_search", "ncp_save", "ncp_read",
-                        "ncp_update", "ncp_checkpoint", "ncp_reindex"],
-              f"инструментов ровно семь: {', '.join(names)}")
+        # Сверяем не список целиком, а наличие каждого: иначе добавление
+        # одного инструмента роняет проверку и её приходится чинить
+        # вручную вместо того, чтобы просто принять новое имя.
+        expected = [
+            "ncp_status", "ncp_search", "ncp_save", "ncp_read",
+            "ncp_update", "ncp_checkpoint", "ncp_reindex",
+            "memory_save", "memory_read", "memory_search", "memory_log_work",
+            *memory_tools.LIBRARY_ALIASES.keys(),
+        ]
+        absent = [name for name in expected if name not in names]
+        check(not absent, f"все {len(expected)} инструментов на месте (нет: {absent})")
+        check(len(names) == len(expected),
+              f"лишних инструментов нет: {len(names)} против {len(expected)}")
 
         # ---- шаг 1. ncp_status: записей ноль
         ncp_core.Library(temp_library).ensure()
@@ -882,6 +1068,52 @@ def mode_selftest(config: dict) -> int:
               "в чужую непустую папку запись не проходит")
         check(not (stranger / "записи").exists(),
               "в чужой папке ничего не создано")
+
+        # ---- 11-14. инструменты работы с базой. Временная база — это
+        # temp/библиотека, поэтому её родитель и есть «база» для них.
+        temp_base = temp_library.parent
+        answer = call(20, "memory_save", {"file": "facts", "text": "Факт самопроверки моста"})
+        text = _first_text(answer)
+        check("facts.md" in text, f"шаг 11: memory_save ответил: {text[:60]}")
+        check("Факт самопроверки моста" in (temp_base / "facts.md").read_text(encoding="utf-8"),
+              "шаг 11: факт записан в файл")
+
+        answer = call(21, "memory_save", {"file": "facts", "text": "Факт самопроверки моста"})
+        check("уже есть" in _first_text(answer), "шаг 11: повтор не создал дубль")
+
+        answer = call(22, "memory_read", {"file": "facts"})
+        check("Факт самопроверки моста" in _first_text(answer),
+              "шаг 12: memory_read вернул записанный факт")
+
+        answer = call(23, "memory_search", {"query": "Факт самопроверки"})
+        check("facts.md:" in _first_text(answer),
+              "шаг 13: memory_search нашёл факт с указанием файла и строки")
+
+        # Проекта во временной базе нет, поэтому memory_log_work обязан
+        # спросить, а не молча записать не туда.
+        answer = call(24, "memory_log_work", {"text": "Работа самопроверки"})
+        check("Не понял" in _first_text(answer) or "проект" in _first_text(answer).lower(),
+              "шаг 14: без проекта memory_log_work спросил, а не испортил")
+
+        (temp_base / "projects").mkdir(parents=True, exist_ok=True)
+        (temp_base / "projects" / "index.json").write_text(
+            json.dumps({"проба": {"path": str(temp_base), "created": "2026-09-28"}},
+                       ensure_ascii=False),
+            encoding="utf-8",
+        )
+        answer = call(25, "memory_log_work",
+                      {"text": "Работа самопроверки", "project": "проба", "ai": "Самопроверка"})
+        check("work.md" in _first_text(answer), "шаг 14: memory_log_work записал по имени проекта")
+        work = temp_base / "projects" / "проба" / "Самопроверка" / "work.md"
+        check(work.is_file() and "Работа самопроверки" in work.read_text(encoding="utf-8"),
+              "шаг 14: журнал работы на диске")
+
+        # Псевдонимы обязаны быть настоящими инструментами, а не строчками
+        # в документации: именно на них записаны инструкции в базе.
+        for alias in memory_tools.LIBRARY_ALIASES:
+            answer = call(30, alias, {"query": "проверка"})
+            bad = "Неизвестный инструмент" in _first_text(answer)
+            check(not bad, f"псевдоним {alias} работает")
     finally:
         shutil.rmtree(temp, ignore_errors=True)
 
