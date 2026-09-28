@@ -2209,6 +2209,55 @@ def main() -> int:
         shutil.rmtree(_kt, ignore_errors=True)
         echo(f"Временная папка убрана: {_kt}")
 
+    # ---- 20. понимание, что писать в библиотеку
+    echo("\n--- 20. Что писать в библиотеку ---")
+
+    # Человек попросил: чтобы нейросеть понимала, какие данные
+    # записывать. Проверяем, что это написано и в протоколе, и в
+    # инструкции, и что правило не абстрактное.
+    _zp = Path(tempfile.mkdtemp(prefix="dbapp-pisat-"))
+    try:
+        _pq = core.build_plan(_zp / "место", "Проба-писать", None)
+        (_zp / "место").mkdir(exist_ok=True)
+        core.create_base(_pq)
+        _qb = _pq.target
+
+        for _f, _label in ((_qb / "AGENTS.md", "AGENTS.md"),
+                           (_qb / "библиотека" / "NCP.md", "протокол NCP")):
+            _t = _f.read_text(encoding="utf-8")
+            check("придётся выяснять заново" in _t or "выяснять заново" in _t,
+                  f"в {_label} есть проверка: пропадёт ли из сессии")
+            check("ncp_search" in _t,
+                  f"в {_label} сказано искать перед записью")
+            check("memory_save" in _t and "ncp_save" in _t,
+                  f"в {_label} разведены короткая память и библиотека")
+            check("Пароли" in _t or "пароли" in _t,
+                  f"в {_label} запрет писать секреты")
+            check("личное" in _t,
+                  f"в {_label} сказано про личные записи")
+
+        # В протоколе есть конкретные примеры, а не только общие слова.
+        _prot = (_qb / "библиотека" / "NCP.md").read_text(encoding="utf-8")
+        check("Что писать — с примерами" in _prot,
+              "в протоколе есть таблица примеров")
+        check("Одна запись — одна мысль" in _prot,
+              "в протоколе есть правило одной мысли на запись")
+
+        # Служебные файлы в папке записей не должны попадать в счёт.
+        _nc = (core.program_root() / "tools" / "ncp-bridge" / "ncp_core.py")
+        _code = _nc.read_text(encoding="utf-8")
+        check('path.name.startswith("_")' in _code,
+              "мост не считает служебные файлы записями")
+
+        # Личная папка есть в новой базе и пуста, кроме пояснения.
+        _pl = _qb / "библиотека" / "записи" / "личное"
+        check(_pl.is_dir(), "в новой базе есть папка личное")
+        check(not list(_pl.glob("ncp-*.md")),
+              "в новой базе нет личных записей — только папка и пояснение")
+    finally:
+        shutil.rmtree(_zp, ignore_errors=True)
+        echo(f"Временная папка убрана: {_zp}")
+
     # ---- итог
     failed = [text for good, text in results if not good]
     echo("\n" + "=" * 62)

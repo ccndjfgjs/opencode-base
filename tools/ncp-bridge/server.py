@@ -1104,6 +1104,31 @@ def mode_selftest(config: dict) -> int:
         check(not (temp_library / "записи" / "выход").exists(),
               "ничего не записалось вне запис��й")
 
+        # ---- 8г. служебные файлы не считаются записями
+        # Ошибка была моя: пояснение _О-ПАПКЕ.md в записей/личное/ начало
+        # считаться записью, и счётчик показывал лишнее. Имя с подчёркиванием
+        # — служебное, это уже действующее правило проекта.
+        _hint = temp_library / "записи" / "личное" / "_О-ПАПКЕ.md"
+        _hint.parent.mkdir(parents=True, exist_ok=True)
+        _hint.write_text("# О папке — личное\n\nПояснение папки.\n",
+                         encoding="utf-8")
+        _dot = temp_library / "записи" / "общее" / ".скрытый.md"
+        _dot.parent.mkdir(parents=True, exist_ok=True)
+        _dot.write_text("скрытый\n", encoding="utf-8")
+        # Объекта библиотеки у самопроверки нет — она работает через
+        # вызовы инструментов, поэтому счёт берём из index.json.
+        _idx_file = temp_library / "index.json"
+        _before = json.loads(_idx_file.read_text(encoding="utf-8")).get("count", 0)
+        call(36, "ncp_reindex", {})
+        _after = json.loads(_idx_file.read_text(encoding="utf-8")).get("count", 0)
+        check(_after == _before,
+              f"шаг 8г: служебные файлы не попали в счёт ({_before} → {_after})")
+        _cat = (temp_library / "КАТАЛОГ.md").read_text(encoding="utf-8")
+        check("О папке" not in _cat and "скрытый" not in _cat,
+              "шаг 8г: в каталоге служебных файлов нет")
+        _hint.unlink()
+        _dot.unlink()
+
         # ---- 9. ncp_reindex: перестройка индекса
         (temp_library / "index.json").write_text("{}", encoding="utf-8")
         answer = call(12, "ncp_reindex", {})

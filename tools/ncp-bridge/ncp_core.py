@@ -346,7 +346,12 @@ class Library:
         if not root.is_dir():
             return rows
         for path in sorted(root.rglob("*.md")):
-            if not path.is_file() or path.name.startswith("."):
+            # Точка — скрытый файл, подчёркивание — служебный: пояснение
+            # папки, заготовка. Записьми библиотеки являются только
+            # ncp-*.md, иначе счётчик и список тем врут.
+            if not path.is_file():
+                continue
+            if path.name.startswith(".") or path.name.startswith("_"):
                 continue
             row = read_entry(path, self.root)
             if row is not None:
