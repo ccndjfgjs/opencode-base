@@ -1862,6 +1862,92 @@ def main() -> int:
         shutil.rmtree(_zap, ignore_errors=True)
         echo(f"Временная папка убрана: {_zap}")
 
+    # ---- 15. конструктор не везёт мою базу: запасной заслон
+    echo("\n--- 15. Конструктор не везёт мою базу ---")
+
+    # Человек спросил прямо: конструктор — это конструктор, а не моя база.
+    # Проверяем дважды: что в эталоне нет личных файлов и что копирование
+    # действино их пропускает. Второе важнее первого — правило в тексте
+    # ничего не значит, если код ведёт себя иначе.
+    _kit = core.program_root()
+
+    # 1. В эталоне не должно быть личных файлов базы.
+    _personal = [
+        name for name in ("profile.md", "facts.md", "projects.md",
+                          "профиль.md", "АКТИВНАЯ-ПАМЯТЬ.md", "активная-память.md")
+        if (_kit / name).exists()
+    ]
+    check(not _personal, f"в конструкторе нет личных файлов базы: {_personal or 'ни одного'}")
+    _pdirs = [
+        name for name in ("projects", "sessions", "сессии", "память", "личное")
+        if (_kit / name).is_dir()
+    ]
+    check(not _pdirs, f"в конструкторе нет папок с личным: {_pdirs or 'ни одной'}")
+    _priv = sorted((_kit / "библиотека" / "записи" / "личное").rglob("*.md")) \
+        if (_kit / "библиотека" / "записи" / "личное").is_dir() else []
+    check(not _priv, f"личных записей NCP в конструкторе нет: {len(_priv)}")
+    check((_kit / "ОБРАЗЕЦ-БАЗЫ.md").is_file(),
+          "заготовка ОБРАЗЕЦ-БАЗЫ.md на месте — её создавать база должна")
+
+    # 2. Копирование личное пропускает, а справочное везёт.
+    _uz = Path(tempfile.mkdtemp(prefix="dbapp-uchego-"))
+    try:
+        _src = _uz / "образец"
+        (_src / "библиотека" / "записи" / "личное" / "моё").mkdir(parents=True)
+        (_src / "библиотека" / "записи" / "личное" / "моё" / "моя-запись.md").write_text(
+            "личное", encoding="utf-8")
+        (_src / "библиотека" / "записи" / "справка").mkdir(parents=True)
+        (_src / "библиотека" / "записи" / "справка" / "справочная.md").write_text(
+            "справочное", encoding="utf-8")
+        _dst = _uz / "новая"
+        core._copy_lib_records(_src, _dst)
+        _got_priv = (_dst / "библиотека" / "записи" / "личное").rglob("*.md")
+        check(not list(_got_priv), "личная запись в новую базу не попала")
+        _got_ref = list((_dst / "библиотека" / "записи" / "справка").glob("*.md"))
+        check(len(_got_ref) == 1,
+              f"справочная запись переехала: {len(_got_ref)} шт.")
+
+        # 3. Главное по существу: база, собранная с нуля, не содержит
+        # ничьих личных данных. Профиль и факты — пустые заготовки,
+        # личных папок и личных записей нет вовсе.
+        _plan0 = core.build_plan(_uz / "с-нуля", "Проба-пустая-база", None)
+        (_uz / "с-нуля").mkdir(exist_ok=True)
+        core.create_base(_plan0)
+        _fresh = _plan0.target
+        _prof = (_fresh / "profile.md").read_text(encoding="utf-8")
+        check(core.BLANK["profile.md"] == _prof,
+              "профиль новой базы — пустая заготовка, без данных пользователя")
+        _name_line = [ln for ln in _prof.splitlines() if "Зовут" in ln]
+        check(bool(_name_line) and not _name_line[0].split("Зовут:")[-1].strip(),
+              f"в профиле имя пустое: {_name_line}")
+        check((_fresh / "projects.md").read_text(encoding="utf-8").strip()
+              == core.BLANK["projects.md"].strip(),
+              "projects.md новой базы — заготовка, не список моих проектов")
+        # Личные папки создаются пустыми: в них лежат только пояснения
+        # «что сюда писать». Ни одного настоящего файла быть не должно.
+        _fresh_priv = []
+        for name in ("projects", "sessions", "сессии", "память", "личное",
+                     "журнал-решений", "настройки"):
+            folder = _fresh / name
+            if not folder.is_dir():
+                continue
+            for path in folder.rglob("*"):
+                if path.is_file() and path.name != "_О-ПАПКЕ.md":
+                    _fresh_priv.append(
+                        path.relative_to(_fresh).as_posix())
+        check(not _fresh_priv,
+              f"в личных папках новой базы только пояснения, данных нет: "
+              f"{_fresh_priv or 'ни одного файла'}")
+        _fresh_lib = list((_fresh / "библиотека" / "записи" / "личное").rglob("*.md")) \
+            if (_fresh / "библиотека" / "записи" / "личное").is_dir() else []
+        check(not _fresh_lib,
+              f"личных записей NCP в новой базе нет: {len(_fresh_lib)}")
+        check((_fresh / "skills").is_dir() and core.count_skills(_fresh) > 0,
+              f"а скиллы в неё приехали: {core.count_skills(_fresh)}")
+    finally:
+        shutil.rmtree(_uz, ignore_errors=True)
+        echo(f"Временная папка убрана: {_uz}")
+
     # ---- итог
     failed = [text for good, text in results if not good]
     echo("\n" + "=" * 62)
