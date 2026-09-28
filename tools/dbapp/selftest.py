@@ -2051,6 +2051,94 @@ def main() -> int:
           f"новая база уедет в DataBases: {_path_part[:70]}")
     shutil.rmtree(_dbt, ignore_errors=True)
 
+    # ---- 18. новая база знает, как пользоваться агентами и скиллами
+    echo("\n--- 18. Новая база знает про агентов, скиллы и NCP ---")
+
+    # Требование человека: новая база должна знать, что агент и скилл
+    # существуют, понимать, когда их брать, и уметь применять их сама.
+    # Проверяем на реально созданной базе.
+    _zn = Path(tempfile.mkdtemp(prefix="dbapp-znaniya-"))
+    try:
+        _pp = _zn / "место"
+        _pp.mkdir()
+        _pz = core.build_plan(_pp, "Проба-знания", None)
+        core.create_base(_pz)
+        _zb = _pz.target
+        _ag_txt = (_zb / "AGENTS.md").read_text(encoding="utf-8")
+
+        # --- агенты
+        _ad = _zb / "tools" / "agents"
+        _n_agents = len(list(_ad.glob("*.md"))) if _ad.is_dir() else 0
+        check(_n_agents > 0, f"в базе есть агенты: {_n_agents}")
+        check("Агент вызывается как" in _ag_txt,
+              "инструкция объясняет вызов агента по имени")
+        check(f"Всего их {_n_agents}" in _ag_txt,
+              f"инструкция называет число агентов ({_n_agents})")
+        _chain = ("proektirovschik", "programmist", "proveryalschik", "retsenzent")
+        check(all(c in _ag_txt for c in _chain),
+              "названа связка большой задачи: план → код → проверка → рецензия")
+        _sk_doc = (_zb / "инструкции" / "Скиллы-и-агенты.md")
+        check(_sk_doc.is_file(), "подробная инструкция по скиллам и агентам есть")
+        if _sk_doc.is_file():
+            _missing = [p.stem for p in _ad.glob("*.md")
+                        if p.stem not in _sk_doc.read_text(encoding="utf-8")]
+            check(not _missing,
+                  f"в инструкции перечислены все агенты; нет: {_missing or 'никого'}")
+
+        # --- скиллы
+        _n_skills = core.count_skills(_zb)
+        check(_n_skills > 0, f"в базе есть скиллы: {_n_skills}")
+        _idx = _zb / "skills-index.json"
+        check(_idx.is_file(), "индекс скиллов лежит в базе")
+        if _idx.is_file():
+            _data = json.loads(_idx.read_text(encoding="utf-8"))
+            _items = _data.get("skills") if isinstance(_data, dict) else _data
+            check(len(_items) == _n_skills,
+                  f"записей в индексе столько же, сколько скиллов: "
+                  f"{len(_items)} из {_n_skills}")
+            _no_when = [i.get("name") for i in _items if not i.get("when")]
+            check(not _no_when,
+                  f"у каждого скилла есть условие срабатывания; нет у: {_no_when or 'никого'}")
+            _known = {i.get("name") for i in _items}
+            _dirs = sorted(p.name for p in (_zb / "skills").iterdir() if p.is_dir())
+            _lost = [n for n in _dirs if n not in _known]
+            check(not _lost,
+                  f"в индексе есть все скиллы; нет: {_lost or 'никого'}")
+            check(not any(n in _known for n in
+                          (p.stem for p in _ad.glob("*.md"))),
+                  "агенты не попали в индекс скиллов — это разные вещи")
+
+        # --- NCP: протокол должен называть настоящие имена инструментов
+        _ncp_md = _zb / "библиотека" / "NCP.md"
+        check(_ncp_md.is_file(), "протокол библиотеки NCP лежит в базе")
+        if _ncp_md.is_file():
+            _prot = _ncp_md.read_text(encoding="utf-8")
+            for _tool in ("ncp_status", "ncp_search", "ncp_read", "ncp_save",
+                          "ncp_update", "ncp_checkpoint", "ncp_reindex"):
+                check(_tool in _prot, f"протокол называет инструмент {_tool}")
+            check("library_search" in _prot,
+                  "протокол упоминает и псевдоним library_search")
+
+        # --- самостоятельность: без просьбы пользователя
+        check("Скилл выбирается ДО начала работы" in _ag_txt,
+              "инструкция велит выбрать скилл ДО работы")
+        check("УВИДЕЛ ВОЗМОЖНОСТЬ" in _ag_txt,
+              "есть правило «увидел возможность — скажи, потом применяй»")
+        check("объяви это одной строкой" in _ag_txt,
+              "применение объявляется ДО, а не после")
+        check("не выдумывай инструмент ради применения" in _ag_txt,
+              "есть запрет выдумывать инструмент ради применения")
+        check("без просьбы пользователя" in _ag_txt,
+              "взятие скилла объявлено обязательным без просьбы человека")
+
+        # --- правило должно быть видно сразу, а не прятаться в конце
+        _head = "\n".join(_ag_txt.splitlines()[:40])
+        check("скилл" in _head.lower() and "агент" in _head.lower(),
+              "про скиллы и агентов сказано в первых 40 строках инструкции")
+    finally:
+        shutil.rmtree(_zn, ignore_errors=True)
+        echo(f"Временная папка убрана: {_zn}")
+
     # ---- итог
     failed = [text for good, text in results if not good]
     echo("\n" + "=" * 62)
