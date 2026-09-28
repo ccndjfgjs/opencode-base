@@ -1948,6 +1948,69 @@ def main() -> int:
         shutil.rmtree(_uz, ignore_errors=True)
         echo(f"Временная папка убрана: {_uz}")
 
+    # ---- 16. новая база сама говорит, что подключилась: найдено 28.09
+    echo("\n--- 16. Нейросеть сообщает о подключении ---")
+
+    # Человек спросил: при первом же сообщении нейросеть должна читать базу
+    # И сообщать об этом. Читать — было указано, сообщать — нет. Молчаливое
+    # подключение снаружи неотличимо от сломанной памяти.
+    _uz2 = Path(tempfile.mkdtemp(prefix="dbapp-podklyuch-"))
+    try:
+        _p3 = core.build_plan(_uz2 / "место", "Проба-подключение", None)
+        (_uz2 / "место").mkdir(exist_ok=True)
+        core.create_base(_p3)
+        _ag = _p3.target / "AGENTS.md"
+        check(_ag.is_file(), f"в новой базе есть AGENTS.md: {_ag.is_file()}")
+        if _ag.is_file():
+            _txt = _ag.read_text(encoding="utf-8")
+            _start = _txt.split("## В начале каждой сессии", 1)
+            check(len(_start) == 2, "в AGENTS.md есть раздел о начале сессии")
+            _block = _start[1].split("\n## ", 1)[0] if len(_start) == 2 else ""
+            for _what, _needle in (
+                ("читает память", "memory_read"),
+                ("спрашивает состояние библиотеки", "library_status"),
+                ("читает активную память", "АКТИВНАЯ-ПАМЯТЬ"),
+                ("сообщает пользователю о подключении",
+                 "Скажи пользователю, что подключился"),
+            ):
+                check(_needle in _block,
+                      f"в начале сессии: {_what}")
+            # Правило должно быть именно в начале сессии, а не где попало.
+            check(_txt.count("Скажи пользователю, что подключился") == 1,
+                  "правило про уведомление встречается ровно один раз")
+            # В копии для папки config/ то же самое.
+            _ag2 = _p3.target / "config" / "AGENTS.md"
+            if _ag2.is_file():
+                check("Скажи пользователю, что подключился"
+                      in _ag2.read_text(encoding="utf-8"),
+                      "та же инструкция доехала в config/AGENTS.md")
+
+        # ---- 16б. шаблон не должен запекаться в базу
+        # Найдено 28.09: в корне базы вместо пометки {{BASE}} стоял
+        # настоящий путь к мусорной папке DataBases/test. Причина —
+        # substitute_base отработал на самой базе. База должна хранить
+        # шаблон, иначе перестанет переезжать на другой компьютер.
+        if _ag.is_file():
+            _root_txt = _ag.read_text(encoding="utf-8")
+            check(core.BASE_PLACEHOLDER in _root_txt,
+                  "в корне новой базы AGENTS.md остаётся шаблоном с пометкой")
+            check("DataBases" not in _root_txt,
+                  "в корне базы нет запечённого пути к DataBases")
+
+        # Подстановка обязана давать настоящий путь, а не мусор.
+        _tmp_cfg = _uz2 / "подстановка.md"
+        _tmp_cfg.write_text("база: " + core.BASE_PLACEHOLDER + "\n",
+                            encoding="utf-8")
+        core.substitute_base(_tmp_cfg, _p3.target)
+        _fixed = _tmp_cfg.read_text(encoding="utf-8")
+        check(str(_p3.target).replace("\\", "/") in _fixed,
+              f"substitute_base подставил настоящий путь: {_fixed.strip()[:70]}")
+        check(core.BASE_PLACEHOLDER not in _fixed,
+              "пометка после подстановки не осталась")
+    finally:
+        shutil.rmtree(_uz2, ignore_errors=True)
+        echo(f"Временная папка убрана: {_uz2}")
+
     # ---- итог
     failed = [text for good, text in results if not good]
     echo("\n" + "=" * 62)
