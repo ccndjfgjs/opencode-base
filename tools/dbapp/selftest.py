@@ -278,6 +278,116 @@ def main() -> int:
                 check(len(_srv) >= 1, f"серверов в реестре: {len(_srv)}")
                 _no_why = [s.get("id") for s in _srv if not s.get("why") or not s.get("verdict")]
                 check(not _no_why, f"у всех серверов есть зачем и вердикт (нет: {_no_why})")
+
+        # ---- 5д. Реестр серверов MCP: команды, проверка, вкл/выкл.
+        # Сделано 28.09 по просьбе пользователя: серверы из реестра должны быть
+        # видны в программе и включаться кнопкой. Раньше реестр был только
+        # справочником — ехал с базой, но нигде не показывался, и вписать
+        # сервер в настройки было нечем.
+        # Проверки живут здесь, а не в разделе про мост: базу, созданную
+        # выше, селфтест удаляет перед разделом про мост, и реестра там уже
+        # нет. Ошибку эту я сначала истолковал неверно — подумал, что
+        # реестр не копируется.
+        echo("\n--- 5д. Реестр серверов MCP ---")
+        import mcp_registry  # noqa: PLC0415 — рядом лежит, круга нет
+        # opencode_caps импортируется и ниже по этой функции. Пока где-то
+        # в теле есть такой импорт, имя считается локальным для всего тела,
+        # и обращение раньше него падает с UnboundLocalError. Поэтому
+        # импортируем здесь же, а не пользуемся «сверху».
+        import opencode_caps  # noqa: PLC0415 — по той же причине
+
+        reg_data = mcp_registry.load_registry(target)
+        check(bool(reg_data.get("servers")), "реестр прочитан модулем, серверы на месте")
+        for _spec in reg_data.get("servers") or []:
+            _conn = _spec.get("connection")
+            check(
+                isinstance(_conn, dict) and bool(_conn.get("command") or _conn.get("url")),
+                f"у сервера {_spec.get('id')} есть команда подключения",
+            )
+        for _spec in reg_data.get("servers") or []:
+            _bad = [
+                r.get("what")
+                for r in (_spec.get("requires") or [])
+                if r.get("type") not in ("command", "program", "manual")
+            ]
+            check(not _bad, f"у {_spec.get('id')} у всех требований проставлен тип: {_bad}")
+        _servers = mcp_registry.load_servers(target)
+        check(len(_servers) == len(reg_data.get("servers") or []),
+              f"модуль загрузил серверов: {len(_servers)}")
+        for _s in _servers:
+            _b = mcp_registry.build_block(_s)
+            _ok = (_b.startswith(f'"{_s.id}": {{') and _b.rstrip().endswith("},")
+                   and _b.count("{") == _b.count("}"))
+            check(_ok, f"блок сервера {_s.id} собран цельно ({_b.count('{')} скобок)")
+
+        # Включение и выключение — на временной копии папки настроек.
+        _rtmp = Path(tempfile.mkdtemp(prefix="self-reg-"))
+        _rdest = _rtmp / "opencode"
+        _rdest.mkdir()
+        (_rdest / "opencode.jsonc").write_text(
+            '{\n  "$schema": "https://opencode.ai/config.json",\n'
+            '  "mcp": {\n    "чужой": {"type": "remote", "url": "https://x"}\n  },\n'
+            '  "instructions": ["a.md"]\n}\n',
+            encoding="utf-8",
+        )
+        _wa = next((s for s in _servers if s.id == "windows-admin"), None)
+        check(_wa is not None, "сервер windows-admin есть в реестре")
+        if _wa is not None:
+            # Требования подменяем: селфтест не должен зависеть от того, что
+            # на машине стоит Node. Проверяем механику включения, а не окружение.
+            _wa.requirements = [mcp_registry.Requirement(
+                what="Проверка", kind="program", value="node", ok=True)]
+            _wa.has_connection = True
+            _wa.installed = False
+            _m, _e = mcp_registry.enable(_rdest, _wa)
+            check(not _e, f"включение сервера прошло: {_e}")
+            _cfg_after = (_rdest / "opencode.jsonc").read_text(encoding="utf-8")
+            check("windows-admin" in _cfg_after, "сервер вписан в настройки")
+            check('"чужой"' in _cfg_after, "чужой сервер не тронут")
+            check('"instructions"' in _cfg_after, "инструкции не тронуты")
+            check(opencode_caps.check_jsonc(_cfg_after),
+                  "настройки остались читаемыми после вставки")
+            check(bool(list((_rdest / "_previous-version").glob("opencode.jsonc-*"))),
+                  "копия настроек сделана до правки")
+            _m, _e = mcp_registry.disable(_rdest, _wa)
+            check(not _e, f"выключение прошло: {_e}")
+            _cfg_off = (_rdest / "opencode.jsonc").read_text(encoding="utf-8")
+            check("windows-admin" not in _cfg_off, "сервер убран")
+            check('"чужой"' in _cfg_off, "чужой сервер уцелел после удаления")
+            check(opencode_caps.check_jsonc(_cfg_off),
+                  "настройки остались читаемыми после удаления")
+            _m, _e = mcp_registry.disable(_rdest, _wa)
+            check(not _e and _m, "повторное выключение — мягкий отказ, не ошибка")
+        # Сломанные настройки программа обязана оставить в покое, а не
+        # дописать в них сервер: файл и так уже не читается, хуже не сделаешь.
+        (_rdest / "opencode.jsonc").write_text(
+            '{\n  "mcp": {\n    "без запятой" 1\n  }\n}\n', encoding="utf-8"
+        )
+        _broken_before = (_rdest / "opencode.jsonc").read_text(encoding="utf-8")
+        if _wa is not None:
+            _m, _e = mcp_registry.enable(_rdest, _wa)
+            check(bool(_e), f"на сломанных настройках вставка отказана: {_e}")
+            check((_rdest / "opencode.jsonc").read_text(encoding="utf-8") == _broken_before,
+                  "сломанный файл не тронут")
+        shutil.rmtree(_rtmp, ignore_errors=True)
+
+        # Блок в окне: таблица и кнопки собраны и показывают реестр.
+        _reg_tab = getattr(window.caps_tab, "reg_table", None)
+        check(_reg_tab is not None, "в окне есть таблица серверов")
+        if _reg_tab is not None:
+            check(_reg_tab.rowCount() == len(reg_data.get("servers") or []),
+                  f"в таблице строк: {_reg_tab.rowCount()}")
+            for _name in ("btn_reg_check", "btn_reg_on", "btn_reg_off", "btn_reg_src"):
+                check(hasattr(window.caps_tab, _name), f"кнопка {_name} собрана")
+            _states = [
+                _reg_tab.item(r, 1).text() if _reg_tab.item(r, 1) else ""
+                for r in range(_reg_tab.rowCount())
+            ]
+            check(all(_states), "у всех строк заполнено состояние")
+            check(
+                all("не проверено" in s for s in _states),
+                f"до проверки состояние честное, а не выдуманное: {_states}",
+            )
         # инструкция про серверы подключена
         check("инструкции/МCP-серверы.md" in core.INSTRUCTION_TARGETS,
               "инструкция про MCP-серверы подключена к каждой сессии")
@@ -1193,6 +1303,7 @@ def main() -> int:
           f"{_lost or 'ничего'}")
     check("memory_tools.py" in core.BRIDGE_FILES,
           "модуль инструментов памяти входит в список копируемых файлов")
+
 
     # Переносимость: в образце не должно быть имени чужого пользователя,
     # иначе мост не заработает у другого человека. Исключение — сам мост

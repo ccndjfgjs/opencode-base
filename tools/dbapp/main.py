@@ -13,9 +13,10 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import core  # type: ignore[import-not-found]
     import ui  # type: ignore[import-not-found]
+    import mcp_registry  # type: ignore[import-not-found]
     import opencode_caps  # type: ignore[import-not-found]
 else:  # запуск как модуль
-    from . import core, ui, opencode_caps
+    from . import core, ui, mcp_registry, opencode_caps
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -37,6 +38,8 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -2089,6 +2092,56 @@ class CapsTab(ScrollPage):
         skills_layout.addWidget(self.caps_skills_hint)
         outer.addWidget(box_skills)
 
+        # --- шаг 6. Серверы MCP из реестра
+        box_mcp = QGroupBox("6. Серверы MCP — что можно включить")
+        mcp_layout = QVBoxLayout(box_mcp)
+        mcp_layout.addWidget(
+            ui.label(
+                "Это не мосты: мосты едут с базой и включены всегда. Здесь "
+                "сторонние серверы из реестра. Программа проверяет требования "
+                "живьём и вписывает блок в настройки opencode — сама ничего "
+                "не скачивает и подписки не покупает. После включения "
+                "перезапусти opencode.",
+                kind="dim",
+                wrap=True,
+            )
+        )
+
+        self.reg_servers: list[mcp_registry.Server] = []
+        self.reg_table = QTableWidget(0, 4)
+        self.reg_table.setHorizontalHeaderLabels(
+            ["Сервер", "Состояние", "Лицензия", "Инструментов"]
+        )
+        self.reg_table.verticalHeader().setVisible(False)
+        self.reg_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.reg_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.reg_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.reg_table.setMinimumHeight(150)
+        self.reg_table.setMaximumHeight(190)
+        self.reg_table.horizontalHeader().setStretchLastSection(True)
+        mcp_layout.addWidget(self.reg_table)
+
+        self.reg_detail = QPlainTextEdit()
+        self.reg_detail.setReadOnly(True)
+        self.reg_detail.setMinimumHeight(120)
+        mcp_layout.addWidget(self.reg_detail)
+
+        row_mcp = QHBoxLayout()
+        self.btn_reg_check = QPushButton("Проверить всё")
+        self.btn_reg_on = QPushButton("Включить")
+        self.btn_reg_off = QPushButton("Выключить")
+        self.btn_reg_src = QPushButton("Открыть источник")
+        row_mcp.addWidget(self.btn_reg_check)
+        row_mcp.addWidget(self.btn_reg_on)
+        row_mcp.addWidget(self.btn_reg_off)
+        row_mcp.addWidget(self.btn_reg_src)
+        row_mcp.addStretch(1)
+        mcp_layout.addLayout(row_mcp)
+
+        self.reg_hint = ui.label("", kind="dim", wrap=True)
+        mcp_layout.addWidget(self.reg_hint)
+        outer.addWidget(box_mcp)
+
         # --- кнопки
         buttons = QHBoxLayout()
         self.btn_install = QPushButton("Поставить отмеченное")
@@ -2118,11 +2171,199 @@ class CapsTab(ScrollPage):
         self.btn_skills_put.clicked.connect(self._install_skills)
         self.btn_skills_drop.clicked.connect(self._remove_skills)
         self.caps_skills_list.itemChanged.connect(self._caps_skills_changed)
+        self.btn_reg_check.clicked.connect(self._reg_check_all)
+        self.btn_reg_on.clicked.connect(self._reg_enable)
+        self.btn_reg_off.clicked.connect(self._reg_disable)
+        self.btn_reg_src.clicked.connect(self._reg_open_source)
+        self.reg_table.currentCellChanged.connect(
+            lambda *_: self._reg_show_detail()
+        )
         self._fill_caps_skills()
+        self._reg_load()
         self._refresh()
 
         outer.activate()
         self.refresh_height()
+
+    # ---- серверы MCP из реестра
+
+    def _reg_base(self) -> Path:
+        return self._base()
+
+    def _reg_dest(self) -> Path | None:
+        dest = self._dest()
+        return dest
+
+    def _reg_load(self) -> None:
+        """Читает реестр и показывает серверы без проверки требований.
+
+        Требования здесь не проверяются: каждая проверка запускает
+        внешнюю программу. Пока пользователь не нажал «Проверить всё»,
+        состояние показано как «не проверено» — это честнее, чем молча
+        показывать пустые галочки.
+        """
+        base = self._reg_base()
+        data = mcp_registry.load_registry(base)
+        self.reg_servers = []
+        for spec in data.get("servers") or []:
+            if not isinstance(spec, dict):
+                continue
+            conn = spec.get("connection")
+            self.reg_servers.append(
+                mcp_registry.Server(
+                    id=str(spec.get("id") or ""),
+                    name=str(spec.get("name") or ""),
+                    raw=spec,
+                    has_connection=isinstance(conn, dict)
+                    and bool(conn.get("command") or conn.get("url")),
+                )
+            )
+        self._reg_paint()
+
+    def _reg_state_text(self, server: mcp_registry.Server) -> str:
+        if server.installed:
+            return "включён"
+        if not server.requirements:
+            return "не проверено"
+        if not server.has_connection:
+            return "нет команды"
+        if server.blocking_manual:
+            names = ", ".join(r.what for r in server.blocking_manual)
+            return f"нужно: {names}"
+        if server.missing:
+            names = ", ".join(r.what for r in server.missing)
+            return f"не хватает: {names}"
+        return "можно включить"
+
+    def _reg_paint(self) -> None:
+        servers = self.reg_servers
+        self.reg_table.setRowCount(len(servers))
+        for row, server in enumerate(servers):
+            self.reg_table.setItem(row, 0, QTableWidgetItem(server.name))
+            self.reg_table.setItem(row, 1, QTableWidgetItem(self._reg_state_text(server)))
+            self.reg_table.setItem(row, 2, QTableWidgetItem(server.license))
+            self.reg_table.setItem(row, 3, QTableWidgetItem(server.tools_count))
+        if servers and self.reg_table.currentRow() < 0:
+            self.reg_table.setCurrentCell(0, 0)
+        self._reg_show_detail()
+
+    def _reg_current(self) -> mcp_registry.Server | None:
+        row = self.reg_table.currentRow()
+        if 0 <= row < len(self.reg_servers):
+            return self.reg_servers[row]
+        return None
+
+    def _reg_show_detail(self) -> None:
+        server = self._reg_current()
+        if server is None:
+            self.reg_detail.setPlainText("Выберите сервер, чтобы увидеть подробности.")
+            return
+        raw = server.raw
+        lines = [f"{server.name} — {server.license}"]
+        conn = raw.get("connection") or {}
+        target = conn.get("url") or " ".join(conn.get("command") or [])
+        if target:
+            lines.append(f"Команда: {target}")
+        if raw.get("why"):
+            lines.append("")
+            lines.append(str(raw["why"]))
+        for key, title in (
+            ("exclusive_access", "Особенность"),
+            ("telemetry", "Телеметрия"),
+            ("auth", "Вход"),
+        ):
+            if raw.get(key):
+                lines.append("")
+                lines.append(f"{title}: {raw[key]}")
+        if raw.get("requires"):
+            lines.append("")
+            lines.append("Требуется:")
+            for req in raw["requires"]:
+                lines.append(f"  • {req.get('what')}"
+                             + (f" — {req['note']}" if req.get("note") else ""))
+        if raw.get("safety"):
+            lines.append("")
+            lines.append(f"Безопасность: {raw['safety']}")
+        if raw.get("verdict"):
+            lines.append("")
+            lines.append(f"Итог: {raw['verdict']}")
+        lines.append("")
+        lines.append(f"Источник: {server.source}")
+        self.reg_detail.setPlainText("\n".join(lines))
+
+    def _reg_check_all(self) -> None:
+        """Живая проверка требований. Идёт в фоне: запускает программы."""
+        base = self._reg_base()
+        dest = self._reg_dest()
+        if dest is None:
+            self._warn("Не выбрана папка настроек opencode.")
+            return
+
+        def job(progress):
+            servers = mcp_registry.load_servers(base)
+            mcp_registry.mark_installed(servers, dest)
+            self.reg_servers = servers
+            self._reg_paint()
+            messages: list[str] = []
+            for server in servers:
+                state = self._reg_state_text(server)
+                messages.append(f"{server.name}: {state}")
+            return messages, []
+
+        self._start(job, "registry")
+
+    def _reg_enable(self) -> None:
+        dest = self._reg_dest()
+        if dest is None:
+            self._warn("Не выбрана папка настроек opencode.")
+            return
+        server = self._reg_current()
+        if server is None:
+            self._warn("Выберите сервер в списке.")
+            return
+
+        def job(progress):
+            return mcp_registry.enable(dest, server)
+
+        self._start(job, "registry")
+
+    def _reg_disable(self) -> None:
+        dest = self._reg_dest()
+        if dest is None:
+            self._warn("Не выбрана папка настроек opencode.")
+            return
+        server = self._reg_current()
+        if server is None:
+            self._warn("Выберите сервер в списке.")
+            return
+
+        def job(progress):
+            return mcp_registry.disable(dest, server)
+
+        self._start(job, "registry")
+
+    def _reg_open_source(self) -> None:
+        server = self._reg_current()
+        if server is None or not server.source:
+            self._warn("У этого сервера нет источника в реестре.")
+            return
+        # Ссылка из реестра, а не пользовательский ввод: всё равно
+        # показываем, что открываем, и ждём подтверждения.
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("Открыть источник?")
+        box.setText(f"Открыть в браузере?\n\n{server.source}")
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Open | QMessageBox.StandardButton.Cancel
+        )
+        if box.exec() != QMessageBox.StandardButton.Open:
+            return
+        import webbrowser  # локальный импорт: нужен только здесь
+
+        try:
+            webbrowser.open(server.source)
+        except Exception as exc:  # noqa: BLE001
+            self._warn(f"Не открылось: {exc}")
 
     # ---- состояние
 
@@ -2322,6 +2563,15 @@ class CapsTab(ScrollPage):
         else:
             self.log.add("Готово.", "ok")
         self._refresh()
+        # Включение и выключение сервера меняют его состояние в таблице.
+        # Перечитываем здесь, в главном потоке: из рабочего потока трогать
+        # виджеты нельзя, а признак «включён» надо ставить по факту
+        # записанного блока, а не по факту нажатия кнопки.
+        if self._what == "registry":
+            reg_dest = self._reg_dest()
+            if reg_dest is not None:
+                mcp_registry.mark_installed(self.reg_servers, reg_dest)
+                self._reg_paint()
 
     def _base(self) -> Path:
         return core.app_root()

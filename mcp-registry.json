@@ -2,14 +2,21 @@
   "schema": "opencode-base-mcp-registry-v1",
   "description": "Реестр MCP-серверов: что есть, что нужно поставить и готов ли сервер на этом компьютере. Программа ничего не устанавливает сама — только честно сообщает состояние. Подробное объяснение в инструкции/МCP-серверы.md.",
   "checked": "2026-09-28",
+  "connection_checked": "2026-09-28",
+  "requires_note": "У каждого требования есть type: command — запускаем и смотрим версию; program — ищем файл; manual — программа проверить не может (галочка в Excel, подписка, приложение) и обязана сказать об этом прямо, а не угадывать.",
   "ready_here_note": "Поле ready_here — это СНИМОК на дату checked, а не обещание. Программа не должна ему слепо верить: перед использованием проверь требования по полю requires. На другой машине или после установки Blender значение устареет.",
-  "snapshot": "На 28.09.2026 на этой машине: windows-admin — готов, excel — готов, blender — не готов (нет Blender), adobe-creativity — не готов (нет приложений Adobe).",
+  "snapshot": "На 28.09.2026 на этой машине: windows-admin — готов, excel — готов, blender — не готов (нет Blender), adobe-creativity — не готов (нет приложений Adobe). Проверено вручную: node 24.18.0, npx 11.16.0, uvx 0.12.9, dotnet 10.0.9, Excel 16 (Office16).",
   "servers": [
     {
       "id": "windows-admin",
       "name": "Windows-администрирование",
       "source": "https://github.com/devladpopov/windows-admin-mcp",
       "install": "npm-глобально, затем npx windows-admin-mcp",
+      "connection": {
+        "kind": "local",
+        "command": ["npx", "-y", "windows-admin-mcp"],
+        "note": "Проверено 28.09.2026: пакет windows-admin-mcp есть в npm, версия 1.1.0, лицензия MIT. Ключ -y обязателен: без него npx спросит подтверждение установки, и сервер не стартует. Отдельная установка не нужна — npx скачает пакет при первом запуске."
+      },
       "license": "MIT",
       "tools_count": 42,
       "why": "Службы Windows, журнал событий, планировщик, процессы и порты, сеть, диагностика, наблюдаемость, безопасность. Модуль диагностики собирает отчёт о службе за один вызов: статус, порт, последние ошибки, зависимости и вывод.",
@@ -17,17 +24,31 @@
         {
           "what": "Node.js 18+",
           "check": "node",
+          "type": "command",
+          "args": ["--version"],
+          "min_version": 18,
           "note": "проверяется командой node --version"
+        },
+        {
+          "what": "npx",
+          "check": "npx",
+          "type": "command",
+          "args": ["--version"],
+          "note": "нужен, потому что сервер запускается через npx"
         },
         {
           "what": "PowerShell 5.1+",
           "check": "powershell",
+          "type": "command",
+          "args": ["-NoLogo", "-NoProfile", "-Command", "$PSVersionTable.PSVersion.Major"],
+          "min_version": 5,
           "note": "входит в состав Windows"
         },
         {
           "what": "права администратора",
           "check": null,
-          "note": "часть инструментов меняет службы и убивает процессы"
+          "type": "manual",
+          "note": "часть инструментов меняет службы и убивает процессы. Без прав админа сервер запустится, но эти действия откажут"
         }
       ],
       "safety": "Перед разрушительным действием показывается превью и требуется подтверждение confirm_action с кодом, таймаут 5 минут. Критические процессы (lsass, csrss, svchost, winlogon, smss, services, wininit, TrustedInstaller) заблокированы даже с подтверждением. Массовые операции ограничены 20 за вызов. Ведётся аудит-лог в JSONL.",
@@ -39,26 +60,50 @@
       "name": "Excel",
       "source": "https://github.com/sbroenne/mcp-server-excel",
       "install": "расширение для VS Code (sbroenne.excel-mcp) либо запуск сервера отдельно",
+      "connection": {
+        "kind": "local",
+        "command": ["npx", "-y", "@sbroenne/mcp-server-excel"],
+        "note": "Проверено 28.09.2026: пакет @sbroenne/mcp-server-excel есть в npm, версия 2.0.11, лицензия MIT. Имя со областью @sbroenne — без неё пакет не находится. .NET НЕ требуется: сборка самодостаточная, это .NET нужен только для запасного пути через dotnet tool. Установка не нужна, npx скачает при первом запуске."
+      },
       "license": "MIT",
       "tools_count": 31,
       "operations": 326,
       "why": "Управление настоящим Excel через его COM-API: Power Query и M-код, Power Pivot и DAX, сводные таблицы, диаграммы, срезы, таблицы, диапазоны, форматирование, VBA-макросы, листы и подключения, Python =PY() в облачном движке Excel.",
       "why_not_openpyxl": "Сервер работает через настоящий Excel, поэтому сводные таблицы, диаграммы, макросы и модель данных остаются целыми. Решения на openpyxl переписывают файл .xlsx напрямую и при этом молча теряют сводные, диаграммы и макросы, и не умеют Power Query, модель данных и DAX.",
+      "telemetry": "Сбор включён по умолчанию в минимальном анонимном виде: идентификатор установки и машины, идентификатор сессии, имя действия, результат, версии. Содержимое книги, пути к файлам и значения ячеек по умолчанию НЕ собираются. Документация предупреждает: для диагностики не публикуй сырые логи и реальные session_id.",
+      "exclusive_access": "Сервер берёт монопольный доступ к книгам через COM. Перед началом работы закрой открытые в Excel файлы, иначе сервер ответит «Workbook is locked».",
       "requires": [
         {
-          "what": "Windows",
-          "check": null,
-          "note": "COM-автоматизация только на Windows"
+          "what": "Node.js 18+",
+          "check": "node",
+          "type": "command",
+          "args": ["--version"],
+          "min_version": 18,
+          "note": "нужен для запуска через npx"
         },
         {
-          "what": "Microsoft Excel 2016+ установлен",
+          "what": "Microsoft Excel 2016+",
           "check": "excel.exe",
-          "note": "проверяется наличием excel.exe в реестре Windows"
+          "type": "program",
+          "note": "проверяется по ветке реестра Windows. На 28.09.2026 найден Office16"
+        },
+        {
+          "what": "Windows 10+",
+          "check": null,
+          "type": "manual",
+          "note": "сервер работает только через COM-автоматизацию, на других системах его нет"
         },
         {
           "what": "разрешить доступ к объектной модели VBA",
           "check": null,
+          "type": "manual",
           "note": "одноразовая настройка в Excel: Файл → Параметры → Центр управления безопасностью → Параметры центра управления безопасностью → Параметры макросов → поставить галочку «Доверять доступ к объектной модели проектов VBA»"
+        },
+        {
+          "what": "MSOLAP для DAX",
+          "check": null,
+          "type": "manual",
+          "note": "нужен только для запросов DAX (evaluate, execute-dmv). Ставится вместе с Power BI Desktop или отдельно. Без него всё остальное работает"
         }
       ],
       "ready_here": true,
@@ -69,22 +114,32 @@
       "name": "Blender (3D)",
       "source": "https://github.com/ahujasid/mcp-for-blender",
       "install": "uvx mcp-for-blender + аддон в Blender",
+      "connection": {
+        "kind": "local",
+        "command": ["uvx", "mcp-for-blender"],
+        "note": "Команда из README проекта. Сервер запускает аддон внутри Blender, поэтому без самого Blender он не поднимется."
+      },
       "license": "MIT",
       "why": "Сцена, объекты, материалы и цвета, выполнение Python в Blender, экспорт сцены в GLB/FBX, поиск HDRI и текстур на Poly Haven, модели Sketchfab и Poly Pizza, генерация 3D-моделей.",
       "requires": [
         {
           "what": "Blender 3.0+",
           "check": "blender.exe",
-          "note": "Blender бесплатен, официальный сайт blender.org. Проверяется наличием blender.exe"
+          "type": "program",
+          "note": "Blender бесплатен, официальный сайт blender.org. Проверяется по ветке реестра Windows"
         },
         {
           "what": "uv / uvx",
           "check": "uvx",
-          "note": "проверяется командой uvx --version"
+          "type": "command",
+          "args": ["--version"],
+          "note": "проверяется командой uvx --version. На 28.09.2026 стоит 0.12.9"
         },
         {
           "what": "аддон MCP for Blender",
           "check": null,
+          "type": "manual",
+          "blocks": true,
           "note": "ставится командой uvx mcp-for-blender install-addon, затем включается в настройках аддонов Blender"
         }
       ],
@@ -98,18 +153,29 @@
       "name": "Adobe Creative Cloud",
       "source": "https://claude.com/connectors/adobe-creativity",
       "install": "удалённый MCP-сервер Adobe",
+      "connection": {
+        "kind": "remote",
+        "url": "https://adobe-creativity.adobe.io/mcp",
+        "note": "Проверено 28.09.2026: адрес взят с официальной страницы коннектора Adobe и отвечает (HTTP 403 без входа — так и должен вести себя закрытый сервер). 67 инструментов, автор Adobe Inc. После вписывания обязателен вход: opencode mcp auth adobe-creativity"
+      },
       "license": "сервер Adobe, доступ по подписке Adobe",
+      "tools_count": 67,
+      "auth": "OAuth, вход в аккаунт Adobe. Без него сервер отвечает отказом на любой инструмент",
       "why": "Photoshop, Lightroom, Illustrator, Firefly, Premiere, InDesign, Express и Adobe Stock: редактирование изображений словами, генерация и правка картинок, поиск ассетов, монтаж видео.",
       "requires": [
         {
           "what": "приложения Adobe",
           "check": null,
+          "type": "manual",
+          "blocks": true,
           "note": "ни Photoshop, ни Premiere, ни Illustrator. Без них серверу не к чему подключаться"
         },
         {
           "what": "аккаунт Adobe с оплаченной подпиской",
           "check": null,
-          "note": "Photoshop, Premiere и After Effects — платные продукты"
+          "type": "manual",
+          "blocks": true,
+          "note": "Photoshop, Premiere и After Effects — платные продукты. Программа подписку купить не может"
         }
       ],
       "ready_here": false,
