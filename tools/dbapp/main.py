@@ -228,6 +228,19 @@ class CreateTab(ScrollPage):
         row1.addWidget(btn_pick_parent)
         path_layout.addLayout(row1)
 
+        # Решение человека о чувствительных данных. По умолчанию
+        # выключено: без прямой просьбы секретное не пишется.
+        self.chk_sensitive = QCheckBox(
+            "Разрешить в этой базе пароли и ключи "
+            "(иначе нейросеть откажется их записывать)"
+        )
+        self.chk_sensitive.setToolTip(
+            "Сними галочку — нейросеть не будет записывать пароли, ключи "
+            "и токены даже по просьбе, а предложит хранилище. "
+            "По умолчанию выключено."
+        )
+        path_layout.addWidget(self.chk_sensitive)
+
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("например: Моя-база")
         row2 = QHBoxLayout()
@@ -607,7 +620,10 @@ class CreateTab(ScrollPage):
                 self._warn(f"Папка-родитель недоступна:\n{exc}")
             return None
         try:
-            return core.build_plan(parent, self.name_edit.text(), template)
+            return core.build_plan(
+                parent, self.name_edit.text(), template,
+                allow_sensitive=self.chk_sensitive.isChecked(),
+            )
         except core.NameError_ as exc:
             if not quiet:
                 self._warn(str(exc))

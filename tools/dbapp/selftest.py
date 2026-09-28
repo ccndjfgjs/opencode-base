@@ -1938,12 +1938,22 @@ def main() -> int:
             if not folder.is_dir():
                 continue
             for path in folder.rglob("*"):
-                if path.is_file() and path.name != "_О-ПАПКЕ.md":
-                    _fresh_priv.append(
-                        path.relative_to(_fresh).as_posix())
+                if not path.is_file() or path.name == "_О-ПАПКЕ.md":
+                    continue
+                # В папке настроек лежит ещё и решение о чувствительных
+                # данных: это настройка базы, а не личные данные.
+                if name == "настройки" and path.name == "чувствительные-данные.md":
+                    continue
+                _fresh_priv.append(path.relative_to(_fresh).as_posix())
         check(not _fresh_priv,
-              f"в личных папках новой базы только пояснения, данных нет: "
+              f"в личных папках новой базы нет данных пользователя: "
               f"{_fresh_priv or 'ни одного файла'}")
+        _pol = _fresh / "настройки" / "чувствительные-данные.md"
+        check(_pol.is_file(),
+              "файл решения о чувствительных данных создан в новой базе")
+        if _pol.is_file():
+            check("ЗАПРЕЩЕНО" in _pol.read_text(encoding="utf-8"),
+                  "по умолчанию в новой базе запрет — решение человека")
         # Личная запись — это ncp-…md. Пояснение папки _О-ПАПКЕ.md
         # служебное и в новую базу едет намеренно.
         _pl_dir = _fresh / "библиотека" / "записи" / "личное"

@@ -637,17 +637,23 @@ class CreationPlan:
 
     target: Path
     name: str
+    # Решение человека: можно ли в этой базе хранить пароли и ключи.
+    # По умолчанию нет. Выбирается при создании базы и дальше лежит
+    # в базе файлом настройки, чтобы правило было видно без программы.
+    allow_sensitive: bool = False
     files: list[str] = field(default_factory=list)
     dirs: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     template_from: Path | None = None
 
 
-def build_plan(parent: Path, name: str, template: Path | None) -> CreationPlan:
+def build_plan(parent: Path, name: str, template: Path | None,
+              allow_sensitive: bool = False) -> CreationPlan:
     """Готовит план создания базы, ничего не записывая на диск."""
     name = validate_name(name)
     target = Path(parent) / name
-    plan = CreationPlan(target=target, name=name)
+    plan = CreationPlan(target=target, name=name,
+                        allow_sensitive=allow_sensitive)
 
     if target.exists():
         if any((target / f).exists() for f in REQUIRED_FILES):
@@ -1003,6 +1009,19 @@ def create_base(plan: CreationPlan, progress=None) -> list[str]:
                     say(f"AGENTS.md в корень не скопирован ({exc})")
                 break
 
+    # Решение человека о чувствительных данных: пишется файлом, чтобы
+    # правило жило вместе с базой и было видно без программы.
+    pol = target / SENSITIVE_FILE
+    if not pol.exists():
+        pol.parent.mkdir(parents=True, exist_ok=True)
+        pol.write_text(
+            sensitive_policy(plan.allow_sensitive), encoding="utf-8"
+        )
+        say(
+            "Чувствительные данные: "
+            + ("разрешено" if plan.allow_sensitive else "запрещено")
+        )
+
     memory = target / "библиотека/АКТИВНАЯ-ПАМЯТЬ.md"
     if not memory.exists():
         memory.write_text(ACTIVE_MEMORY, encoding="utf-8")
@@ -1039,6 +1058,53 @@ def create_base(plan: CreationPlan, progress=None) -> list[str]:
     remember_base(target)
     say("База записана в список созданных")
     return log
+
+
+#: Решение человека о чувствительных данных. Живёт в базе файлом, а не
+#: в инструкции: правило должно переезжать вместе с базой и читаться
+#: без программы.
+SENSITIVE_FILE = "настройки/чувствительные-данные.md"
+
+
+def sensitive_policy(allowed: bool) -> str:
+    """Текст решения: можно ли в базе хранить пароли и ключи."""
+    if allowed:
+        return (
+            "# Чувствительные данные — РАЗРЕШЕНО\n\n"
+            "Так решил человек при создании этой базы.\n\n"
+            "## Что можно\n\n"
+            "- По прямой просьбе человека записывать пароли, ключи, "
+            "токены и прочие доступы.\n"
+            "- Класть их в тему `личное/доступы`: так их проще найти, и "
+            "в новые базы они не уедут.\n\n"
+            "## Чего всё равно нельзя\n\n"
+            "- Записывать без прямой просьбы. Разрешение — это «можно», "
+            "а не «надо».\n"
+            "- Выкладывать секреты в ответ, если человек не просил.\n"
+            "- Копировать их в другие базы, репозитории или куда-то ещё.\n\n"
+            "## Если решение нужно поменять\n\n"
+            "Файл переписывается вручную. Нейросеть читает этот файл "
+            "и подчиняется ему, а не своей памяти о том, что было "
+            "раньше.\n"
+        )
+    return (
+        "# Чувствительные данные — ЗАПРЕЩЕНО\n\n"
+        "Так решил человек при создании этой базы.\n\n"
+        "## Что это значит\n\n"
+        "- Пароли, ключи, токены и прочие доступы в эту базу не "
+        "записываются.\n"
+        "- Даже если человек попросит записать — не записывать, а "
+        "предложить хранилище, где это уместно: менеджер паролей или "
+        "зашифрованный файл.\n"
+        "- Сами секреты не повторять в ответе.\n\n"
+        "## Почему так\n\n"
+        "База — это обычные текстовые файлы. Кто-то может её открыть, "
+        "скопировать или отправить, а пароль в открытом тексте "
+        "разлетается дальше, чем предполагалось.\n\n"
+        "## Если решение нужно поменять\n\n"
+        "Файл переписывается вручную. Нейросеть читает этот файл "
+        "и подчиняется ему.\n"
+    )
 
 
 def _copy_ref_files(source: Path, target: Path) -> list[str]:
