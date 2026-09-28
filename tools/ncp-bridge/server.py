@@ -1063,6 +1063,47 @@ def mode_selftest(config: dict) -> int:
               f"шаг 8б: каждая замена хранит свою прежнюю версию "
               f"({len(_kept)} → {len(_kept2)})")
 
+        # ---- 8в. темы-папки: категория создаётся сама
+        # Человек попросил: разносить данные по категориям и создавать
+        # папку, если её нет. Проверяем на временной библиотеке, где
+        # папки заведомо не было.
+        _new_folder = temp_library / "записи" / "личное" / "проверка"
+        check(not _new_folder.exists(),
+              "темы личное/проверка до сохранения ещё нет")
+        answer = call(33, "ncp_save", {
+            "title": "Проверка вложенной темы",
+            "content": "Запись в несуществующую вложенную тему.",
+            "topic": "личное/проверка",
+            "type": "note",
+            "force": True,
+        })
+        data = payload(answer)
+        check((answer.get("result") or {}).get("isError") is not True,
+              "шаг 8в: запись во вложенную тему сохранилась")
+        check(_new_folder.is_dir(),
+              f"папка категории создана автоматически: {_new_folder}")
+        _made = list(_new_folder.glob("*.md")) if _new_folder.is_dir() else []
+        check(len(_made) == 1,
+              f"файл записи лежит во вложенной папке: {[p.name for p in _made]}")
+
+        # Глубже двух уровней — нельзя, это защита от выхода за папку.
+        answer = call(34, "ncp_save", {
+            "title": "Слишком глубокая тема", "content": "x",
+            "topic": "a/b/c", "type": "note", "force": True,
+        })
+        check((answer.get("result") or {}).get("isError") is True,
+              "шаг 8в: три уровня отклонены")
+        _deep = (temp_library / "записи" / "a").exists()
+        check(not _deep, "папка от отклонённой темы не создалась")
+        answer = call(35, "ncp_save", {
+            "title": "Попытка вылезти", "content": "x",
+            "topic": "../выход", "type": "note", "force": True,
+        })
+        check((answer.get("result") or {}).get("isError") is True,
+              "шаг 8в: выход за пределы отклонён")
+        check(not (temp_library / "записи" / "выход").exists(),
+              "ничего не записалось вне запис��й")
+
         # ---- 9. ncp_reindex: перестройка индекса
         (temp_library / "index.json").write_text("{}", encoding="utf-8")
         answer = call(12, "ncp_reindex", {})

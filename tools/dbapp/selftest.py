@@ -1883,9 +1883,15 @@ def main() -> int:
         if (_kit / name).is_dir()
     ]
     check(not _pdirs, f"в конструкторе нет папок с личным: {_pdirs or 'ни одной'}")
-    _priv = sorted((_kit / "библиотека" / "записи" / "личное").rglob("*.md")) \
-        if (_kit / "библиотека" / "записи" / "личное").is_dir() else []
-    check(not _priv, f"личных записей NCP в конструкторе нет: {len(_priv)}")
+    # Личные записи отличить от служебных: запись называется ncp-…md,
+    # пояснение папки — _О-ПАПКЕ.md. Раньше считались все md, и проверка
+    # ругалась на собственное пояснение.
+    _pl = _kit / "библиотека" / "записи" / "личное"
+    _priv = sorted(p.name for p in _pl.glob("ncp-*.md")) if _pl.is_dir() else []
+    check(not _priv,
+          f"личных записей NCP в конструкторе нет: {len(_priv)}")
+    check((_pl / "_О-ПАПКЕ.md").is_file(),
+          "в конструкторе есть папка личное с пояснением, а не записями")
     check((_kit / "ОБРАЗЕЦ-БАЗЫ.md").is_file(),
           "заготовка ОБРАЗЕЦ-БАЗЫ.md на месте — её создавать база должна")
 
@@ -1938,10 +1944,15 @@ def main() -> int:
         check(not _fresh_priv,
               f"в личных папках новой базы только пояснения, данных нет: "
               f"{_fresh_priv or 'ни одного файла'}")
-        _fresh_lib = list((_fresh / "библиотека" / "записи" / "личное").rglob("*.md")) \
-            if (_fresh / "библиотека" / "записи" / "личное").is_dir() else []
+        # Личная запись — это ncp-…md. Пояснение папки _О-ПАПКЕ.md
+        # служебное и в новую базу едет намеренно.
+        _pl_dir = _fresh / "библиотека" / "записи" / "личное"
+        _fresh_lib = sorted(p.name for p in _pl_dir.glob("ncp-*.md")) \
+            if _pl_dir.is_dir() else []
         check(not _fresh_lib,
               f"личных записей NCP в новой базе нет: {len(_fresh_lib)}")
+        check((_pl_dir / "_О-ПАПКЕ.md").is_file(),
+              "пояснение личной папки в новой базе есть")
         check((_fresh / "skills").is_dir() and core.count_skills(_fresh) > 0,
               f"а скиллы в неё приехали: {core.count_skills(_fresh)}")
     finally:
@@ -2138,6 +2149,65 @@ def main() -> int:
     finally:
         shutil.rmtree(_zn, ignore_errors=True)
         echo(f"Временная папка убрана: {_zn}")
+
+    # ---- 19. темы библиотеки — папки, и они создаются сами
+    echo("\n--- 19. Темы библиотеки ---")
+
+    # Требование человека: разносить данные по категориям и создавать
+    # папку, если её нет. Пример: «личное, животные, собака Сэм».
+    _kt = Path(tempfile.mkdtemp(prefix="dbapp-temy-"))
+    try:
+        _pk = core.build_plan(_kt / "место", "Проба-темы", None)
+        (_kt / "место").mkdir(exist_ok=True)
+        core.create_base(_pk)
+        _kb = _pk.target
+
+        # Папка категории есть, вложенной темы внутри нет.
+        _deep = _kb / "библиотека" / "записи" / "личное" / "проверка"
+        check(not _deep.exists(), "темы личное/проверка до записи нет")
+        check((_kb / "библиотека" / "записи" / "личное").is_dir(),
+              "папка категории личное создана при создании базы")
+
+        # Новая база знает про это правило.
+        for _f, _label in ((_kb / "AGENTS.md", "AGENTS.md"),
+                           (_kb / "библиотека" / "NCP.md", "протокол NCP")):
+            _t = _f.read_text(encoding="utf-8")
+            check("Темы в библиотеке" in _t or "создаётся сама" in _t,
+                  f"в {_label} описано: тема — папка, создаётся сама")
+            check("личное/" in _t,
+                  f"в {_label} есть пример вложенной темы")
+            check("не едет" in _t or "не уезжают" in _t or "не копируются" in _t,
+                  f"в {_label} сказано, что личное не уезжает")
+
+        # В конструкторе код это умеет.
+        _nc = (core.program_root() / "tools" / "ncp-bridge" / "ncp_core.py")
+        _code = _nc.read_text(encoding="utf-8")
+        check("def is_private(" in _code,
+              "в коде моста есть различение личных тем")
+        check("TOPIC_SEP" in _code,
+              "в коде моста есть разделитель уровней темы")
+
+        # Личное по-прежнему не копируется в новые базы. Правило живёт
+        # в core.py, а не в мосте: я сперва искал его не там и проверка
+        # падала без причины.
+        _dc = (core.program_root() / "tools" / "dbapp" / "core.py")
+        _copy = _dc.read_text(encoding="utf-8").split("def _copy_lib_records")[-1]
+        check('parts[0] == "личное"' in _copy,
+              "личные записи по-прежнему не копируются в новые базы")
+
+        # Папка личное видна сразу, а не появляется при первой записи.
+        _pl = _kb / "библиотека" / "записи" / "личное"
+        check(_pl.is_dir(), "в новой базе есть папка личное")
+        _hint = _pl / "_О-ПАПКЕ.md"
+        check(_hint.is_file(), "в папке личное лежит пояснение")
+        if _hint.is_file():
+            _ht = _hint.read_text(encoding="utf-8")
+            check("не копируются в новые базы" in _ht
+                  or "не копируются" in _ht,
+                  "пояснение говорит, что личное не уезжает")
+    finally:
+        shutil.rmtree(_kt, ignore_errors=True)
+        echo(f"Временная папка убрана: {_kt}")
 
     # ---- итог
     failed = [text for good, text in results if not good]

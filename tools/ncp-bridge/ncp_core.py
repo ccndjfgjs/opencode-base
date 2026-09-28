@@ -120,18 +120,68 @@ def split_tags(value) -> list[str]:
     return result
 
 
+#: Разделитель уровней в теме. Разрешён ровно один уровень вложенности:
+#: «личное/животные» — категория «личное», тема «животные».
+TOPIC_SEP = "/"
+
+#: Категория личных записей. Такое не едет в новые базы: это часть
+#: конкретного человека, а не эталон конструктора.
+PRIVATE_ROOT = "личное"
+
+
 def safe_topic(name: str) -> str:
-    """Имя темы — ровно одна папка. Пути и «..» запрещены."""
+    """Имя темы — одна папка или две через слеш: «личное/животные».
+
+    Раньше путь был запрещён целиком, и структура, которая уже была в
+    библиотеке (записи/личное/<тема>/), была недостижима из инструментов:
+    нейросеть не могла положить запись в личную тему, хотя папки для этого
+    были. Теперь разрешён один уровень вложенности — ровно столько нужно
+    для личных папок.
+
+    Запрещено по-прежнему: «..», двоеточие, ведущий слеш, больше двух
+    уровней и слишком длинные имена. Запись не может выйти за пределы
+    библиотеки — это проверяется отдельно, функцией inside().
+    """
     text = unicodedata.normalize("NFKC", str(name or "")).strip()
     if not text:
         return "общее"
-    if "/" in text or "\\" in text or ".." in text or ":" in text:
+
+    text = text.replace("\\", TOPIC_SEP)
+    if ".." in text or ":" in text:
         raise NcpError(f"Имя темы не должно содержать путей: {name!r}")
-    text = "".join(ch for ch in text if ch not in _TOPIC_BAD and ord(ch) >= 32)
-    text = text.strip().strip(".")
-    if not text:
+    if text.startswith(TOPIC_SEP):
+        raise NcpError(f"Имя темы не может начинаться со слеша: {name!r}")
+
+    parts = text.split(TOPIC_SEP)
+    if len(parts) > 2:
+        raise NcpError(
+            f"Слишком глубокая тема: {name!r}. Допустимо не больше двух "
+            "уровней — «категория» или «категория/тема»."
+        )
+
+    clean: list[str] = []
+    for part in parts:
+        piece = "".join(
+            ch for ch in part if ch not in _TOPIC_BAD and ord(ch) >= 32
+        )
+        piece = piece.strip().strip(".")
+        if piece:
+            clean.append(piece[:MAX_TOPIC].strip())
+
+    if not clean:
         raise NcpError(f"Имя темы пустое после очистки: {name!r}")
-    return text[:MAX_TOPIC].strip()
+    return TOPIC_SEP.join(clean)
+
+
+def topic_parts(topic: str) -> list[str]:
+    """Тема как список папок: «личное/животные» → ['личное', 'животные']."""
+    return [p for p in str(topic or "").split(TOPIC_SEP) if p]
+
+
+def is_private(topic: str) -> bool:
+    """Личная ли тема. Такое не едет в новые базы."""
+    parts = topic_parts(topic)
+    return bool(parts) and parts[0].lower() == PRIVATE_ROOT
 
 
 def inside(root: Path, target: Path) -> bool:
