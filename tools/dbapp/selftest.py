@@ -68,6 +68,19 @@ def main() -> int:
     import tempfile
 
     _isolate = Path(tempfile.mkdtemp(prefix="dbapp-list-"))
+    # Заслон: настоящий список баз человека не должен измениться за
+    # прогон. Создание базы дописывается в список через remember_base,
+    # поэтому без такой проверки прогоны тихо наследили бы мусором.
+    _real_list = core.bases_file()
+    _real_before = (
+    _real_list.read_text(encoding="utf-8") if _real_list.is_file()
+    else "<файла нет>"
+    )
+    _real_paths_before = {
+    str(e.get("path", "")).lower() for e in core.read_bases()
+    }
+    echo(f"Заслон: список бас под наблюдением — {_real_list.name}")
+    core.use_bases_file(_isolate / "список.json")
     core.use_bases_file(_isolate / "список.json")
     echo(f"Список баз на время проверки: {core.bases_file()}")
 
@@ -1782,13 +1795,6 @@ def main() -> int:
     shutil.rmtree(btmp, ignore_errors=True)
     echo(f"Временная папка моста убрана: {btmp}")
 
-    # возвращаем настоящий список баз и убираем временный
-    core.use_bases_file(None)
-    check(not core.bases_file().name.startswith("список"),
-          f"настоящий список баз на месте: {core.bases_file().name}")
-    shutil.rmtree(_isolate, ignore_errors=True)
-    echo("Временный список баз убран")
-
     # ---- 14. удаление базы не задевает другие базы: найдено 28.09
     echo("\n--- 14. Удаление базы ---")
 
@@ -2267,6 +2273,45 @@ def main() -> int:
     finally:
         shutil.rmtree(_zp, ignore_errors=True)
         echo(f"Временная папка убрана: {_zp}")
+
+    # ---- 21. селфтест не тронул настоящий список баз
+    echo("\n--- 21. Список баз не затронут ---")
+
+    core.use_bases_file(None)
+    _real_after = (
+        _real_list.read_text(encoding="utf-8") if _real_list.is_file()
+        else "<файла нет>"
+    )
+    check(_real_after == _real_before,
+          f"настоящий список баз не изменился за прогон "
+          f"({len(_real_before)} → {len(_real_after)} байт)")
+    _real_paths_after = {str(e.get("path", "")).lower() for e in core.read_bases()}
+    _added = _real_paths_after - _real_paths_before
+    check(not _added,
+          f"в список не добавилось ничего лишнего: {_added or 'ничего'}")
+    _gone = _real_paths_before - _real_paths_after
+    check(not _gone,
+          f"существующие записи не потерялись: {_gone or 'ничего не пропало'}")
+    # Мусор прошлых прогонов: временные папки в списке быть не должны.
+    _temp_junk = [
+        p for p in _real_paths_after
+        if "\\Temp\\" in p or p.endswith("\test")
+    ]
+    check(not _temp_junk,
+          f"в списке нет временных папок от прошлых прогонов: "
+          f"{_temp_junk or 'чисто'}")
+    echo(f"  в списке сейчас: {len(_real_paths_after)} записей")
+
+    # Вот теперь возвращаем настоящий список баз: до этого места он
+    # остаётся подменённым, иначе разделы, создающие базы, писали бы
+    # прямо в список человека.
+    core.use_bases_file(None)
+    check(not core.bases_file().name.startswith("список"),
+          f"настоящий список баз на месте: {core.bases_file().name}")
+    check(_real_list.resolve() == core.bases_file().resolve(),
+          f"возврат привёл к тому же файлу: {core.bases_file().name}")
+    shutil.rmtree(_isolate, ignore_errors=True)
+    echo("Временный список баз убран")
 
     # ---- итог
     failed = [text for good, text in results if not good]
