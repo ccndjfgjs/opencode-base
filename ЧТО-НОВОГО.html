@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Что изменилось — opencode-base</title>
+<style>
+/* Палитра. Три цвета, и у каждого одна работа — читается по всей странице.
+   Охра означает «что изменилось», бирюза — «чем это проверяли»,
+   серый — «как было до». Всё остальное — бумага и чернила. */
+:root{
+  --paper:#f4f5f6;
+  --surface:#ffffff;
+  --ink:#12151a;
+  --ink-soft:#585f68;
+  --ink-faint:#8b9199;
+  --rule:#dcdfe3;
+  --rule-strong:#c3c8ce;
+  --change:#e23d28;   /* изменения */
+  --verify:#0e7c86;   /* проверки */
+  --before:#9aa0a6;   /* было */
+
+  /* Шкала отступов: 4/8/16/32/64. Значения разные намеренно —
+     близость говорит, что вместе, дальность — что разделы. */
+  --s1:4px; --s2:8px; --s3:16px; --s4:32px; --s5:64px;
+
+  /* Один радиус на всю страницу, маленький. Вложенный считается по
+     правилу: внутренний = внешний минус отступ. */
+  --r:4px;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;
+  background:var(--paper);
+  color:var(--ink);
+  font-family:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,sans-serif;
+  font-size:17px; line-height:1.62;
+  /* Моноширинные цифры: числа в столбце должны читаться сверху вниз,
+     а не «танцевать» — прочерк одной, а не округлые цифры. */
+  font-variant-numeric:tabular-nums lining-nums;
+}
+/* Моноширинный шрифт — только для кода: имён файлов и команд.
+   Заголовки и статусы держат на гарнитуре страницы, иначе интерфейс
+   начинает выглядеть как терминал ради terminals. Цифры в столбцах
+   остаются моноширинными — там прочерк помогает читать сверху вниз. */
+/* deslop-ignore 34 — моноширинный шрифт здесь законен: это имена файлов
+   и команды, то есть код. Для заголовков и статусов он убран. */
+.mono{font-family:"Cascadia Mono",Consolas,ui-monospace,monospace}
+
+.wrap{max-width:1080px; margin:0 auto; padding:var(--s5) var(--s4) var(--s5)}
+@media (max-width:700px){ .wrap{padding:var(--s4) var(--s3)} }
+
+/* ---------------------------------------------------------------- шапка */
+
+.head{padding-bottom:var(--s4); border-bottom:2px solid var(--ink)}
+h1{
+  /* Короткий заголовок, а не целое предложение на весь экран. */
+  font-family:"Segoe UI Variable Display","Segoe UI",system-ui,sans-serif;
+  font-size:clamp(34px,5.2vw,58px);
+  line-height:1.06; letter-spacing:-0.022em;
+  font-weight:660; margin:0 0 var(--s2);
+}
+.lede{font-size:20px; color:var(--ink-soft); max-width:62ch; margin:0}
+.lede strong{color:var(--ink); font-weight:600}
+
+/* Числа-ведущие. Не «три красивых числа», а четыре измеренных,
+   и каждое с подписью, что это и откуда. */
+.figures{
+  display:grid; grid-template-columns:repeat(4,1fr); gap:1px;
+  background:var(--rule); border:1px solid var(--rule);
+  margin:var(--s4) 0 0; border-radius:var(--r); overflow:hidden;
+}
+@media (max-width:760px){ .figures{grid-template-columns:repeat(2,1fr)} }
+.figure{background:var(--surface); padding:var(--s3) var(--s3) var(--s2)}
+.figure b{
+  display:block; font-variant-numeric:tabular-nums lining-nums;
+  font-size:34px; line-height:1.1; font-weight:640; letter-spacing:-0.02em;
+}
+.figure span{display:block; font-size:14px; color:var(--ink-soft); margin-top:var(--s1)}
+.f-change b{color:var(--change)}
+.f-verify b{color:var(--verify)}
+
+/* ------------------------------------------------------------- разделы */
+
+section{padding:var(--s5) 0; border-bottom:1px solid var(--rule)}
+section:last-of-type{border-bottom:0}
+h2{
+  font-family:"Segoe UI Variable Display","Segoe UI",system-ui,sans-serif;
+  font-size:30px; line-height:1.2; letter-spacing:-0.016em; font-weight:640;
+  margin:0 0 var(--s2);
+}
+h3{font-size:20px; font-weight:620; margin:var(--s4) 0 var(--s2); letter-spacing:-0.008em}
+p{margin:0 0 var(--s3); max-width:74ch}
+p:last-child{margin-bottom:0}
+.note{font-size:14px; color:var(--ink-faint); max-width:74ch; margin-top:var(--s3)}
+a{color:var(--verify); text-underline-offset:3px}
+
+ul{margin:0 0 var(--s3); padding-left:20px; max-width:74ch}
+li{margin-bottom:var(--s2)}
+li::marker{color:var(--rule-strong)}
+
+/* --------------------------------------------------------------- схемы */
+
+figure{margin:0 0 var(--s4)}
+figure svg{display:block; width:100%; height:auto; background:var(--surface);
+  border:1px solid var(--rule); border-radius:var(--r)}
+figcaption{font-size:14px; color:var(--ink-soft); margin-top:var(--s2); max-width:74ch}
+
+/* Подписи прямо на схеме */
+.s-label{font-family:"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
+  font-size:13px; fill:var(--ink)}
+/* deslop-ignore 34 — числа на схеме, а не элемент интерфейса: прочерк
+   цифр нужен, чтобы подписи столбцов читались на одной высоте. */
+.s-num{font-family:"Cascadia Mono",Consolas,monospace; font-size:13px; fill:var(--ink-soft)}
+.s-key{font-family:"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
+  font-size:12px; fill:var(--ink-soft)}
+.s-box{font-family:"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
+  font-size:14px; font-weight:600; fill:var(--ink)}
+
+/* --------------------------------------------------------------- таблица */
+
+table{width:100%; border-collapse:collapse; font-size:15px; margin:0 0 var(--s3)}
+th,td{text-align:left; padding:10px var(--s2) 10px 0; border-bottom:1px solid var(--rule);
+  vertical-align:top}
+th{font-weight:620; font-size:13px; color:var(--ink-soft); border-bottom:1px solid var(--rule-strong)}
+/* deslop-ignore 34 — колонка чисел читается сверху вниз, и моноширинные
+   цифры для этого и существуют. Округлые цифры в столбце «плавают». */
+td.n,th.n{text-align:right; font-family:"Cascadia Mono",Consolas,monospace; white-space:nowrap}
+tr:last-child td{border-bottom:0}
+.tag{font-size:12px; color:var(--ink-soft); white-space:nowrap}
+
+/* ------------------------------------------------- состояние серверов */
+
+.servers{border-top:1px solid var(--rule-strong)}
+.server{display:grid; grid-template-columns:190px 1fr auto; gap:var(--s3);
+  align-items:baseline; padding:var(--s3) 0; border-bottom:1px solid var(--rule)}
+@media (max-width:700px){ .server{grid-template-columns:1fr; gap:var(--s1)} }
+.server-name{font-weight:600}
+.server-what{font-size:15px; color:var(--ink-soft)}
+.server-state{font-size:14px; white-space:nowrap; font-weight:600}
+.on{color:var(--verify)}
+.off{color:var(--before)}
+
+/* ----------------------------------------------------------- врезка вывода */
+
+blockquote{
+  margin:var(--s3) 0; padding:var(--s1) 0 var(--s1) var(--s3);
+  border-left:2px solid var(--rule-strong); color:var(--ink-soft); max-width:74ch;
+}
+blockquote cite{display:block; margin-top:var(--s2); font-size:14px; font-style:normal;
+  color:var(--ink-faint)}
+
+/* ------------------------------------------------------------- подвал */
+
+.foot{padding-top:var(--s4); border-top:2px solid var(--ink); margin-top:var(--s4)}
+.foot p{font-size:15px; color:var(--ink-soft)}
+
+@media print{
+  body{background:#fff; font-size:11pt}
+  section{page-break-inside:avoid; border-bottom:1px solid #ccc}
+  figure svg{border:1px solid #ccc}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="head">
+  <h1>Что изменилось</h1>
+  <p class="lede">
+    Десять коммитов в <span class="mono">main</span>: программа переехала внутрь
+    <span class="mono">tools/dbapp/</span>, память переехала из плагина OpenCode
+    в мост, появились инструкции для нейросети, реестр серверов MCP и кнопка,
+    которая их включает. Четыре поломки найдены и починены по дороге.
+  </p>
+
+  <div class="figures">
+    <div class="figure f-change">
+      <b>1 260</b><span>файлов в коммитах<br>против того, что на GitHub</span>
+    </div>
+    <div class="figure f-change">
+      <b>283 228</b><span>строк добавлено<br><span class="mono">git diff --numstat</span></span>
+    </div>
+    <div class="figure f-verify">
+      <b>431</b><span>проверка программы,<br>все пройдены</span>
+    </div>
+    <div class="figure f-verify">
+      <b>4</b><span>сервера MCP<br>все подключены</span>
+    </div>
+  </div>
+  <p class="note">
+    Числа измерены, а не округлены: файлы и строки — из
+    <span class="mono">git diff origin/main..HEAD</span>, проверки — из
+    <span class="mono">selftest.py</span>, серверы — из
+    <span class="mono">opencode mcp list</span>.
+  </p>
+</header>
+
+<section>
+  <h2>Главное: четыре поломки, которые нашлись живьём</h2>
+  <p>
+    Каждая из них выглядела как «что-то не так», и каждую нашли не чтением кода,
+    а запуском. Это и есть главный результат сессии — не сами функции,
+    а то, что проверять оказалось сложнее, чем казалось.
+  </p>
+
+  <table>
+    <thead>
+      <tr><th>Что сломалось</th><th>Как выглядело</th><th>Почему не нашлось сразу</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Память молчала<br><span class="tag">пагин памяти OpenCode</span></td>
+        <td>В списке плагинов один из трёх красных — наш собственный</td>
+        <td>С версии 1.18 OpenCode требует от плагина объект
+            <span class="mono">{id, setup}</span>. Наш отдавал функцию. Побочные
+            эффекты успевали произойти, а 12 инструментов — нет</td>
+      </tr>
+      <tr>
+        <td>Мост создавался и не запускался<br><span class="tag">список BRIDGE_FILES</span></td>
+        <td>«Мост создан» — и мёртвый мост</td>
+        <td>Список файлов моста зашит в коде. Новый модуль в него не внесли,
+            и на импорт падало. Поймал селфтест</td>
+      </tr>
+      <tr>
+        <td>Сервер нельзя было включить<br><span class="tag">реестр MCP</span></td>
+        <td>В списке справочника есть, а вписать нечего</td>
+        <td>В реестре не было поля с настоящей командой запуска. Он был
+            справочником, а не инструкцией</td>
+      </tr>
+      <tr>
+        <td>Сервер «Не удалось»<br><span class="tag">windows-admin</span></td>
+        <td>Блок настроек записался без ошибки, сервер не поднялся</td>
+        <td>Проверяли «файл валиден», а надо было «сервер отвечает». Плюс
+            <span class="mono">zod</span> 4 ломает импорт, а холодный старт
+            не влезает в лимит 30 секунд</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <blockquote>
+    Общий урок всех четырёх: <strong>файл записался — ещё не значит работает.</strong>
+    Проверять надо ответ, а не отсутствие ошибки.
+    <cite>Записано в инструкции и в память базы, чтобы не повторить.</cite>
+  </blockquote>
+</section>
+
+<section>
+  <h2>Память переехала: было и стало</h2>
+  <p>
+    Двенадцать инструментов <span class="mono">memory_*</span> и
+    <span class="mono">library_*</span> были объявлены в плагине OpenCode.
+    Когда плагин перестал грузиться по новой схеме, они перестали существовать —
+    а инструкции в базе продолжали требовать их вызвать, пятьдесят ссылок
+    в одной только <span class="mono">AGENTS.md</span>. Теперь они живут в мосте.
+  </p>
+
+  <figure>
+    <svg viewBox="0 0 1000 256" role="img" aria-label="Схема переезда инструментов памяти из плагина OpenCode в мост NCP">
+      <!-- было -->
+      <text class="s-label" x="0" y="16" font-weight="600">БЫЛО</text>
+      <rect x="0" y="30" width="440" height="92" rx="4" fill="#fbfbfc" stroke="#dcdfe3"/>
+      <text class="s-box" x="20" y="60">Плагин OpenCode</text>
+      <text class="s-num" x="20" y="80">memory_*  library_*</text>
+      <text class="s-num" x="20" y="100" fill="#9aa0a6">12 инструментов не существовали</text>
+      <line x1="20" y1="112" x2="420" y2="112" stroke="#dcdfe3"/>
+
+      <!-- стало -->
+      <text class="s-label" x="560" y="16" font-weight="600">СТАЛО</text>
+      <rect x="560" y="30" width="440" height="92" rx="4" fill="#ffffff" stroke="#0e7c86"/>
+      <text class="s-box" x="580" y="60">Мост NCP — server MCP</text>
+      <text class="s-num" x="580" y="80" fill="#0e7c86">18 инструментов, 4 из них memory_*</text>
+      <text class="s-num" x="580" y="100" fill="#0e7c86">проверено запуском по протоколу MCP</text>
+      <line x1="580" y1="112" x2="980" y2="112" stroke="#0e7c86"/>
+
+      <!-- стрелка переезда -->
+      <line x1="452" y1="76" x2="548" y2="76" stroke="#e23d28" stroke-width="2"/>
+      <polygon points="548,76 538,71 538,81" fill="#e23d28"/>
+      <text class="s-num" x="462" y="64" fill="#e23d28">переезд</text>
+
+      <!-- подпись про плагин -->
+      <text class="s-label" x="0" y="160" font-weight="600">Плагин не исчез — стал маленьким</text>
+      <rect x="0" y="174" width="440" height="70" rx="4" fill="#ffffff" stroke="#dcdfe3"/>
+      <text class="s-num" x="20" y="198">39.2 КБ  →  13.7 КБ</text>
+      <text class="s-num" x="20" y="220" fill="#585f68">осталось: синхронизация скиллов и уход за библиотекой</text>
+
+      <rect x="560" y="174" width="440" height="70" rx="4" fill="#ffffff" stroke="#dcdfe3"/>
+      <text class="s-num" x="580" y="198" fill="#0e7c86">схема v2: объект {id, setup}</text>
+      <text class="s-num" x="580" y="220" fill="#585f68">падений плагина в логе: 89 до правки, 0 после</text>
+    </svg>
+    <figcaption>
+      Слева — как память была устроена до правки. Справа — как стала.
+      Плагин не удалили: из него убрали инструменты, потому что новый
+      opencode их всё равно не принимает.
+    </figcaption>
+  </figure>
+</section>
+
+<section>
+  <h2>Из чего состоит изменение</h2>
+  <p>
+    Основная масса строк — не код. Это база знаний по безопасности: разборы
+    Linux, Windows, macOS, веба и iOS. На неё приходится 91&nbsp;% всех
+    добавленных строк, поэтому её показываю отдельно, а всё остальное —
+    отдельно и в своём масштабе. Обе шкалы честные: линейные, без обрезанных
+    осей и логарифмов.
+  </p>
+
+  <figure>
+    <svg viewBox="0 0 1000 262" role="img" aria-label="Вклад разделов в добавленные строки">
+      <text class="s-label" x="0" y="16" font-weight="600">ЗНАНИЯ — 258 023 строки, 1 093 файла</text>
+      <rect x="0" y="28" width="960" height="30" fill="#e23d28"/>
+      <text class="s-num" x="12" y="48" fill="#ffffff">91 % всего изменения</text>
+
+      <line x1="0" y1="78" x2="1000" y2="78" stroke="#dcdfe3"/>
+      <text class="s-label" x="0" y="100" font-weight="600">ОСТАЛЬНОЕ — в своём масштабе, от 12 000 строк</text>
+
+      <!-- Шесть разделов на одной линейной шкале. Короткие полосы
+           короткие по-настоящему: обрезанная ось или логарифм
+           здесь соврали бы о разнице. -->
+      <g>
+        <text class="s-label" x="0" y="132">tools</text>
+        <rect x="110" y="122" width="440" height="12" fill="#e23d28"/>
+        <text class="s-num" x="560" y="132">11 019</text>
+      </g>
+      <g>
+        <text class="s-label" x="0" y="156">skills</text>
+        <rect x="110" y="146" width="415" height="12" fill="#e23d28"/>
+        <text class="s-num" x="535" y="156">10 403</text>
+      </g>
+      <g>
+        <text class="s-label" x="0" y="180">инструкции</text>
+        <rect x="110" y="170" width="64" height="12" fill="#e23d28"/>
+        <text class="s-num" x="184" y="180">1 605</text>
+      </g>
+      <g>
+        <text class="s-label" x="0" y="204">корень</text>
+        <rect x="110" y="194" width="53" height="12" fill="#e23d28"/>
+        <text class="s-num" x="173" y="204">1 326</text>
+      </g>
+      <g>
+        <text class="s-label" x="0" y="228">config</text>
+        <rect x="110" y="218" width="21" height="12" fill="#e23d28"/>
+        <text class="s-num" x="141" y="228">531</text>
+      </g>
+      <g>
+        <text class="s-label" x="0" y="250">библиотека</text>
+        <rect x="110" y="240" width="13" height="12" fill="#e23d28"/>
+        <text class="s-num" x="133" y="250">321</text>
+      </g>
+    </svg>
+    <figcaption>
+      Одна шкала на шесть разделов. <span class="mono">библиотека</span> —
+      321 строка против 11&nbsp;019 у <span class="mono">tools</span>, и полосы
+      это показывают: обрезанная ось или логарифм здесь соврали бы.
+    </figcaption>
+  </figure>
+
+  <table>
+    <thead>
+      <tr><th>Раздел</th><th class="n">строк</th><th class="n">файлов</th><th>Что внутри</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><span class="mono">знания</span></td><td class="n">258 023</td><td class="n">1 093</td>
+          <td>База знаний по безопасности</td></tr>
+      <tr><td><span class="mono">tools</span></td><td class="n">11 019</td><td class="n">56</td>
+          <td>Код программы, переехал в <span class="mono">tools/dbapp/</span></td></tr>
+      <tr><td><span class="mono">skills</span></td><td class="n">10 403</td><td class="n">78</td>
+          <td>Навыки: было 17, стало 29</td></tr>
+      <tr><td><span class="mono">инструкции</span></td><td class="n">1 605</td><td class="n">10</td>
+          <td>Правила, по которым нейросеть выбирает инструмент</td></tr>
+      <tr><td>корень</td><td class="n">1 326</td><td class="n">8</td>
+          <td>Реестр серверов, уведомления о лицензиях</td></tr>
+      <tr><td><span class="mono">config</span></td><td class="n">531</td><td class="n">8</td>
+          <td>Плагин под схему v2, агенты</td></tr>
+      <tr><td><span class="mono">библиотека</span></td><td class="n">321</td><td class="n">7</td>
+          <td>Шаблоны записей</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>Серверы MCP: реестр стал кнопкой</h2>
+  <p>
+    Реестр был справочником в файле. Теперь это блок «6. Серверы MCP» во
+    вкладке <span class="mono">opencode</span>: список, состояние по живой
+    проверке, кнопки «Проверить всё», «Включить», «Выключить».
+  </p>
+
+  <div class="servers">
+    <div class="server">
+      <span class="server-name">windows-admin</span>
+      <span class="server-what">Службы, журнал событий, планировщик, процессы и сеть. 42 инструмента</span>
+      <span class="server-state on">connected</span>
+    </div>
+    <div class="server">
+      <span class="server-name">excel</span>
+      <span class="server-what">Настоящий Excel через COM: Power Query, DAX, сводные, макросы. 31 инструмент</span>
+      <span class="server-state on">connected</span>
+    </div>
+    <div class="server">
+      <span class="server-name">ncp</span>
+      <span class="server-what">Наш мост: библиотека, профиль, проекты, факты. 18 инструментов</span>
+      <span class="server-state on">connected</span>
+    </div>
+    <div class="server">
+      <span class="server-name">pc</span>
+      <span class="server-what">Чтение компьютера: файлы, программы, снимок экрана. 4 инструмента</span>
+      <span class="server-state on">connected</span>
+    </div>
+    <div class="server">
+      <span class="server-name">blender</span>
+      <span class="server-what">Нужен сам Blender и аддон. Пользователь отложил установку</span>
+      <span class="server-state off">не включён</span>
+    </div>
+    <div class="server">
+      <span class="server-name">adobe-creativity</span>
+      <span class="server-what">Удалённый сервер Adobe. Нужны приложения и платная подписка</span>
+      <span class="server-state off">не включён</span>
+    </div>
+  </div>
+  <p class="note">
+    Состояние взято из <span class="mono">opencode mcp list</span> 28 сентября.
+    Для недоступных серверов кнопка «Включить» объясняет, чего не хватает,
+    а не молчит.
+  </p>
+</section>
+
+<section>
+  <h2>Хронология: десять коммитов</h2>
+  <p>
+    Порядок здесь настоящий: каждый следующий коммит чинит то, что показала
+    проверка предыдущего. Это не «фичи по плану», а цепочка находок.
+  </p>
+  <table>
+    <thead><tr><th>Коммит</th><th>Что сделал</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">60b7512</td><td>Перестроена структура базы, починена установка мостов</td></tr>
+      <tr><td class="mono">91227e8</td><td>Конструктор очищен от данных базы</td></tr>
+      <tr><td class="mono">04447e9</td><td>Мосты едут с базой и работают</td></tr>
+      <tr><td class="mono">882d5a5</td><td>Инструкции: какой скилл, какой агент, что делать с плохим результатом</td></tr>
+      <tr><td class="mono">cf482b3</td><td>Навыки 17 → 29, реестр серверов, обновление едет с базой</td></tr>
+      <tr><td class="mono">b6dc3cb</td><td>Агенты едут с базой; правило «увидел возможность — скажи»</td></tr>
+      <tr><td class="mono">4894f49</td><td>Инструменты памяти переехали в мост, плагин переписан под v2</td></tr>
+      <tr><td class="mono">9234018</td><td>Мост переставал запускаться: новый модуль не попал в список файлов</td></tr>
+      <tr><td class="mono">cf35245</td><td>Серверы MCP видны в программе и включаются кнопкой</td></tr>
+      <tr><td class="mono">0d851da</td><td>windows-admin подключается: ловушка с zod и холодный старт</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>Что проверено и чем</h2>
+  <table>
+    <thead><tr><th>Проверка</th><th class="n">результат</th><th>Чем мерили</th></tr></thead>
+    <tbody>
+      <tr><td>Самопроверка программы</td><td class="n">431</td><td><span class="mono">selftest.py</span>, все пройдены</td></tr>
+      <tr><td>Самопроверка моста NCP</td><td class="n">42</td><td><span class="mono">server.py --selftest</span></td></tr>
+      <tr><td>Мост по настоящему протоколу</td><td class="n">18</td><td>JSON-RPC к живому процессу, не мок</td></tr>
+      <tr><td>Новая база, созданная программой</td><td class="n">10</td><td>29 скиллов, 12 агентов, оба моста, 8 инструкций</td></tr>
+      <tr><td>Серверы MCP</td><td class="n">4</td><td><span class="mono">opencode mcp list</span>, все connected</td></tr>
+      <tr><td>Плагин памяти</td><td class="n">0</td><td>падений в логе после правки, было 89</td></tr>
+    </tbody>
+  </table>
+  <p class="note">
+    Последняя строка — про урок из первой поломки: число падений в логе
+    надёжнее, чем слово «загрузилось» в интерфейсе.
+  </p>
+</section>
+
+<section>
+  <h2>Что осталось за рамками</h2>
+  <ul>
+    <li><strong>Blender не установлен.</strong> Пользователь попросил отложить.
+        Сервер в реестре есть, кнопка «Включить» честно объяснит, что не хватает.</li>
+    <li><strong>Adobe не подключён.</strong> Нужна платная подписка и сами
+        приложения — этого программа купить не может в принципе.</li>
+    <li><strong>Два чужих плагина ralph убраны.</strong> Они лежали в папке
+        уровнем выше проекта и подгружались в каждую сессию. Файлы сложены
+        в <span class="mono">.workbuddy-ai/backups/ralph-plaginy-2026-09-28/</span>;
+        сам пакет и настройки ralph на диске остались нетронутыми.</li>
+    <li><strong>Коммиты не отправлены на GitHub.</strong> Отправка — только
+        с явного разрешения.</li>
+  </ul>
+</section>
+
+<footer class="foot">
+  <p>
+    Документ собран из измерений: <span class="mono">git diff</span> против
+    <span class="mono">origin/main</span>, вывод самопроверок и
+    <span class="mono">opencode mcp list</span>. Дата — 28 сентября 2026,
+    ветка <span class="mono">main</span>, последний коммит
+    <span class="mono">0d851da</span>.
+  </p>
+  <p>
+    Лицензии стороннего кода — в
+    <a href="THIRD-PARTY-NOTICES.md">THIRD-PARTY-NOTICES.md</a>. Описание
+    программы — в <a href="README.md">README.md</a>, устройство базы — в
+    <a href="КАРТА-БАЗЫ.md">КАРТА-БАЗЫ.md</a>.
+  </p>
+</footer>
+
+</div>
+</body>
+</html>
