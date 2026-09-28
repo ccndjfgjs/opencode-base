@@ -301,6 +301,41 @@ def main() -> int:
         (_my_skill / "SKILL.md").unlink()
         _my_skill.rmdir()
 
+        # ---- агенты едут с базой и обновляются
+        echo("\n--- 5в. Агенты едут с базой ---")
+        _ag_dst = target / "tools" / "agents"
+        _n_ag = len(list(_ag_dst.glob("*.md"))) if _ag_dst.is_dir() else 0
+        _n_ag_src = len(list((core.program_root() / "tools" / "agents").glob("*.md")))
+        check(_n_ag == _n_ag_src, f"агентов в базе: {_n_ag} (в конструкторе {_n_ag_src})")
+        _missing_ag = [
+            a for a in ("iskatel", "dokop", "proektirovschik", "programmist",
+                        "proveryalschik", "retsenzent", "ohrannik", "dizayner",
+                        "bazy", "devops", "golosovoy", "provodnik-pk")
+            if not (_ag_dst / f"{a}.md").is_file()
+        ]
+        check(not _missing_ag, f"все 12 агентов на месте (нет: {_missing_ag})")
+        # каждый агент упомянут в инструкциях, иначе нейросеть о нём не узнает
+        _inst_all = "\n".join(
+            (target / t).read_text(encoding="utf-8")
+            for t in core.INSTRUCTION_TARGETS if (target / t).is_file()
+        )
+        _ag_in_instr = [a for a in _missing_ag if a not in _inst_all]
+        _all_ag_names = [p.stem for p in _ag_dst.glob("*.md")]
+        _silent_ag = [a for a in _all_ag_names if a not in _inst_all]
+        check(not _silent_ag, f"каждый агент упомянут в инструкциях (молчат: {_silent_ag})")
+        # правило «увидел возможность — скажи»
+        check("УВИДЕЛ ВОЗМОЖНОСТЬ" in _inst_all.upper(),
+              "в инструкциях есть правило: увидел возможность — скажи и предложи")
+        # инструменты мостов упомянуты
+        for _tool in ("ncp_status", "ncp_search", "ncp_read", "ncp_save",
+                      "ncp_update", "ncp_checkpoint", "ncp_reindex",
+                      "pc_status", "pc_files_read", "pc_apps_list", "pc_screenshot"):
+            if _tool not in _inst_all:
+                check(False, f"инструмент {_tool} не упомянут в инструкциях")
+                break
+        else:
+            check(True, "все 11 инструментов мостов упомянуты в инструкциях")
+
         # области знаний и пояснения к папкам
         for area in core.KNOWLEDGE_AREAS:
             if not (target / "знания" / area).is_dir():

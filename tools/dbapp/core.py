@@ -1637,6 +1637,23 @@ def refresh_skills(base: Path) -> list[str]:
             shutil.copy2(src_index, dst_index)
             messages.append(f"Индекс скиллов обновлён ({count} записей)")
 
+    # Агенты — та же история, что и скиллы: часть программы, а не данные.
+    # Найдено живьём: в уже созданных базах папки tools/agents не было вовсе,
+    # и в папке настроек opencode она была пуста — @iskatel и остальные
+    # одиннадцать просто не существовали.
+    agents_src = program_root() / "tools" / "agents"
+    agents_dst = base / "tools" / "agents"
+    if agents_src.is_dir():
+        if not agents_dst.is_dir():
+            shutil.copytree(agents_src, agents_dst,
+                            ignore=shutil.ignore_patterns("__pycache__"))
+            count = len(list(agents_dst.glob("*.md")))
+            messages.append(f"Агенты скопированы в базу ({count} штук)")
+        else:
+            changed = _sync_dir(agents_src, agents_dst)
+            if changed:
+                messages.append(f"Агенты обновлены: {len(changed)} файл")
+
     # Реестр MCP-серверов — та же история, едет вместе с базой.
     for name in ("mcp-registry.json", "THIRD-PARTY-NOTICES.md"):
         src_file = program_root() / name
