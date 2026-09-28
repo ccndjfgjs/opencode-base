@@ -1,0 +1,136 @@
+{
+  "schema": "opencode-base-mcp-registry-v1",
+  "description": "Реестр MCP-серверов: что есть, что нужно поставить и готов ли сервер на этом компьютере. Программа ничего не устанавливает сама — только честно сообщает состояние. Подробное объяснение в инструкции/МCP-серверы.md.",
+  "checked": "2026-09-28",
+  "ready_here_note": "Поле ready_here — это СНИМОК на дату checked, а не обещание. Программа не должна ему слепо верить: перед использованием проверь требования по полю requires. На другой машине или после установки Blender значение устареет.",
+  "snapshot": "На 28.09.2026 на этой машине: windows-admin — готов, excel — готов, blender — не готов (нет Blender), adobe-creativity — не готов (нет приложений Adobe).",
+  "servers": [
+    {
+      "id": "windows-admin",
+      "name": "Windows-администрирование",
+      "source": "https://github.com/devladpopov/windows-admin-mcp",
+      "install": "npm-глобально, затем npx windows-admin-mcp",
+      "license": "MIT",
+      "tools_count": 42,
+      "why": "Службы Windows, журнал событий, планировщик, процессы и порты, сеть, диагностика, наблюдаемость, безопасность. Модуль диагностики собирает отчёт о службе за один вызов: статус, порт, последние ошибки, зависимости и вывод.",
+      "requires": [
+        {
+          "what": "Node.js 18+",
+          "check": "node",
+          "note": "проверяется командой node --version"
+        },
+        {
+          "what": "PowerShell 5.1+",
+          "check": "powershell",
+          "note": "входит в состав Windows"
+        },
+        {
+          "what": "права администратора",
+          "check": null,
+          "note": "часть инструментов меняет службы и убивает процессы"
+        }
+      ],
+      "safety": "Перед разрушительным действием показывается превью и требуется подтверждение confirm_action с кодом, таймаут 5 минут. Критические процессы (lsass, csrss, svchost, winlogon, smss, services, wininit, TrustedInstaller) заблокированы даже с подтверждением. Массовые операции ограничены 20 за вызов. Ведётся аудит-лог в JSONL.",
+      "ready_here": true,
+      "verdict": "Порог низкий: нужен только Node и права админа, оба обычно есть"
+    },
+    {
+      "id": "excel",
+      "name": "Excel",
+      "source": "https://github.com/sbroenne/mcp-server-excel",
+      "install": "расширение для VS Code (sbroenne.excel-mcp) либо запуск сервера отдельно",
+      "license": "MIT",
+      "tools_count": 31,
+      "operations": 326,
+      "why": "Управление настоящим Excel через его COM-API: Power Query и M-код, Power Pivot и DAX, сводные таблицы, диаграммы, срезы, таблицы, диапазоны, форматирование, VBA-макросы, листы и подключения, Python =PY() в облачном движке Excel.",
+      "why_not_openpyxl": "Сервер работает через настоящий Excel, поэтому сводные таблицы, диаграммы, макросы и модель данных остаются целыми. Решения на openpyxl переписывают файл .xlsx напрямую и при этом молча теряют сводные, диаграммы и макросы, и не умеют Power Query, модель данных и DAX.",
+      "requires": [
+        {
+          "what": "Windows",
+          "check": null,
+          "note": "COM-автоматизация только на Windows"
+        },
+        {
+          "what": "Microsoft Excel 2016+ установлен",
+          "check": "excel.exe",
+          "note": "проверяется наличием excel.exe в реестре Windows"
+        },
+        {
+          "what": "разрешить доступ к объектной модели VBA",
+          "check": null,
+          "note": "одноразовая настройка в Excel: Файл → Параметры → Центр управления безопасностью → Параметры центра управления безопасностью → Параметры макросов → поставить галочку «Доверять доступ к объектной модели проектов VBA»"
+        }
+      ],
+      "ready_here": true,
+      "verdict": "Работает там, где стоит Excel 2016+ и разрешён доступ к VBA"
+    },
+    {
+      "id": "blender",
+      "name": "Blender (3D)",
+      "source": "https://github.com/ahujasid/mcp-for-blender",
+      "install": "uvx mcp-for-blender + аддон в Blender",
+      "license": "MIT",
+      "why": "Сцена, объекты, материалы и цвета, выполнение Python в Blender, экспорт сцены в GLB/FBX, поиск HDRI и текстур на Poly Haven, модели Sketchfab и Poly Pizza, генерация 3D-моделей.",
+      "requires": [
+        {
+          "what": "Blender 3.0+",
+          "check": "blender.exe",
+          "note": "Blender бесплатен, официальный сайт blender.org. Проверяется наличием blender.exe"
+        },
+        {
+          "what": "uv / uvx",
+          "check": "uvx",
+          "note": "проверяется командой uvx --version"
+        },
+        {
+          "what": "аддон MCP for Blender",
+          "check": null,
+          "note": "ставится командой uvx mcp-for-blender install-addon, затем включается в настройках аддонов Blender"
+        }
+      ],
+      "telemetry": "Сбор включён по умолчанию в минимальном анонимном виде: случайный идентификатор установки, идентификатор сессии, имя инструмента, успех, длительность, версии, ОС и время. Подсказки, код, скриншоты и данные сцены по умолчанию НЕ собираются. Полностью отключается через переменную DISABLE_TELEMETRY=true.",
+      "opencode": "В README проекта есть готовый блок конфигурации для OpenCode.",
+      "ready_here": false,
+      "verdict": "Порог средний: нужен Blender, он бесплатный, и uv для запуска"
+    },
+    {
+      "id": "adobe-creativity",
+      "name": "Adobe Creative Cloud",
+      "source": "https://claude.com/connectors/adobe-creativity",
+      "install": "удалённый MCP-сервер Adobe",
+      "license": "сервер Adobe, доступ по подписке Adobe",
+      "why": "Photoshop, Lightroom, Illustrator, Firefly, Premiere, InDesign, Express и Adobe Stock: редактирование изображений словами, генерация и правка картинок, поиск ассетов, монтаж видео.",
+      "requires": [
+        {
+          "what": "приложения Adobe",
+          "check": null,
+          "note": "ни Photoshop, ни Premiere, ни Illustrator. Без них серверу не к чему подключаться"
+        },
+        {
+          "what": "аккаунт Adobe с оплаченной подпиской",
+          "check": null,
+          "note": "Photoshop, Premiere и After Effects — платные продукты"
+        }
+      ],
+      "ready_here": false,
+      "verdict": "Порог высокий: нужна подписка Adobe и сами приложения"
+    }
+  ],
+  "excluded": [
+    {
+      "name": "OpenMicro",
+      "source": "https://github.com/stephenleo/OpenMicro",
+      "reason": "macOS-first, другие платформы автор не тестировал. Управляет Claude Code и Codex CLI, а не OpenCode. У пользователя Windows + OpenCode"
+    },
+    {
+      "name": "3D-Agent с blendermcp.org",
+      "source": "https://blendermcp.org/setup",
+      "reason": "Сторонний сайт-посредник, не официальный проект. Гайда для OpenCode нет, страница предлагает платный продукт. Официальный источник — ahujasid/mcp-for-blender, он уже в реестре"
+    },
+    {
+      "name": "book-to-skill",
+      "source": "https://github.com/virgiliojr94/book-to-skill",
+      "reason": "32,8 тыс. звёзд, MIT, но это Python-конвертер с зависимостями, а не готовый скилл. Просто скопировать нельзя: нужны Python и пакеты из pyproject.toml. Описан в инструкции как инструмент"
+    }
+  ]
+}

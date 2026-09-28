@@ -220,8 +220,10 @@ INSTRUCTION_TARGETS = (
     "КАРТА-БАЗЫ.md",
     "ПРАВИЛА-ИИ.md",
     # Как выбирать скилл и агента и что делать, если результат не устроил.
-    # Файл лежит в инструкции/, оттуда он и едет в каждую новую базу.
+    # Файл лежит в инструкции/, откуда он и едет в каждую новую базу.
     "инструкции/Скиллы-и-агенты.md",
+    # Реестр MCP-серверов: что есть, что нужно поставить, что не работает.
+    "инструкции/МCP-серверы.md",
 )
 
 
@@ -961,6 +963,13 @@ def create_base(plan: CreationPlan, progress=None) -> list[str]:
     for message in configure_bridges(target):
         say(message)
 
+    # Скиллы и индекс: новая база рождается с полным набором, и обновляется
+    # до актуальной версии, если конструктор новее.
+    for message in refresh_skills(target):
+        say(message)
+    for message in refresh_instructions(target):
+        say(message)
+
     # Агенты едут с базой, как и мосты: без них база на другом компьютере
     # осталась бы без @proektirovschik и остальных одиннадцати.
     agents_src = program_root() / "tools" / "agents"
@@ -1560,6 +1569,129 @@ def refresh_bridge_code(base: Path) -> list[str]:
     return messages
 
 
+def _sync_dir(src: Path, dst: Path) -> list[str]:
+    """Догоняет содержимое папки образцом. Ничего не удаляет.
+
+    Возвращает список того, что изменилось. Файлы, которые есть только в
+    базе, остаются на месте: пользователь вправе дописать в скилл своё.
+    """
+    changed: list[str] = []
+    for item in sorted(src.iterdir()):
+        if item.name in ("__pycache__", ".DS_Store") or item.name.startswith("."):
+            continue
+        target = dst / item.name
+        if item.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+            changed.extend(_sync_dir(item, target))
+            continue
+        if target.is_file() and target.read_bytes() == item.read_bytes():
+            continue
+        shutil.copy2(item, target)
+        changed.append(f"{item.parent.name}/{item.name}")
+    return changed
+
+
+def refresh_skills(base: Path) -> list[str]:
+    """Обновляет скиллы в базе из конструктора.
+
+    Скилл — часть программы, а не данные базы: он обязан совпадать с образцом,
+    иначе нейросеть пользуется устаревшей версией. Найдено живьём: в уже
+    созданных базах лежали скиллы старой версии, а skills-index.json не
+    обновлялся вовсе — из-за `if dest.exists(): continue` в _copy_skills.
+
+    Чужие скиллы не трогаем: папку, которой нет в конструкторе, база
+    сохраняет как свою. Файлы внутри знакомого скилла тоже не удаляем.
+    """
+    messages: list[str] = []
+    src_root = program_root() / "skills"
+    dst_root = base / "skills"
+    if not src_root.is_dir():
+        return messages
+    dst_root.mkdir(parents=True, exist_ok=True)
+
+    for item in sorted(src_root.iterdir()):
+        if not item.is_dir() or not (item / SKILL_MARKER).is_file():
+            continue
+        if item.name.startswith("."):
+            continue
+        dst = dst_root / item.name
+        if not dst.exists():
+            shutil.copytree(item, dst, ignore=shutil.ignore_patterns("__pycache__"))
+            messages.append(f"Скилл добавлен: {item.name}")
+            continue
+        changed = _sync_dir(item, dst)
+        if changed:
+            messages.append(f"Скилл обновлён: {item.name} ({len(changed)} файл)")
+
+    # Индекс — часть программы, обновляется всегда: из него нейросеть
+    # узнаёт, когда какой скилл применять.
+    src_index = program_root() / "skills-index.json"
+    dst_index = base / "skills-index.json"
+    if src_index.is_file():
+        try:
+            data = json.loads(src_index.read_text(encoding="utf-8"))
+            count = len(data.get("skills", []))
+        except (OSError, ValueError):
+            count = 0
+        if not dst_index.is_file() or dst_index.read_bytes() != src_index.read_bytes():
+            shutil.copy2(src_index, dst_index)
+            messages.append(f"Индекс скиллов обновлён ({count} записей)")
+
+    # Реестр MCP-серверов — та же история, едет вместе с базой.
+    for name in ("mcp-registry.json", "THIRD-PARTY-NOTICES.md"):
+        src_file = program_root() / name
+        dst_file = base / name
+        if not src_file.is_file():
+            continue
+        if dst_file.is_file() and dst_file.read_bytes() == src_file.read_bytes():
+            continue
+        try:
+            shutil.copy2(src_file, dst_file)
+            messages.append(f"Скопировано: {name}")
+        except OSError as exc:
+            messages.append(f"{name}: не удалось скопировать ({exc})")
+    return messages
+
+
+def refresh_instructions(base: Path) -> list[str]:
+    """Обновляет инструкции в базе из конструктора.
+
+    Инструкции — часть программы, а не данные пользователя: в них живут
+    таблицы «задача → скилл» и «задача → агент», и они устаревают так же,
+    как скиллы. Найдено живьём: в уже созданных базах лежала старая версия
+    инструкции при новых скиллах на диске.
+
+    Файлы, которых нет в конструкторе, не трогаем — вдруг это свои.
+    """
+    messages: list[str] = []
+    src_dir = program_root() / "инструкции"
+    dst_dir = base / "инструкции"
+    if not src_dir.is_dir():
+        return messages
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    for item in sorted(src_dir.iterdir()):
+        if not item.is_file() or item.name.startswith("."):
+            continue
+        target = dst_dir / item.name
+        if not target.exists():
+            try:
+                shutil.copy2(item, target)
+            except OSError as exc:
+                messages.append(f"Инструкция {item.name}: не удалось скопировать ({exc})")
+                continue
+            messages.append(f"Инструкция добавлена: {item.name}")
+            continue
+        if target.read_bytes() == item.read_bytes():
+            continue
+        try:
+            shutil.copy2(item, target)
+        except OSError as exc:
+            messages.append(f"Инструкция {item.name}: не удалось обновить ({exc})")
+            continue
+        messages.append(f"Инструкция обновлена: {item.name}")
+    return messages
+
+
 def attach_base(
     base: Path,
     program: Program,
@@ -1775,6 +1907,10 @@ def attach_base(
                 except OSError as exc:
                     errors.append(f"Не удалось скопировать мост {bridge}: {exc}")
         for message in refresh_bridge_code(base):
+            say(message)
+        for message in refresh_skills(base):
+            say(message)
+        for message in refresh_instructions(base):
             say(message)
         for message in configure_bridges(base):
             say(message)

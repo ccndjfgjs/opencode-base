@@ -223,6 +223,84 @@ def main() -> int:
         _n_agents = len(list((target / "tools" / "agents").glob("*.md")))
         check(_n_agents >= 12, f"агенты едут с базой: {_n_agents} штук")
 
+        # ---- скиллы: полный набор, индекс и реестр MCP едут с базой
+        echo("\n--- 5а. Скиллы, индекс и реестр ---")
+        _n_skills = (
+            len([d for d in (target / "skills").iterdir() if d.is_dir()])
+            if (target / "skills").is_dir() else 0
+        )
+        _src_skills = len(
+            [d for d in (core.program_root() / "skills").iterdir()
+             if d.is_dir() and (d / "SKILL.md").is_file()]
+        )
+        check(_n_skills == _src_skills,
+              f"скиллов в базе столько же, сколько в конструкторе: {_n_skills}")
+        _idx = target / "skills-index.json"
+        check(_idx.is_file(), "skills-index.json едет с базой")
+        if _idx.is_file():
+            try:
+                _data = json.loads(_idx.read_text(encoding="utf-8"))
+                _names = {s["name"] for s in _data.get("skills", [])}
+            except (OSError, ValueError) as _exc:
+                _names = set()
+                check(False, f"skills-index.json не читается: {_exc}")
+            else:
+                check(len(_names) == _n_skills,
+                      f"записей в индексе столько же, сколько папок: {len(_names)}")
+            _folders = {d.name for d in (target / "skills").iterdir() if d.is_dir()}
+            check(_names == _folders,
+                  "индекс и папки совпадают один в один")
+            _missing_desc = [
+                s["name"] for s in _data.get("skills", [])
+                if not s.get("when") or not s.get("trigger") or not s.get("result")
+            ]
+            check(not _missing_desc,
+                  f"у всех скиллов есть when, trigger и result (пропущено: {_missing_desc})")
+        # у каждого скилла ограждения метаданных: без них он молча не работает
+        _bad_fm = [
+            d.name for d in (target / "skills").iterdir()
+            if d.is_dir()
+            and (d / "SKILL.md").is_file()
+            and not (d / "SKILL.md").read_text(encoding="utf-8").startswith("---")
+        ]
+        check(not _bad_fm, f"у всех скиллов есть --- ограждения (сломаны: {_bad_fm})")
+        # реестр MCP-серверов едет с базой
+        _reg = target / "mcp-registry.json"
+        check(_reg.is_file(), "mcp-registry.json едет с базой")
+        if _reg.is_file():
+            try:
+                _rdata = json.loads(_reg.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as _exc:
+                check(False, f"реестр не читается: {_exc}")
+            else:
+                _srv = _rdata.get("servers", [])
+                check(len(_srv) >= 1, f"серверов в реестре: {len(_srv)}")
+                _no_why = [s.get("id") for s in _srv if not s.get("why") or not s.get("verdict")]
+                check(not _no_why, f"у всех серверов есть зачем и вердикт (нет: {_no_why})")
+        # инструкция про серверы подключена
+        check("инструкции/МCP-серверы.md" in core.INSTRUCTION_TARGETS,
+              "инструкция про MCP-серверы подключена к каждой сессии")
+
+        # ---- refresh_skills: обновляет, но чужие не трогает
+        echo("\n--- 5б. Обновление скиллов в уже готовой базе ---")
+        _probe = target / "skills" / "better-ui" / "SKILL.md"
+        _orig = _probe.read_bytes()
+        _probe.write_text("# устаревшая копия\n", encoding="utf-8")
+        _my_skill = target / "skills" / " moy-skill"
+        _my_skill.mkdir(parents=True, exist_ok=True)
+        (_my_skill / "SKILL.md").write_text(
+            "---\nname: moy-skill\ndescription: мой личный скилл\n---\n", encoding="utf-8"
+        )
+        for _msg in core.refresh_skills(target):
+            pass
+        check(_probe.read_bytes() == _orig, "устаревший скилл обновлён из конструктора")
+        check(_my_skill.is_dir(), "свой скилл пользователя не тронут и не удалён")
+        _again = core.refresh_skills(target)
+        check(not any("обновлён" in _m for _m in _again),
+              f"повторный вызов молчит, когда всё свежее: {_again}")
+        (_my_skill / "SKILL.md").unlink()
+        _my_skill.rmdir()
+
         # области знаний и пояснения к папкам
         for area in core.KNOWLEDGE_AREAS:
             if not (target / "знания" / area).is_dir():
@@ -263,9 +341,13 @@ def main() -> int:
             plan2 = core.build_plan(parent, "Проба-копия", source)
             core.create_base(plan2)
             copy_skills = core.count_skills(plan2.target)
-            real_skills = core.count_skills(source)
+            # Скиллы берутся из КОНСТРУКТОРА, а не из образца: образец —
+            # это пользовательская база, её набор может отставать и дополняться
+            # своими скиллами. Проверяем, что новая база получила полный
+            # комплект программы, а не то, что лежит в образце.
+            real_skills = core.count_skills(core.program_root())
             check(copy_skills == real_skills,
-                  f"скиллы перенесены: {copy_skills} из {real_skills}")
+                  f"скиллы перенесены из конструктора: {copy_skills} из {real_skills}")
             same = (plan2.target / "profile.md").read_bytes() == (
                 source / "profile.md"
             ).read_bytes()
@@ -1318,7 +1400,9 @@ def main() -> int:
     check(not latin, f"надписи кнопок по-русски: {latin or 'чисто'}")
 
     # Шаг 4 на вкладке opencode: навыки поштучно, все отмечены.
-    want_skills = core.list_skills(core.program_root())
+    # Список берётся из ВЫБРАННОЙ базы, а не из конструктора: вкладка
+    # показывает то, что реально лежит в подключённой базе.
+    want_skills = core.list_skills(ctab._base())
     check(ctab.caps_skills_list.count() == len(want_skills),
           f"навыков в списке: {ctab.caps_skills_list.count()} из {len(want_skills)}")
     check(len(ctab._chosen_caps_skills()) == len(want_skills),
