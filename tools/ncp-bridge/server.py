@@ -1032,6 +1032,37 @@ def mode_selftest(config: dict) -> int:
         check(data.get("ok") is True and data.get("lines", 0) >= 1,
               "шаг 8: ncp_checkpoint записал точку")
 
+        # ---- 8б. replace не стирает прежнее: найдено 28.09
+        # Режим replace переписывает активную память целиком, и прежний
+        # текст раньше просто исчезал — вместе с ним пропадали бы наработки
+        # прошлых сессий. Теперь он уходит в библиотека/замены/, и
+        # вернуть его можно руками с диска.
+        _active = temp_library / "АКТИВНАЯ-ПАМЯТЬ.md"
+        _repl = temp_library / "замены"
+        answer = call(31, "ncp_checkpoint",
+                      {"text": "Новая точка вместо старой.", "mode": "replace"})
+        data = payload(answer)
+        check(data.get("ok") is True and data.get("mode") == "replace",
+              "шаг 8б: ncp_checkpoint заменил активную память")
+        _after = _active.read_text(encoding="utf-8")
+        check("Новая точка вместо старой." in _after,
+              "шаг 8б: новая точка на месте")
+        check("Самопроверка прошла." not in _after,
+              "шаг 8б: память заменена, а не дописана — replace работает")
+        _kept = sorted(_repl.glob("*.md")) if _repl.is_dir() else []
+        check(len(_kept) >= 1,
+              f"шаг 8б: прежняя версия сохранена в замены ({len(_kept)} шт.)")
+        _restore = _kept[-1].read_text(encoding="utf-8") if _kept else ""
+        check("Самопроверка прошла." in _restore,
+              "шаг 8б: в сохранённой версии есть всё, что было до замены")
+
+        # Повторная замена не затирает первую копию: обе лежат рядом.
+        call(32, "ncp_checkpoint", {"text": "Третья точка.", "mode": "replace"})
+        _kept2 = sorted(_repl.glob("*.md")) if _repl.is_dir() else []
+        check(len(_kept2) > len(_kept),
+              f"шаг 8б: каждая замена хранит свою прежнюю версию "
+              f"({len(_kept)} → {len(_kept2)})")
+
         # ---- 9. ncp_reindex: перестройка индекса
         (temp_library / "index.json").write_text("{}", encoding="utf-8")
         answer = call(12, "ncp_reindex", {})

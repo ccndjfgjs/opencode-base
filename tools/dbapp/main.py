@@ -1115,17 +1115,18 @@ class ImportTab(ScrollPage):
             return
         answer = QMessageBox.question(
             self,
-            "Удалить базу навсегда",
-            f"Удалить базу «{folder.name}» НАВСЕГДА?\n\n"
-            f"Папка будет удалена с диска:\n{folder}\n\n"
-            "Это действие НЕОБРАТИМО. Бэкап не будет создан автоматически.\n\n"
+            "Удалить базу",
+            f"Удалить базу «{folder.name}»?\n\n"
+            f"С диска удалится вся папка:\n{folder}\n\n"
+            "Вместе с ней пропадут её файлы: профиль, факты, проекты, "
+            "библиотека и наработки.\n\n"
             "Продолжить?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
-        ok, message = core.delete_base(folder)
+        ok, message = core.delete_base(folder, confirm=True)
         if ok:
             self.log.add(message, "ok")
         else:

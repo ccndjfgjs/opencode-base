@@ -2185,25 +2185,36 @@ def forget_base(base: Path) -> None:
     _write_bases(entries)
 
 
-def delete_base(base: Path) -> tuple[bool, str]:
-    """Полностью удаляет папку базы с диска и из списка.
+def delete_base(base: Path, confirm: bool = False) -> tuple[bool, str]:
+    """Удаляет папку базы с диска и убирает её из списка.
+
+    Удаляет по-настоящему, как и обещает кнопка: папка исчезает, место
+    освобождается. Создал базу — она не понадобилась, держать её рядом
+    незачем.
+
+    Два предохранителя, оба незаметные для человека:
+    без confirm=True ничего не происходит, а из списка база убирается
+    только после успешного удаления — иначе папка осталась бы на месте,
+    но потеряла бы связь с программой.
 
     Возвращает (успех, сообщение).
     """
     base = Path(base)
     if not base.is_dir():
         return False, "Папка базы не найдена"
+    if not confirm:
+        return False, (
+            "Без подтверждения не удаляю. "
+            "Вызывай delete_base(base, confirm=True)."
+        )
 
-    # Удаляем из списка созданных баз
-    forget_base(base)
-
-    # Удаляем саму папку
     try:
-        import shutil
         shutil.rmtree(base)
-        return True, f"База удалена: {base}"
     except OSError as exc:
         return False, f"Не удалось удалить папку: {exc}"
+
+    forget_base(base)
+    return True, f"База удалена: {base}"
 
 
 def disconnect_base(base: Path, program: str = "opencode") -> tuple[list[str], list[str]]:

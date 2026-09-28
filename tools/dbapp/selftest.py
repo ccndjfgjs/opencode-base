@@ -1789,6 +1789,79 @@ def main() -> int:
     shutil.rmtree(_isolate, ignore_errors=True)
     echo("Временный список баз убран")
 
+    # ---- 14. удаление базы не задевает другие базы: найдено 28.09
+    echo("\n--- 14. Удаление базы ---")
+
+    # Кнопка «Удалить» удаляет по-настоящему — так и обещает, и человек,
+    # которому база не нужна, не будет держать её рядом копией. Проверять
+    # надо другое и более важное: удаление одной базы не должно задевать
+    # остальные, а живая основная база остаётся нетронутой.
+    _zap = Path(tempfile.mkdtemp(prefix="dbapp-udal-"))
+    try:
+        _parent = _zap / "место"
+        _parent.mkdir()
+
+        # Две базы: одну удаляем, вторую она не должна задеть.
+        _mark = "ПРОБА-НЕ-СТЕРЕТЬ"
+        _live = []
+        for _name in ("Проба-удалить", "Проба-оставить"):
+            _plan = core.build_plan(_parent, _name, None)
+            core.create_base(_plan)
+            _b = _plan.target
+            (_b / "профиль.md").write_text(f"{_mark} {_name}", encoding="utf-8")
+            (_b / "библиотека" / "записи").mkdir(parents=True, exist_ok=True)
+            (_b / "библиотека" / "записи" / "проба.md").write_text(
+                f"{_mark} {_name}", encoding="utf-8")
+            (_b / "projects").mkdir(exist_ok=True)
+            (_b / "projects" / "моя-работа.md").write_text(
+                f"{_mark} {_name}", encoding="utf-8")
+            _live.append(_b)
+        _doomed, _spare = _live
+
+        # 1. Без подтверждения ничего не происходит.
+        ok1, msg1 = core.delete_base(_doomed)
+        check(not ok1, "без confirm=True база не удаляется")
+        check(_doomed.is_dir(), "папка осталась на месте после отказа")
+        check((_doomed / "профиль.md").read_text(encoding="utf-8").strip()
+              == f"{_mark} Проба-удалить", "профиль не тронут отказом")
+        check("confirm=True" in msg1,
+              f"отказ объясняет, что нужно: {msg1[:60]}")
+
+        # 2. С подтверждением папка исчезает целиком, без остатков.
+        ok2, msg2 = core.delete_base(_doomed, confirm=True)
+        check(ok2, f"база удалена: {msg2}")
+        check(not _doomed.exists(), "папки базы больше нет на диске")
+        _leftovers = sorted(_parent.glob("Проба-удалить*"))
+        check(not _leftovers,
+              f"рядом не осталось её копий: {[p.name for p in _leftovers]}")
+
+        # 3. Главное: вторая база цела — профиль, библиотека, проекты.
+        check(_spare.is_dir(), "другая база осталась на месте")
+        check((_spare / "профиль.md").read_text(encoding="utf-8").strip()
+              == f"{_mark} Проба-оставить", "её профиль цел")
+        check((_spare / "facts.md").is_file() and
+              (_spare / "projects.md").is_file(),
+              "facts.md и projects.md целы")
+        check((_spare / "библиотека" / "записи" / "проба.md")
+              .read_text(encoding="utf-8").strip()
+              == f"{_mark} Проба-оставить", "запись библиотеки цела")
+        check((_spare / "projects" / "моя-работа.md").is_file(),
+              "работа по проектам цела")
+
+        # 4. Страховка на будущее: удаление остаётся удалением.
+        _code = (core.program_root() / "tools" / "dbapp" / "core.py")
+        _fn = _code.read_text(encoding="utf-8")
+        _fn = _fn.split("def delete_base(", 1)[-1].split("\ndef ", 1)[0]
+        check("rmtree" in _fn,
+              "delete_base по-настоящему стирает папку — как и обещает кнопка")
+        _fn_i = _fn.find("rmtree")
+        _fn_f = _fn.find("forget_base")
+        check(0 <= _fn_i < _fn_f,
+              "из списка база убирается только после успешного удаления")
+    finally:
+        shutil.rmtree(_zap, ignore_errors=True)
+        echo(f"Временная папка убрана: {_zap}")
+
     # ---- итог
     failed = [text for good, text in results if not good]
     echo("\n" + "=" * 62)

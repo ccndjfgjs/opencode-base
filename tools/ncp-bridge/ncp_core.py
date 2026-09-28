@@ -252,6 +252,16 @@ class Library:
     def active_file(self) -> Path:
         return self.root / "АКТИВНАЯ-ПАМЯТЬ.md"
 
+    @property
+    def replaced_dir(self) -> Path:
+        """Прежние версии активной памяти.
+
+        Нужны для режима replace: он переписывает активную память, но
+        прежнее содержимое не выбрасывает, а кладёт сюда. Замена не
+        должна уметь стирать наработки безвозвратно.
+        """
+        return self.root / "замены"
+
     def looks_like_library(self) -> bool:
         return any((self.root / name).exists() for name in LIBRARY_MARKS)
 
@@ -646,6 +656,36 @@ class Library:
             "message": f"Запись обновлена: «{new_title}».",
         }
 
+    def _keep_replaced(self, stamp: str) -> Path | None:
+        """Откладывает текущую активную память в замены/ перед replace.
+
+        Возвращает путь сохранённой копии или None — если копировать
+        нечего либо не получилось. Молчание здесь опаснее отказа, поэтому
+        сам replace всё равно отрабатывает, а замена остаётся на диске.
+        """
+        try:
+            old = self.active_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+        if not old.strip():
+            return None
+        safe = "".join(
+            ch if ch.isalnum() or ch in "-_" else "-" for ch in str(stamp)[:19]
+        )
+        try:
+            self.replaced_dir.mkdir(parents=True, exist_ok=True)
+            target = self.replaced_dir / f"активная-память {safe}.md"
+            counter = 1
+            while target.exists():
+                counter += 1
+                target = (
+                    self.replaced_dir / f"активная-память {safe} ({counter}).md"
+                )
+            target.write_text(old, encoding="utf-8")
+            return target
+        except OSError:
+            return None
+
     def checkpoint(self, text: str, mode: str = "append") -> dict:
         """Состояние работы в активную память: дописать (append) или
         заменить целиком (replace). Попадает в журнал."""
@@ -658,6 +698,8 @@ class Library:
         stamp = local_iso()
         self.active_file.parent.mkdir(parents=True, exist_ok=True)
         if mode == "replace" or not self.active_file.is_file():
+            if mode == "replace" and self.active_file.is_file():
+                self._keep_replaced(stamp)
             self.active_file.write_text(
                 f"# Активная память NCP\n\n- [{stamp}] {text}\n", encoding="utf-8"
             )
