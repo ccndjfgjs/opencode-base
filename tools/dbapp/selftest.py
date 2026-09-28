@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import sys
@@ -1241,10 +1242,15 @@ def main() -> int:
           "после уборки валидно и чисто")
     check('"other"' in pcfg3, "чужое цело после уборки пресетов")
 
-    # Вкладка в окне: пять галочек возможностей + два провайдера.
+    # Вкладка в окне: три галочки расширений + два провайдера.
+    # Мостов среди галочек нет — они едут с базой и подставляются всегда.
     ctab = window.caps_tab
-    check(len(ctab.checks) == 5, f"галочек пять: {sorted(ctab.checks)}")
+    check(len(ctab.checks) == 3, f"галочек три: {sorted(ctab.checks)}")
     check("antiblock" in ctab.checks, "галочка обхода на месте")
+    check("pc" not in ctab.checks and "ncp" not in ctab.checks,
+          "галочек мостов в окне нет — они едут с базой")
+    sel = ctab._selection()
+    check({"pc", "ncp"} <= sel, f"мосты входят в выбор всегда: {sorted(sel)}")
     check(len(ctab.pchecks) == 2, f"провайдеров два: {sorted(ctab.pchecks)}")
     check(all(box.isChecked() for box in ctab.checks.values()), "по умолчанию всё отмечено")
     check(not any(box.isChecked() for box in ctab.pchecks.values()),
@@ -1355,6 +1361,79 @@ def main() -> int:
           "мост второй базы получил путь к библиотеке")
     shutil.rmtree(wtmp, ignore_errors=True)
     echo("Временная папка перевода убрана")
+
+    # Мосты внутри базы: полный круг подключение → отключение → подключение.
+    echo("\n--- 8г. Мосты живут в базе ---")
+    mtmp = Path(tempfile.mkdtemp(prefix="mosty-bazy-"))
+    mbase = mtmp / "MostBase"
+    (mbase / "библиотека").mkdir(parents=True)
+    (mbase / "библиотека" / "index.json").write_text("{}", encoding="utf-8")
+    (mbase / "библиотека" / "NCP.md").write_text("x", encoding="utf-8")
+    for _bridge in core.BASE_BRIDGES:
+        shutil.copytree(
+            core.program_root() / "tools" / _bridge,
+            mbase / "tools" / _bridge,
+            ignore=shutil.ignore_patterns("__pycache__", "config.json"),
+        )
+    mncp = mbase / "tools" / "ncp-bridge" / "config.json"
+    mpc = mbase / "tools" / "pc-bridge" / "config.json"
+    check(not mncp.is_file() and not mpc.is_file(),
+          "сценарий поломки: у мостов нет config.json")
+
+    for _msg in core.configure_bridges(mbase):
+        pass
+    check(mncp.is_file(), "мост NCP: config.json достроен в базу")
+    check(mpc.is_file(), "мост ПК: config.json достроен в базу")
+    _cfg = json.loads(mncp.read_text(encoding="utf-8"))
+    check(_cfg.get("library_path") == (mbase / "библиотека").as_posix(),
+          "мост NCP: путь ведёт в библиотеку этой базы")
+    check("{{LIBRARY}}" not in str(_cfg.get("library_path", "")),
+          "мост NCP: заглушка убрана")
+    _pc = json.loads(mpc.read_text(encoding="utf-8"))
+    check(_pc.get("allowed_dirs") == ["{{BASE}}"],
+          "мост ПК: allowed_dirs с пометкой {{BASE}} (развернёт сам)")
+
+    _tpl = core.bridge_template_config("ncp-bridge")
+    _before = hashlib.sha256(_tpl.read_bytes()).hexdigest() if _tpl.is_file() else ""
+    _lib = (mbase / "библиотека").as_posix()
+    _cfg = json.loads(mncp.read_text(encoding="utf-8"))
+    if _cfg.get("library_path") == _lib:
+        _cfg["library_path"] = core.BRIDGE_LIBRARY_PLACEHOLDER
+        mncp.write_text(json.dumps(_cfg, ensure_ascii=False, indent=2) + "\n",
+                        encoding="utf-8")
+    _off = json.loads(mncp.read_text(encoding="utf-8"))
+    check(_off.get("library_path") == core.BRIDGE_LIBRARY_PLACEHOLDER,
+          "мост NCP отключён: путь снова заглушка")
+    check(mncp.is_file() and mpc.is_file(),
+          "настройки мостов остались в базе (ничего не удалено)")
+    check((mbase / "библиотека" / "index.json").is_file(), "библиотека базы цела")
+    _after = hashlib.sha256(_tpl.read_bytes()).hexdigest() if _tpl.is_file() else ""
+    check(_after == _before, "отключение не тронуло конструктор")
+
+    for _msg in core.configure_bridges(mbase):
+        pass
+    _on = json.loads(mncp.read_text(encoding="utf-8"))
+    check(_on.get("library_path") == _lib,
+          "мост NCP ожил после повторного подключения")
+    _after2 = hashlib.sha256(_tpl.read_bytes()).hexdigest() if _tpl.is_file() else ""
+    check(_after2 == _before, "подключение не тронуло конструктор")
+    check(json.loads(mncp.read_text(encoding="utf-8")).get("library_path") != "",
+          "мост NCP не остался с пустым путём")
+
+    # Код моста в базе может устареть: тогда он не умеет разворачивать
+    # пометки {{BASE}} и запрещает всё. Лечится обновлением из конструктора.
+    _code = mbase / "tools" / "pc-bridge" / "server.py"
+    _good = _code.read_bytes()
+    _code.write_text("# устаревшая копия без разворачивания пометок\n", encoding="utf-8")
+    _msgs = core.refresh_bridge_code(mbase)
+    check(_code.read_bytes() == _good, "код моста ПК обновлён из конструктора")
+    check(any("server.py" in _m for _m in _msgs), f"обновление отмечено в отчёте: {_msgs}")
+    _lib_now = json.loads(mncp.read_text(encoding="utf-8")).get("library_path")
+    check(_lib_now == _lib, "обновление кода не сбросило путь к библиотеке")
+    check(core.refresh_bridge_code(mbase) == [],
+          "повторное обновление молчит, когда код уже свежий")
+    shutil.rmtree(mtmp, ignore_errors=True)
+    echo("Временная база мостов убрана")
 
     # Основная база ищется по маркеру, ничего не меняя.
     main_now = core.current_base("opencode")

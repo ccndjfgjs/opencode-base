@@ -1924,6 +1924,10 @@ class CapsTab(ScrollPage):
     только наше, чужое не трогает.
     """
 
+    #: Подписи двойного назначения: и для галочек (берутся из
+    #: opencode_caps.CAPS_CHOICES), и для строки «уже стоит» (из caps_status,
+    #: где мосты тоже есть). Поэтому подписи мостов остаются, хотя самих
+    #: галочек у них больше нет.
     TITLES = {
         "voice": "Команда /голос — говорить в микрофон",
         "pc": "Мост ПК — файлы, программы, скриншоты (всё через спрос)",
@@ -1950,8 +1954,9 @@ class CapsTab(ScrollPage):
         outer.addWidget(
             ui.label(
                 "Ставит возможности этой базы прямо в opencode — только "
-                "отмеченное. Настоящие настройки лежат в папке opencode, "
-                "перед правкой делается копия.",
+                "отмеченное. Мосты ПК и NCP сюда не входят: они едут с базой "
+                "и включаются кнопкой «Подключить базу». Настоящие настройки "
+                "лежат в папке opencode, перед правкой делается копия.",
                 kind="dim",
                 wrap=True,
             )
@@ -1961,7 +1966,7 @@ class CapsTab(ScrollPage):
         box_what = QGroupBox("1. Что поставить в opencode")
         what_layout = QVBoxLayout(box_what)
         self.checks: dict[str, QCheckBox] = {}
-        for name, _title in opencode_caps.CAPS:
+        for name, _title in opencode_caps.CAPS_CHOICES:
             box = QCheckBox(self.TITLES.get(name, name))
             box.setChecked(True)
             what_layout.addWidget(box)
@@ -2122,7 +2127,11 @@ class CapsTab(ScrollPage):
     # ---- состояние
 
     def _selection(self) -> set[str]:
-        return {name for name, box in self.checks.items() if box.isChecked()}
+        # Мосты ПК и NCP — часть базы, а не расширение: у них нет галочки
+        # и они подставляются всегда. Иначе можно было бы снять память,
+        # не понимая, что происходит.
+        picked = {name for name, box in self.checks.items() if box.isChecked()}
+        return picked | set(opencode_caps.CAPS_ALWAYS)
 
     def _pselection(self) -> set[str]:
         return {name for name, box in self.pchecks.items() if box.isChecked()}

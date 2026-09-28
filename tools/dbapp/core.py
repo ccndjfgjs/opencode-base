@@ -934,11 +934,22 @@ def create_base(plan: CreationPlan, progress=None) -> list[str]:
             try:
                 shutil.copytree(
                     src_bridge, dst_bridge,
-                    ignore=shutil.ignore_patterns("__pycache__", "config.json"),
+                    # config.json едет вместе с мостом: в образце пути —
+                    # пометки {{LIBRARY}} и {{BASE}}, мост разворачивает их
+                    # сам. Раньше файл исключался, и мост оставался без
+                    # настроек, то есть нерабочим (core.configure_bridges).
+                    ignore=shutil.ignore_patterns("__pycache__"),
                 )
                 say(f"Мост {bridge} скопирован в базу")
             except OSError as exc:
                 say(f"Мост {bridge}: не удалось скопировать ({exc})")
+
+    # Мосты должны быть рабочими сразу после создания базы, а не только
+    # после подключения: достраиваем config.json и вписываем путь к библиотеке.
+    for message in refresh_bridge_code(target):
+        say(message)
+    for message in configure_bridges(target):
+        say(message)
 
     memory = target / "библиотека/АКТИВНАЯ-ПАМЯТЬ.md"
     if not memory.exists():
@@ -1363,6 +1374,21 @@ def ncp_bridge_dir(base: Path) -> Path:
     return base / "tools" / "ncp-bridge"
 
 
+#: Мосты, которые живут внутри базы. Образец — в конструкторе, рабочая копия —
+#: в базе. Имя папки совпадает с именем в конструкторе.
+BASE_BRIDGES = ("ncp-bridge", "pc-bridge")
+
+
+def bridge_dir(base: Path, name: str) -> Path:
+    """Папка моста внутри базы."""
+    return base / "tools" / name
+
+
+def bridge_template_config(name: str) -> Path | None:
+    """Образец config.json моста из конструктора."""
+    return program_root() / "tools" / name / "config.json"
+
+
 def _console_python() -> str:
     """Консольный Python для MCP-сервера.
 
@@ -1382,6 +1408,35 @@ def _console_python() -> str:
     return exe
 
 
+def ensure_bridge_config(base: Path, name: str) -> list[str]:
+    """Достраивает config.json моста в базе, если его нет.
+
+    Раньше копирование моста его исключало, и мост оставался без настроек.
+    Здесь недостающее берётся из конструктора: это образец с пометками
+    {{LIBRARY}} и {{BASE}}, которые мост разворачивает сам. Никаких личных
+    путей в конструкторе не появляется.
+    """
+    messages: list[str] = []
+    config_file = bridge_dir(base, name) / "config.json"
+    if config_file.is_file():
+        return messages
+    template = bridge_template_config(name)
+    if not (bridge_dir(base, name) / BRIDGE_SERVER).is_file():
+        messages.append(f"Мост {name}: в базе нет папки моста — config.json некуда класть")
+        return messages
+    if template is None or not template.is_file():
+        messages.append(f"Мост {name}: в конструкторе нет образца config.json")
+        return messages
+    try:
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(template, config_file)
+    except OSError as exc:
+        messages.append(f"Мост {name}: не удалось создать config.json ({exc})")
+        return messages
+    messages.append(f"Мост {name}: config.json достроен в базу из образца")
+    return messages
+
+
 def configure_ncp_bridge(base: Path) -> list[str]:
     """Вписывает путь к библиотеке в config.json моста NCP внутри базы.
 
@@ -1392,6 +1447,9 @@ def configure_ncp_bridge(base: Path) -> list[str]:
     messages: list[str] = []
     config_file = ncp_bridge_dir(base) / "config.json"
     if not config_file.is_file():
+        # Раньше тут был молчаливый return, и поломка оставалась незамеченной:
+        # мост без config.json отвечает «не указан путь к библиотеке».
+        messages.append("Мост NCP: config.json отсутствует — путь вписать некуда")
         return messages
     try:
         config = json.loads(config_file.read_text(encoding="utf-8"))
@@ -1414,6 +1472,52 @@ def configure_ncp_bridge(base: Path) -> list[str]:
         messages.append("Мост NCP: вписан путь к библиотеке")
     except OSError as exc:
         messages.append(f"Мост NCP: не удалось записать путь: {exc}")
+    return messages
+
+
+def configure_bridges(base: Path) -> list[str]:
+    """Готовит мосты внутри базы: достраивает config.json, вписывает путь.
+
+    Точка входа одна и для создания базы, и для подключения — мосты должны
+    быть рабочими в обоих случаях. Мост ПК сам разворачивает {{BASE}} в свою
+    базу, поэтому для него достаточно достроить файл.
+    """
+    messages: list[str] = []
+    for name in BASE_BRIDGES:
+        messages.extend(ensure_bridge_config(base, name))
+    messages.extend(configure_ncp_bridge(base))
+    return messages
+
+
+def refresh_bridge_code(base: Path) -> list[str]:
+    """Обновляет код мостов в базе из конструктора.
+
+    Код моста — часть программы, а не данные базы: он обязан совпадать с
+    образцом, иначе мост не умеет то, чему научился. Найдено живьём: в
+    существующих базах лежал старый мост ПК без разворачивания пометки
+    {{BASE}}, и он не мог открыть ничего, кроме себя.
+
+    config.json НЕ трогаем: там путь к библиотеке этой базы, он живой.
+    """
+    messages: list[str] = []
+    for name in BASE_BRIDGES:
+        src = program_root() / "tools" / name
+        dst = base / "tools" / name
+        if not src.is_dir() or not dst.is_dir():
+            continue
+        for item in sorted(src.iterdir()):
+            if item.name in ("config.json", "__pycache__") or item.is_dir():
+                continue
+            target = dst / item.name
+            was_there = target.is_file()
+            try:
+                if was_there and target.read_bytes() == item.read_bytes():
+                    continue
+                shutil.copy2(item, target)
+            except OSError as exc:
+                messages.append(f"Мост {name}: не удалось обновить {item.name} ({exc})")
+                continue
+            messages.append(f"Мост {name}: {'обновлён' if was_there else 'добавлен'} {item.name}")
     return messages
 
 
@@ -1623,12 +1727,17 @@ def attach_base(
                 try:
                     shutil.copytree(
                         src_bridge, dst_bridge,
-                        ignore=shutil.ignore_patterns("__pycache__", "config.json"),
+                        # config.json едет вместе с мостом: в образце пути —
+                        # пометки {{LIBRARY}} и {{BASE}}, мост разворачивает их
+                        # сам (core.configure_bridges вписывает library_path).
+                        ignore=shutil.ignore_patterns("__pycache__"),
                     )
                     say(f"Мост {bridge} скопирован в базу")
                 except OSError as exc:
                     errors.append(f"Не удалось скопировать мост {bridge}: {exc}")
-        for message in configure_ncp_bridge(base):
+        for message in refresh_bridge_code(base):
+            say(message)
+        for message in configure_bridges(base):
             say(message)
         cfg_target = dest / INSTRUCTIONS_FILE
         if cfg_target.is_file():
@@ -2066,17 +2175,24 @@ def disconnect_base(base: Path, program: str = "opencode") -> tuple[list[str], l
     except Exception as exc:
         errors.append(f"Ошибка при удалении скиллов: {exc}")
 
-    # 4. Чистим конфиг NCP-моста, если он ведёт на эту базу
+    # 4. Сбрасываем мосты ВНУТРИ базы: отключили базу — память недоступна.
+    #    Раньше здесь правился config.json в конструкторе, а он и не был
+    #    тем, кем казался: живой мост лежит в базе, и его настройки тоже там.
+    #    Конструктор не трогаем совсем — это шаблон, он должен остаться чистым.
     try:
-        # HERE не доступен здесь — используем program_root() конструктора
-        ncp_config = program_root() / "tools" / "ncp-bridge" / "config.json"
+        ncp_config = ncp_bridge_dir(base) / "config.json"
         if ncp_config.is_file():
             data = json.loads(ncp_config.read_text(encoding="utf-8"))
             lib_path = str(data.get("library_path", "")).strip()
             if lib_path and Path(lib_path).resolve() == (base / "библиотека").resolve():
-                data["library_path"] = "{{LIBRARY}}"
-                ncp_config.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-                messages.append("NCP-мост: конфиг сброшен (library_path = placeholder)")
+                data["library_path"] = BRIDGE_LIBRARY_PLACEHOLDER
+                ncp_config.write_text(
+                    json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                messages.append("NCP-мост: конфиг в базе сброшен (путь к библиотеке убран)")
+        else:
+            messages.append("NCP-мост: в базе нет config.json — сбрасывать нечего")
     except Exception as exc:
         errors.append(f"Ошибка при сбросе NCP-моста: {exc}")
 
