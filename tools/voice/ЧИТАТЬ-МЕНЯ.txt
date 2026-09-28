@@ -1,0 +1,25 @@
+ГОЛОС ДЛЯ OPENCODE (faster-whisper, всё локально)
+================================================
+Что здесь:
+  voice_opencode.py   — слушает микрофон, текст кладёт в voice_outbox.txt,
+                        ответы озвучивает ключом --speak
+  fetch_model.py      — докачка моделей (официальный источник,
+                        запасное зеркало; с продолжением при обрыве)
+  model_check.py      — быстрая проверка: модель грузится, речь разбирается
+  models/             — скачанные модели. Папки может не быть: она не
+                       публикуется с базой, и модель качается сама при
+                       первом запуске голоса (или заранее — fetch_model.py)
+  voice.md            — команда /голос для opencode (ставится окном в command/)
+  requirements-voice.txt — что доставить: pip install -r requirements-voice.txt
+
+Быстрые команды (из этой папки):
+  python voice_opencode.py --list-mics
+  python voice_opencode.py --once --seconds 5 --model tiny
+  python voice_opencode.py --file запись.mp3 --model tiny
+  python voice_opencode.py --speak "Привет"
+  python fetch_model.py --model base
+
+Про модели: какая зачем — в файле МОДЕЛИ.txt.
+
+Правило: интернет нужен только для первой загрузки модели.
+Дальше всё работает без сети. Никаких ключей и облаков.

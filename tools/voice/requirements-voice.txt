@@ -1,0 +1,11 @@
+# Голосовой ввод для opencode: офлайн (faster-whisper) + облако (--online)
+# Установка: python -m pip install -r requirements-voice.txt
+# Модели качаются отдельно: python fetch_model.py --model tiny|base|small
+# (tiny ~75 МБ, base ~150 МБ, small ~500 МБ). Папки models может не быть —
+# модель докачивается сама при первом запуске голоса.
+faster-whisper>=1.0
+sounddevice>=0.5
+soundfile>=0.12
+numpy>=1.26
+pyttsx3>=2.9
+SpeechRecognition>=3.10

@@ -1,0 +1,11 @@
+﻿# РЎРїРёСЃРѕРє РїРѕРґРїРёСЃРѕРє РґР»СЏ Р°РІС‚Рѕ-РёРјРїРѕСЂС‚Р° (--auto)
+# РћРґРЅР° URL РЅР° СЃС‚СЂРѕРєСѓ. РЎС‚СЂРѕРєРё, РЅР°С‡РёРЅР°СЋС‰РёРµСЃСЏ СЃ # вЂ” РєРѕРјРјРµРЅС‚Р°СЂРёРё.
+
+# РџСЂРёРјРµСЂС‹ Р±РµСЃРїР»Р°С‚РЅС‹С… VLESS РїРѕРґРїРёСЃРѕРє (РјРѕРіСѓС‚ Р±С‹С‚СЊ СѓСЃС‚Р°СЂРµРІС€РёРјРё):
+https://raw.githubusercontent.com/barry-far/V2ray-Config/master/Sub4.txt
+https://raw.githubusercontent.com/Epodonios/v2ray-configs/master/Sub4.txt
+https://raw.githubusercontent.com/barry-far/V2ray-Config/master/Sub5.txt
+https://raw.githubusercontent.com/Epodonios/v2ray-configs/master/Sub5.txt
+
+# Р”РѕР±Р°РІСЊС‚Рµ СЃСЋРґР° СЃРІРѕРё СЂР°Р±РѕС‡РёРµ РїРѕРґРїРёСЃРєРё (VLESS, vmess, trojan):
+# https://example.com/your-subscription.txt

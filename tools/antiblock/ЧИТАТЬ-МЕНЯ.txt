@@ -1,0 +1,59 @@
+ОБХОД БЛОКИРОВОК — ЧИТАЙ МЕНЯ
+==============================
+
+Простыми словами: здесь лежит набор, чтобы OpenCode ходил в интернет,
+когда провайдер режет прямые соединения. Ничего глобального в Windows
+не меняется — всё работает только пока запущен фасад.
+
+СОСТАВ ПАПКИ
+------------
+- http_facade.py — переводчик: слушает 127.0.0.1:17890, дальше идёт
+  через живые SOCKS5. SOCKS5 напрямую OpenCode не понимает, поэтому
+  без переводчика бесплатные списки не заработают. Умеет выбирать
+  по скорости: свой V2Ray-канал (127.0.0.1:10900) пробуется первым,
+  публичные прокси — запасные; задержка каждого узла замеряется
+  и быстрые предпочитаются.
+- xray_runner.py — свой Xray: качает xray.exe при первом запуске
+  с официального GitHub, берёт быстрейший живой VLESS-узел
+  из subscriptions.txt и поднимает SOCKS5 на 127.0.0.1:10900.
+  Сторонние программы (INCY, Amnezia и т.д.) не нужны.
+- dns_resolver.py — защищённый DNS (DoH): когда ни V2Ray, ни прокси
+  не сработали, фасад резолвит домен через защищённый DNS
+  (Google, Cloudflare, Quad9, AdGuard) и идёт к сайту напрямую по
+  настоящему IP. Так обходится блокировка на уровне DNS. Список
+  серверов — в DEFAULT_DNS_SERVERS в начале файла.
+- start_opencode_proxy.cmd — двойной щелчок запускает переводчика
+  и открывает OpenCode уже через него. После закрытия OpenCode
+  переводчик гаснет сам.
+- public_socks5.txt — стартовый список узлов (30 шт., проверены ранее).
+- public_socks5.local.txt — живой список (появляется после обновления).
+- refresh_public_nodes.py — обновление: качает 2 списка с GitHub,
+  проверяет каждый узел и оставляет живые. Запуск: python refresh_public_nodes.py
+- subscriptions.txt — 4 бесплатные VLESS-подписки (только ссылки).
+  Вставить ссылкой в приложение Happ (Android/iPhone/Windows) или
+  взять свежий ключ у ботов («Дядя Ваня ВПН», «Дед ВПН»).
+- command/antiblock.md — команда /обход внутри OpenCode.
+
+ТРИ СПОСОБА (от простого к сложному)
+------------------------------------
+1. Только для OpenCode: запустить start_opencode_proxy.cmd. Остальные
+   программы идут как раньше, напрямую.
+2. Для телефона/всего ПК: Happ + ссылка из subscriptions.txt.
+3. Без ключей вообще: Amnezia Free (официальный GitHub AmneziaVPN).
+
+ВАЖНО
+-----
+- Публичные узлы — чужие. Пароли, карты, документы через них не гонять.
+- Проверка узлов идёт по HTTPS с проверкой сертификата.
+- Если перестало работать: обновить список, перезапустить через .cmd.
+- Порт 17890 должен быть свободен. NO_PROXY всегда включает
+  localhost и 127.0.0.1 — иначе OpenCode закольцуется.
+
+Источники списков:
+https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt
+https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt
+Подписки VLESS:
+https://raw.githubusercontent.com/barry-far/V2ray-Config/master/Sub4.txt
+https://raw.githubusercontent.com/barry-far/V2ray-Config/master/Sub5.txt
+https://raw.githubusercontent.com/Epodonios/v2ray-configs/master/Sub4.txt
+https://raw.githubusercontent.com/Epodonios/v2ray-configs/master/Sub5.txt

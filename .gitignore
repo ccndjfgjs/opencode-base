@@ -8,6 +8,42 @@ selftest-report.txt
 # Ярлыки
 *.lnk
 
+# Node
+node_modules/
+
 # Служебное
 Thumbs.db
 Desktop.ini
+
+# Отладочные скрипты, которые снимают после проверки правки
+_trash-*/
+
+# Отметка «окно первого запуска уже показывали» — состояние этой машины
+.first-run-done
+
+# Модель голоса качается скриптом tools\voice\fetch_model.py — 73 МБ
+tools/voice/models/
+
+# Скриншоты, которые мост pc-bridge делает для проверки ввода с клавиатуры
+tools/pc-bridge/shots/
+
+# Живой список прокси — обновляется кнопкой в окне, отдельно от эталона
+tools/antiblock/public_socks5.local.txt
+
+# Личные данные пользователя — не публикуются
+profile.md
+facts.md
+projects.md
+созданные-базы.json
+debug.log
+themes/
+sessions/
+projects/
+личное/
+журнал-решений/
+память/
+библиотека/записи/личное/
+библиотека/журнал/
+библиотека/АКТИВНАЯ-ПАМЯТЬ.md
+библиотека/КАТАЛОГ.md
+библиотека/index.json
