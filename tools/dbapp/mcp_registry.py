@@ -104,6 +104,11 @@ class Server:
         сервер. А вот помеченные как blocks — мешают: без них сервер
         бесполезен, и честнее сказать об этом, чем вписать его зря.
         """
+        if self.manual_setup:
+            # Ручные требования здесь не блокируют: человек их уже
+            # выполнил, если вставил конфигурацию. Блокировали бы - он
+            # не смог бы дойти до окна, где эту конфигурацию вставлять.
+            return not self.missing and self.has_connection
         return not self.missing and not self.blocking_manual and self.has_connection
 
     @property
@@ -118,6 +123,47 @@ class Server:
     @property
     def source(self) -> str:
         return str(self.raw.get("source") or "")
+
+    # ------------------------------------------------ сервер с ручной настройкой
+
+    @property
+    def manual_setup(self) -> bool:
+        """Настраивается ли сервер руками, изнутри своей программы.
+
+        Такой сервер нельзя включить отсюда: его сначала надо включить
+        там. Программа говорит об этом прямо и просит конфигурацию.
+        """
+        conn = self.raw.get("connection")
+        return isinstance(conn, dict) and bool(conn.get("manual_config"))
+
+    @property
+    def ready_here(self) -> bool:
+        """Честный ответ: можно ли этим сервером пользоваться на этой машине."""
+        return bool(self.raw.get("ready_here"))
+
+    @property
+    def setup_steps(self) -> list[str]:
+        """Пошаговая инструкция, если она есть в реестре."""
+        steps = self.raw.get("setup_steps")
+        if not isinstance(steps, list):
+            return []
+        return [str(s).strip() for s in steps if str(s).strip()]
+
+    @property
+    def auth(self) -> str:
+        return str(self.raw.get("auth") or "")
+
+    @property
+    def only_while_running(self) -> str:
+        return str(self.raw.get("only_while_running") or "")
+
+    @property
+    def why(self) -> str:
+        return str(self.raw.get("why") or "")
+
+    @property
+    def verdict(self) -> str:
+        return str(self.raw.get("verdict") or "")
 
 
 # ------------------------------------------------------------------ чтение
@@ -260,7 +306,7 @@ def load_servers(base: Path) -> list[Server]:
             name=str(spec.get("name") or ""),
             raw=spec,
             has_connection=isinstance(conn, dict) and bool(
-                conn.get("command") or conn.get("url")
+                conn.get("command") or conn.get("url") or conn.get("manual_config")
             ),
         )
         for item in spec.get("requires") or []:
@@ -273,7 +319,101 @@ def load_servers(base: Path) -> list[Server]:
 # ---------------------------------------------------------- блок настроек
 
 
-def build_block(server: Server) -> str:
+def manual_config_path(dest: Path, server_id: str) -> Path:
+    """Куда кладётся конфигурация, вставленная человеком.
+
+    Рядом с opencode.jsonc, то есть в папке настроек пользователя, а не
+    в репозитории: токен студии не должен уезжать на GitHub.
+    """
+    return Path(dest) / f"mcp-{server_id}.json"
+
+
+def load_manual_config(dest: Path, server_id: str) -> dict | None:
+    """Читает вставленную конфигурацию. None, если её нет или она битая."""
+    path = manual_config_path(dest, server_id)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    url = str(data.get("url") or "").strip()
+    headers = data.get("headers")
+    if not url or not isinstance(headers, dict):
+        return None
+    return {"url": url, "headers": {str(k): str(v) for k, v in headers.items()}}
+
+
+def save_manual_config(dest: Path, server_id: str, text: str) -> tuple[bool, str]:
+    """Разбирает вставленную конфигурацию и сохраняет адрес с заголовком.
+
+    Текст берётся как есть из буфера обмена: человек копирует его в
+    студии целиком, а разбирать приходится то, что именно скопировали.
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return False, "Пусто: скопируй конфигурацию в студии и вставь сюда."
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return False, (
+            "Это не конфигурация в формате JSON. Скопируй её целиком "
+            "кнопкой Copy Config в студии."
+        )
+
+    found_url = ""
+    found_headers: dict = {}
+
+    def walk(node: object, depth: int = 0) -> None:
+        nonlocal found_url, found_headers
+        if depth > 6 or not isinstance(node, dict):
+            return
+        url = node.get("url")
+        if isinstance(url, str) and url.strip() and not found_url:
+            found_url = url.strip()
+            headers = node.get("headers")
+            if isinstance(headers, dict) and headers:
+                found_headers = {
+                    str(k): str(v) for k, v in headers.items() if v
+                }
+        for value in node.values():
+            walk(value, depth + 1)
+
+    walk(data)
+    if not found_url:
+        return False, (
+            "В конфигурации не нашёлся адрес сервера. Обычно он "
+            "выглядит как http://localhost:63342/api/mcp."
+        )
+    path = manual_config_path(dest, server_id)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {"url": found_url, "headers": found_headers},
+                ensure_ascii=False, indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        return False, f"Не удалось сохранить конфигурацию: {exc}"
+    tail = f", заголовков: {len(found_headers)}" if found_headers else ""
+    return True, f"Конфигурация сохранена: {found_url}{tail}"
+
+
+def drop_manual_config(dest: Path, server_id: str) -> bool:
+    """Убирает сохранённую конфигурацию. True, если файла уже не было."""
+    path = manual_config_path(dest, server_id)
+    if not path.is_file():
+        return True
+    try:
+        path.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def build_block(server: Server, manual: dict | None = None) -> str:
     """Кусок JSONC для секции mcp в opencode.jsonc. Пусто, если нечего.
 
     Формат ровно как у ncp_server_block: insert_entry ждёт готовую
@@ -285,8 +425,14 @@ def build_block(server: Server) -> str:
     if not isinstance(conn, dict):
         return ""
     url = str(conn.get("url") or "").strip()
+    headers = {}
+    if isinstance(manual, dict):
+        url = str(manual.get("url") or url).strip()
+        headers = manual.get("headers") or {}
     if url:
         body = {"type": "remote", "url": url, "enabled": True}
+        if headers:
+            body["headers"] = headers
     else:
         command = [str(part) for part in (conn.get("command") or [])]
         if not command:
@@ -403,16 +549,32 @@ def enable(dest: Path, server: Server, progress=None) -> tuple[list[str], list[s
     messages: list[str] = []
     errors: list[str] = []
     if not server.has_connection:
-        return ([], ["В реестре нет команды подключения — включать нечем."])
+        return ([], ["В реестре нет команды подключения - включать нечем."])
     missing = server.missing
     if missing:
         return ([], [f"Не хватает: {', '.join(r.what for r in missing)}"])
-    if server.blocking_manual:
+
+    # Сервер, который настраивается руками: конфигурация лежит
+    # рядом с opencode.jsonc. Если её нет - писать нечего: блок
+    # без токена заведомо не подключится, и opencode покажет ошибку.
+    _conn = server.raw.get("connection") or {}
+    is_manual = bool(_conn.get("manual_config"))
+    manual = None
+    if is_manual:
+        manual = load_manual_config(dest, server.id)
+        if not manual:
+            return ([], [
+                "Для этого сервера нужна конфигурация из его программы. "
+                "Включи сервер у себя, скопируй конфигурацию кнопкой "
+                "Copy Config и вставь её здесь через «Включить»."
+            ])
+    elif server.blocking_manual:
         return ([], [
             "Сервер без этого работать не будет: "
             + ", ".join(r.what for r in server.blocking_manual)
         ])
-    block = build_block(server)
+
+    block = build_block(server, manual=manual)
     if not block:
         return ([], ["Команда подключения пустая — проверь реестр."])
 
@@ -474,6 +636,16 @@ def disable(dest: Path, server: Server) -> tuple[list[str], list[str]]:
         return ([], [f"Не записались настройки: {exc}"])
     messages.append(f"Сервер «{server.name}» убран из настроек")
     messages.append(f"Копия настроек: {backup}")
+    # Токен - тоже часть включения. Оставлять его на диске после
+    # «Выключить» значило бы соврать человеку про то, что он отключил.
+    if manual_config_path(dest, server.id).is_file():
+        if drop_manual_config(dest, server.id):
+            messages.append("Сохранённая конфигурация с токеном удалена.")
+        else:
+            errors.append(
+                "Файл с токеном не удалился: "
+                f"{manual_config_path(dest, server.id)}"
+            )
     return messages, errors
 
 

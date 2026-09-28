@@ -19,10 +19,12 @@ else:  # запуск как модуль
     from . import core, ui, mcp_registry, opencode_caps
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QFont, QFontMetrics
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -1943,6 +1945,129 @@ class BridgeTab(ScrollPage):
         box.exec()
 
 
+class ManualConfigDialog(QDialog):
+    """Окно вставки конфигурации, которую выдаёт чужая программа.
+
+    Нужно для серверов вроде Android Studio: программа не может
+    включить сервер внутри студии, это действие в её окне. Что она
+    может - принять конфигурацию, которую человек скопировал, и
+    сохранить её рядом с настройками opencode.
+
+    Смысл окна в том, что человек видит текст, который попадёт в
+    настройки. Ничего не подставляется молча.
+    """
+
+    def __init__(self, server: mcp_registry.Server, parent=None) -> None:
+        super().__init__(parent)
+        self.server = server
+        self.saved_note = ""
+        self.setWindowTitle(f"Включить {server.name}")
+        self.setMinimumWidth(620)
+
+        box = QVBoxLayout(self)
+        box.setSpacing(8)
+
+        intro = ui.label(
+            f"{server.name} включается у себя, внутри своей программы. "
+            "Отсюда включить его нельзя — это действие в её окне. "
+            "Но конфигурацию принять можно: скопируй её там и вставь сюда.",
+            wrap=True,
+        )
+        box.addWidget(intro)
+
+        steps = server.setup_steps
+        if steps:
+            box.addWidget(ui.label("Как настроить:", kind="title"))
+            for index, text in enumerate(steps, start=1):
+                box.addWidget(ui.label(f"  {index}. {text}", wrap=True))
+
+        box.addSpacing(4)
+        box.addWidget(
+            ui.label(
+                "Вставь сюда конфигурацию целиком — вместе с адресом и токеном:",
+                wrap=True,
+            )
+        )
+
+        self.text = QPlainTextEdit()
+        self.text.setPlaceholderText(
+            '{"mcpServers": {"' + self.server.id + '": {"url": "http://localhost:.../api/mcp",\n'
+            '  "headers": {"Authorization": "Bearer ..."}}}}'
+        )
+        self.text.setMinimumHeight(110)
+        # Моноширинный шрифт, как у окошка лога: конфигурация - это JSON,
+        # и в пропорциональном шрифте её структура плохо читается.
+        _font = QFont("Consolas")
+        _font.setStyleHint(QFont.StyleHint.Monospace)
+        self.text.setFont(_font)
+        box.addWidget(self.text)
+
+        # Подсказка — про то, что происходит с полем, поэтому стоит под
+        # ним. Наверху она читалась как ещё один абзац инструкции.
+        self.status = ui.label("", wrap=True)
+        self.status.setObjectName("hint")
+        box.addWidget(self.status)
+
+        row = QHBoxLayout()
+        self.btn_paste = QPushButton("Вставить из буфера обмена")
+        self.btn_paste.clicked.connect(self._paste)
+        self.btn_clear = QPushButton("Очистить")
+        self.btn_clear.clicked.connect(self.text.clear)
+        self.btn_cancel = QPushButton("Отмена")
+        self.btn_cancel.clicked.connect(self.reject)
+        self.btn_ok = QPushButton("Записать")
+        self.btn_ok.setObjectName("primary")
+        self.btn_ok.setDefault(True)
+        self.btn_ok.clicked.connect(self.accept)
+        row.addWidget(self.btn_paste)
+        row.addWidget(self.btn_clear)
+        row.addStretch(1)
+        row.addWidget(self.btn_cancel)
+        row.addWidget(self.btn_ok)
+        box.addLayout(row)
+
+        # Сразу подсказываем про буфер, если там есть что вставить.
+        clipboard = QApplication.clipboard()
+        if clipboard is not None and self._looks_like_config(clipboard.text()):
+            self.status.setText(
+                "В буфере обмена похоже на конфигурацию этого сервера. "
+                "Нажми «Вставить из буфера обмена»."
+            )
+        else:
+            self.status.setText(
+                "Поле пустое — так честнее, чем подставлять наугад. "
+                "Нажми «Вставить из буфера обмена», если конфигурация "
+                "уже скопирована."
+            )
+
+    def _looks_like_config(self, text: str) -> bool:
+        """Похож ли текст на конфигурацию этого сервера.
+
+        Грубая, но достаточная проверка: без неё кнопка предлагала бы
+        вставить что угодно, а с ней - хотя бы не пустоту.
+        """
+        raw = (text or "").strip()
+        if not raw or len(raw) > 20000:
+            return False
+        return "mcp" in raw.lower() and ("url" in raw.lower()
+                                        or "http" in raw.lower())
+
+    def _paste(self) -> None:
+        clipboard = QApplication.clipboard()
+        text = clipboard.text() if clipboard is not None else ""
+        if not text.strip():
+            self.status.setText("В буфере обмена пусто. Скопируй конфигурацию.")
+            return
+        self.text.setPlainText(text)
+        self.status.setText(
+            "Вставлено. Посмотри глазами, что это конфигурация, и нажми "
+            "«Записать»."
+        )
+
+    def config_text(self) -> str:
+        return self.text.toPlainText()
+
+
 class CapsTab(ScrollPage):
     """Возможности базы для opencode — установка по выбору.
 
@@ -2133,8 +2258,12 @@ class CapsTab(ScrollPage):
 
         self.reg_servers: list[mcp_registry.Server] = []
         self.reg_table = QTableWidget(0, 4)
+        # Заголовок «Инструментов» не помещался в свою колонку: та
+        # получает остаток места, а не своё, и на снимке обрезалась
+        # с двух сторон — «-трумен…». Короче и понятнее: сколько
+        # инструментов даёт сервер.
         self.reg_table.setHorizontalHeaderLabels(
-            ["Сервер", "Состояние", "Лицензия", "Инструментов"]
+            ["Сервер", "Состояние", "Лицензия", "Инструм."]
         )
         self.reg_table.verticalHeader().setVisible(False)
         self.reg_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -2142,7 +2271,24 @@ class CapsTab(ScrollPage):
         self.reg_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.reg_table.setMinimumHeight(150)
         self.reg_table.setMaximumHeight(190)
-        self.reg_table.horizontalHeader().setStretchLastSection(True)
+        # Ширины заданы явно, потому что Qt по умолчанию распределяет
+        # место неудачно: снимок показал обрезанные до «Windo…» имена и
+        # обрезанное до «нужно: …» состояние. Имя должно помещаться
+        # целиком - по нему человека ищет в списке, - а лишнее место
+        # отдаётся состоянию, потому что оно длиннее всех.
+        header = self.reg_table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(header.ResizeMode.Fixed)
+        # Ширины считаются по содержимому при заполнении таблицы,
+        # см. _reg_fit_columns. Здесь только минимумы: пока таблица
+        # пустая, измерять нечего.
+        for col, minimum in ((0, 150), (1, 200), (2, 110), (3, 90)):
+            self.reg_table.setColumnWidth(col, minimum)
+        # Горизонтальная прокрутка в этом блоке не нужна: таблица
+        # узкая, и полоса под ней только мешает.
+        self.reg_table.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         mcp_layout.addWidget(self.reg_table)
 
         self.reg_detail = QPlainTextEdit()
@@ -2238,26 +2384,125 @@ class CapsTab(ScrollPage):
                     id=str(spec.get("id") or ""),
                     name=str(spec.get("name") or ""),
                     raw=spec,
-                    has_connection=isinstance(conn, dict)
-                    and bool(conn.get("command") or conn.get("url")),
+                    has_connection=isinstance(conn, dict) and bool(
+                        conn.get("command") or conn.get("url")
+                        or conn.get("manual_config")
+                    ),
                 )
             )
         self._reg_paint()
 
+    def _reg_config_saved(self, server: mcp_registry.Server) -> bool:
+        """Вставлена ли конфигурация для сервера, который настраивают руками.
+
+        Из трёх ручных требований это единственное, которое программа
+        может проверить сама: конфигурацию вставляет она же и хранит
+        рядом с настройками. Остальные два - включён ли сервер в студии
+        и запущена ли студия - проверяются только человеком.
+        """
+        if not server.manual_setup:
+            return True
+        dest = self._reg_dest()
+        if dest is None:
+            return False
+        return mcp_registry.load_manual_config(dest, server.id) is not None
+
     def _reg_state_text(self, server: mcp_registry.Server) -> str:
+        """Состояние для колонки. Короткое - иначе таблица разъезжается.
+
+        Полный список требований человек видит в подробностях под
+        таблицей. Здесь достаточно понять, что мешает, и то, что
+        остальное не упёрлось в ту же строку понасметку.
+        """
         if server.installed:
             return "включён"
         if not server.requirements:
             return "не проверено"
         if not server.has_connection:
             return "нет команды"
-        if server.blocking_manual:
-            names = ", ".join(r.what for r in server.blocking_manual)
-            return f"нужно: {names}"
         if server.missing:
-            names = ", ".join(r.what for r in server.missing)
-            return f"не хватает: {names}"
+            first = server.missing[0]
+            rest = len(server.missing) - 1
+            tail = f" и ещё {rest}" if rest > 0 else ""
+            return f"не хватает: {first.what}{tail}"
+        if server.manual_setup:
+            # Конфигурацию программа в состоянии проверить может, иначе
+            # строка врала бы "нужно" даже после того, как человек всё
+            # вставил. А вот то, работает ли студия, - не может.
+            if not self._reg_config_saved(server):
+                return "нужно: конфигурация из студии"
+            return "можно включить, толк не гарантирован"
+        first = server.blocking_manual
+        if first:
+            rest = len(first) - 1
+            tail = f" и ещё {rest}" if rest > 0 else ""
+            return f"нужно: {first[0].what}{tail}"
         return "можно включить"
+
+    def _reg_fit_columns(self) -> None:
+        """Раздаёт ширины колонок по тому, что в них реально лежит.
+
+        Зачем. Трижды ширины двигали вручную, и каждый раз находился
+        либо обрезанный текст, либо лишняя полоса прокрутки: сумма
+        ширин упирается в ширину таблицы, а строки в реестре меняются.
+        Поэтому измеряем то, что написано, и выдаём каждой колонке
+        ровно столько, сколько нужно, а остаток отдаём последней.
+
+        Текст известен на этот момент - ячейки уже заполнены, поэтому
+        измерять можно точно, а не гадать по длине строки.
+        """
+        table = self.reg_table
+        if table.rowCount() <= 0:
+            return
+        # Последняя колонка - число инструментов. Её текст всегда
+        # короткий, поэтому меряем её последней и с тем же запасом:
+        # иначе при нехватке места Qt отдаёт ей остаток, и она
+        # схлопывается в ноль - колонка пропадает совсем.
+        raw: list[int] = []
+        for col in range(table.columnCount()):
+            need = 0
+            for row in range(table.rowCount()):
+                item = table.item(row, col)
+                if item is None:
+                    continue
+                need = max(need, QFontMetrics(item.font())
+                           .horizontalAdvance(item.text()))
+            header_item = table.horizontalHeaderItem(col)
+            if header_item is not None:
+                need = max(need, QFontMetrics(header_item.font())
+                           .horizontalAdvance(header_item.text()))
+            raw.append(need)
+
+        # Отступы делятся, а не задаются с потолка. Меряю от того,
+        # что действительно есть, а не от того, что предполагаю:
+        # viewport не равен ширине таблицы. На снимке получилось так,
+        # что ширины в сумме 621, таблица 592 - и Qt подрезал правую
+        # колонку, потому что вертикальной полосы в блоке не было,
+        # а я её вычитал. Значит считать надо от реальной ширины
+        # минус настоящая полоса, если она показана.
+        shown = table.verticalScrollBar().isVisible()
+        available = table.viewport().width()
+        if shown:
+            available -= table.verticalScrollBar().width()
+        columns = max(1, len(raw))
+        spare = available - sum(raw)
+        if spare < 0:
+            # Не помещается - режем отступы, но не текст: обрезанное
+            # состояние хуже, чем тесные края.
+            padding = 2
+        else:
+            padding = min(28, max(8, spare // columns))
+        for col, need in enumerate(raw):
+            table.setColumnWidth(col, need + padding)
+        # Минимум ширины разрывает круг. Qt считает ширину таблицы как
+        # сумму ширин колонок, а я считаю колонки от ширины таблицы.
+        # Без этого minima Qt сжимает таблицу под блок, сумма ширин
+        # остаётся прежней, проверки проходят - а последняя колонка
+        # молча уезжает за край. На снимке это выглядело как
+        # обрезанный заголовок «Инструм.». Проверено: с минимумом
+        # таблица рисуется целиком, без него - обрезается.
+        table.setMinimumWidth(sum(table.columnWidth(c)
+                                  for c in range(table.columnCount())) + 4)
 
     def _reg_paint(self) -> None:
         servers = self.reg_servers
@@ -2267,6 +2512,7 @@ class CapsTab(ScrollPage):
             self.reg_table.setItem(row, 1, QTableWidgetItem(self._reg_state_text(server)))
             self.reg_table.setItem(row, 2, QTableWidgetItem(server.license))
             self.reg_table.setItem(row, 3, QTableWidgetItem(server.tools_count))
+        self._reg_fit_columns()
         if servers and self.reg_table.currentRow() < 0:
             self.reg_table.setCurrentCell(0, 0)
         self._reg_show_detail()
@@ -2308,6 +2554,23 @@ class CapsTab(ScrollPage):
         if raw.get("safety"):
             lines.append("")
             lines.append(f"Безопасность: {raw['safety']}")
+
+        if server.manual_setup:
+            steps = server.setup_steps
+            if steps:
+                lines.append("")
+                lines.append("Как настроить — по шагам:")
+                for index, step in enumerate(steps, start=1):
+                    lines.append(f"  {index}. {step}")
+            if raw.get("only_while_running"):
+                lines.append("")
+                lines.append(
+                    f"Пока студия закрыта: {raw['only_while_running']}"
+                )
+            if raw.get("ready_here_note") and not server.ready_here:
+                lines.append("")
+                lines.append(f"Сейчас: {raw['ready_here_note']}")
+
         if raw.get("verdict"):
             lines.append("")
             lines.append(f"Итог: {raw['verdict']}")
@@ -2344,6 +2607,42 @@ class CapsTab(ScrollPage):
         server = self._reg_current()
         if server is None:
             self._warn("Выберите сервер в списке.")
+            return
+
+        # Сервер, который включается внутри другой программы, сначала
+        # спрашивает конфигурацию. Без неё запись в настройки была бы
+        # враньём: блок без токена заведомо не подключится.
+        if server.manual_setup:
+            self._reg_ask_config(server, dest)
+            return
+
+        def job(progress):
+            return mcp_registry.enable(dest, server, progress=progress)
+
+        self._start(job, "registry")
+
+    def _reg_ask_config(self, server: mcp_registry.Server, dest: Path) -> None:
+        """Спрашивает конфигурацию и, если её дали, включает сервер."""
+        import json
+
+        saved = mcp_registry.load_manual_config(dest, server.id)
+        dialog = ManualConfigDialog(server, self)
+        if saved:
+            # Показать прошлую, чтобы человек мог её поправить, а не
+            # искать заново. Токен в поле виден целиком, и это правильно:
+            # человек должен видеть, что именно попадёт в настройки.
+            # Спрятать его было бы удобнее программе и хуже человеку.
+            text = json.dumps(
+                {"mcpServers": {server.id: saved}}, ensure_ascii=False, indent=2
+            )
+            dialog.text.setPlainText(text)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        ok, note = mcp_registry.save_manual_config(
+            dest, server.id, dialog.config_text()
+        )
+        if not ok:
+            self._warn(note)
             return
 
         def job(progress):

@@ -14,7 +14,15 @@
       "install": "npm-глобально, затем npx windows-admin-mcp",
       "connection": {
         "kind": "local",
-        "command": ["npx", "-y", "-p", "windows-admin-mcp", "-p", "zod@^3.25", "windows-admin-mcp"],
+        "command": [
+          "npx",
+          "-y",
+          "-p",
+          "windows-admin-mcp",
+          "-p",
+          "zod@^3.25",
+          "windows-admin-mcp"
+        ],
         "warm_up": true,
         "note": "Проверено 28.09.2026: сервер отвечает и отдаёт 42 инструмента. ВАЖНО, почему команда именно такая. Обычный npx -y windows-admin-mcp НЕ РАБОТАЕТ: пакет тянет @modelcontextprotocol/sdk, а тот объявляет zod как «^3.25 или ^4.0», npm ставит zod 4, а обёртка SDK импортирует путь zod/v3, которого в zod 4 нет. Сервер падает с ERR_MODULE_NOT_FOUND ещё до старта, и opencode показывает «Не удалось». Поэтому zod@^3.25 указан явно вторым пакетом: npx кладёт их рядом, и путь v3 появляется. Проверены оба варианта: с -p работает и отдаёт 42 инструмента, без -p падает. Первый запуск скачивает пакет около минуты, тёплый занимает 2–3 с, а opencode даёт 30 с на старт сервера, поэтому программа прогревает кэш сама перед вписыванием блока."
       },
@@ -26,7 +34,9 @@
           "what": "Node.js 18+",
           "check": "node",
           "type": "command",
-          "args": ["--version"],
+          "args": [
+            "--version"
+          ],
           "min_version": 18,
           "note": "проверяется командой node --version"
         },
@@ -34,14 +44,21 @@
           "what": "npx",
           "check": "npx",
           "type": "command",
-          "args": ["--version"],
+          "args": [
+            "--version"
+          ],
           "note": "нужен, потому что сервер запускается через npx"
         },
         {
           "what": "PowerShell 5.1+",
           "check": "powershell",
           "type": "command",
-          "args": ["-NoLogo", "-NoProfile", "-Command", "$PSVersionTable.PSVersion.Major"],
+          "args": [
+            "-NoLogo",
+            "-NoProfile",
+            "-Command",
+            "$PSVersionTable.PSVersion.Major"
+          ],
           "min_version": 5,
           "note": "входит в состав Windows"
         },
@@ -63,7 +80,11 @@
       "install": "расширение для VS Code (sbroenne.excel-mcp) либо запуск сервера отдельно",
       "connection": {
         "kind": "local",
-        "command": ["npx", "-y", "@sbroenne/mcp-server-excel"],
+        "command": [
+          "npx",
+          "-y",
+          "@sbroenne/mcp-server-excel"
+        ],
         "note": "Проверено 28.09.2026: пакет @sbroenne/mcp-server-excel есть в npm, версия 2.0.11, лицензия MIT. Имя со областью @sbroenne — без неё пакет не находится. .NET НЕ требуется: сборка самодостаточная, это .NET нужен только для запасного пути через dotnet tool. Установка не нужна, npx скачает при первом запуске."
       },
       "license": "MIT",
@@ -78,7 +99,9 @@
           "what": "Node.js 18+",
           "check": "node",
           "type": "command",
-          "args": ["--version"],
+          "args": [
+            "--version"
+          ],
           "min_version": 18,
           "note": "нужен для запуска через npx"
         },
@@ -117,7 +140,10 @@
       "install": "uvx mcp-for-blender + аддон в Blender",
       "connection": {
         "kind": "local",
-        "command": ["uvx", "mcp-for-blender"],
+        "command": [
+          "uvx",
+          "mcp-for-blender"
+        ],
         "note": "Команда из README проекта. Сервер запускает аддон внутри Blender, поэтому без самого Blender он не поднимется."
       },
       "license": "MIT",
@@ -133,7 +159,9 @@
           "what": "uv / uvx",
           "check": "uvx",
           "type": "command",
-          "args": ["--version"],
+          "args": [
+            "--version"
+          ],
           "note": "проверяется командой uvx --version. На 28.09.2026 стоит 0.12.9"
         },
         {
@@ -159,7 +187,7 @@
         "url": "https://adobe-creativity.adobe.io/mcp",
         "note": "Проверено 28.09.2026: адрес взят с официальной страницы коннектора Adobe и отвечает (HTTP 403 без входа — так и должен вести себя закрытый сервер). 67 инструментов, автор Adobe Inc. После вписывания обязателен вход: opencode mcp auth adobe-creativity"
       },
-      "license": "сервер Adobe, доступ по подписке Adobe",
+      "license": "по подписке Adobe",
       "tools_count": 67,
       "auth": "OAuth, вход в аккаунт Adobe. Без него сервер отвечает отказом на любой инструмент",
       "why": "Photoshop, Lightroom, Illustrator, Firefly, Premiere, InDesign, Express и Adobe Stock: редактирование изображений словами, генерация и правка картинок, поиск ассетов, монтаж видео.",
@@ -181,6 +209,63 @@
       ],
       "ready_here": false,
       "verdict": "Порог высокий: нужна подписка Adobe и сами приложения"
+    },
+    {
+      "id": "android-studio",
+      "name": "Android Studio",
+      "source": "https://plugins.jetbrains.com/plugin/26071-mcp-server",
+      "install": "встроен в студию. Включается внутри неё: Параметры → Инструменты → MCP Server → Enable",
+      "connection": {
+        "kind": "remote",
+        "manual_config": true,
+        "note": "Адрес и токен выдаёт сама студия, и они меняются вместе с её настройками, поэтому в реестре их нет: реестр едет в публичный репозиторий, и токен там быть не должен. Программа не может включить сервер внутри студии - это действие в её окне. Как подключить: включи MCP Server в студии, нажми Copy Config, вернись сюда, выбери сервер и нажми «Включить», затем «Вставить из буфера обмена». Конфигурация сохранится рядом с opencode.jsonc, а в настройки попадёт готовый блок с адресом и токеном."
+      },
+      "license": "JetBrains, бесплатно",
+      "why": "Работа с открытым в студии проектом: сборка и ошибки компиляции, проверки кода IntelliJ по файлам и папкам, дерево вызовов (кто кого зовёт), справка по символу. Плюс отладка: точки останова, пошаговое выполнение, стек вызовов, потоки, значения переменных и вычисление выражений прямо в остановленном кадре. Для Kotlin и Java это самый прямой способ увидеть, что происходит на самом деле.",
+      "auth": "Токен, который выдаёт студия. Хранится в папке настроек opencode, в репозиторий не попадает.",
+      "opencode": "После включения нужен перезапуск opencode: он читает настройки при старте.",
+      "only_while_running": "Сервер отвечает, только пока Android Studio запущена и в ней открыт проект. Без открытого проекта подключится, но работать ему будет не над чем.",
+      "setup_steps": [
+        "Запусти Android Studio.",
+        "Нажми Ctrl+Alt+S → Инструменты → MCP Server → поставь галочку Enable.",
+        "В разделе Manual Client Configuration нажми Copy Config.",
+        "Вернись в эту программу: вкладка opencode, блок «6. Серверы MCP», выбери Android Studio и нажми «Включить».",
+        "Нажми «Вставить из буфера обмена» и «Записать».",
+        "Перезапусти opencode."
+      ],
+      "requires": [
+        {
+          "what": "Android Studio 2025.2+",
+          "check": "C:\\Program Files\\Android\\Android Studio\\bin\\studio64.exe",
+          "type": "program",
+          "note": "проверяется по пути к программе. На 28.09.2026 стоит версия 261.25134.95.0-AI"
+        },
+        {
+          "what": "MCP Server включён в студии",
+          "check": null,
+          "type": "manual",
+          "blocks": true,
+          "note": "Параметры → Инструменты → MCP Server → Enable. Программа не может сделать это за вас"
+        },
+        {
+          "what": "студия запущена и в ней открыт проект",
+          "check": null,
+          "type": "manual",
+          "blocks": true,
+          "note": "сервер отвечает только при запущенной студии. Проектов Android на этом компьютере пока нет"
+        },
+        {
+          "what": "конфигурация вставлена в программу",
+          "check": null,
+          "type": "manual",
+          "blocks": true,
+          "note": "кнопка «Включить» и «Вставить из буфера обмена». Конфигурация сохраняется рядом с opencode.jsonc"
+        }
+      ],
+      "ready_here": false,
+      "ready_here_note": "Студия установлена, но MCP Server в ней ещё не включался, проектов Android на диске нет. Проверено 28.09.2026.",
+      "manual_setup": true,
+      "verdict": "Порог низкий по железу: студия уже стоит. Но включение живёт внутри неё, и сервер работает только над открытым проектом."
     }
   ],
   "excluded": [

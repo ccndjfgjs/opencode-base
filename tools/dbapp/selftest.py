@@ -313,10 +313,23 @@ def main() -> int:
         check(bool(reg_data.get("servers")), "реестр прочитан модулем, серверы на месте")
         for _spec in reg_data.get("servers") or []:
             _conn = _spec.get("connection")
-            check(
-                isinstance(_conn, dict) and bool(_conn.get("command") or _conn.get("url")),
-                f"у сервера {_spec.get('id')} есть команда подключения",
+            # Способ подключения законен трёх видов: команда, адрес или
+            # ручная настройка. У android-studio адрес и токен выдаёт
+            # сама студия, поэтому в реестре их нет и быть не должно -
+            # реестр едет в публичный репозиторий. Отсутствие всех трёх
+            # означает, что подключать нечем, и это ошибка.
+            _conn_ways = bool(
+                _conn.get("command") or _conn.get("url") or _conn.get("manual_config")
             )
+            check(
+                isinstance(_conn, dict) and _conn_ways,
+                f"у сервера {_spec.get('id')} есть способ подключения",
+            )
+            if _spec.get("id") == "android-studio":
+                check(not _conn.get("url") and not _conn.get("command"),
+                      "у android-studio в реестре нет ни адреса, ни команды")
+                check("Bearer" not in json.dumps(_spec, ensure_ascii=False),
+                      "токена студии в реестре нет")
         for _spec in reg_data.get("servers") or []:
             _bad = [
                 r.get("what")
@@ -328,6 +341,15 @@ def main() -> int:
         check(len(_servers) == len(reg_data.get("servers") or []),
               f"модуль загрузил серверов: {len(_servers)}")
         for _s in _servers:
+            if _s.manual_setup:
+                # У такого сервера адрес и токен выдаёт его собственная
+                # программа. Без вставленной конфигурации блока быть не
+                # должно - иначе в настройки попадёт запись, которая
+                # заведомо не подключится. Проверяем это отдельно, с
+                # настоящей конфигурацией.
+                check(not mcp_registry.build_block(_s),
+                      f"у {_s.id} без конфигурации блок не пишется")
+                continue
             _b = mcp_registry.build_block(_s)
             _ok = (_b.startswith(f'"{_s.id}": {{') and _b.rstrip().endswith("},")
                    and _b.count("{") == _b.count("}"))
@@ -383,6 +405,117 @@ def main() -> int:
             check((_rdest / "opencode.jsonc").read_text(encoding="utf-8") == _broken_before,
                   "сломанный файл не тронут")
         shutil.rmtree(_rtmp, ignore_errors=True)
+
+        # --- сервер с ручной настройкой: android-studio
+        # Проверяем целиком, на временной папке настроек: без вставленной
+        # конфигурации включение обязано отказаться, с конфигурацией -
+        # вписать блок с токеном, а выключение - убрать и то и другое.
+        _ast = next((s for s in _servers if s.id == "android-studio"), None)
+        check(_ast is not None, "сервер android-studio есть в реестре")
+        if _ast is not None:
+            _spec = next((s for s in (reg_data.get("servers") or [])
+                          if s.get("id") == "android-studio"), {})
+            check(_spec.get("ready_here") is False,
+                  "готовность честная: сервер ещё не включался")
+            check("Bearer" not in json.dumps(reg_data, ensure_ascii=False),
+                  "токена в реестре нет — он туда ехать не должен")
+            check(_ast.manual_setup, "помечен как настраиваемый руками")
+            check(_ast.has_connection, "подключаемым считается")
+            check(_ast.ready, "кнопка «Включить» доступна")
+            check(len(_ast.setup_steps) == 6,
+                  f"пошаговая инструкция из шести шагов: {len(_ast.setup_steps)}")
+            check(bool(_ast.only_while_running),
+                  "сказано, что сервер живёт только при запущенной студии")
+            check(bool(_ast.auth), "сказано, что нужен токен")
+
+            # Конфигурация, которую копирует студия. Токен выдуманный.
+            _paste = json.dumps({
+                "mcpServers": {
+                    "android-studio": {
+                        "url": "http://localhost:63342/api/mcp",
+                        "headers": {"Authorization": "Bearer SELFTEST-TOKEN"},
+                    }
+                }
+            })
+
+            _atmp = Path(tempfile.mkdtemp(prefix="self-manual-"))
+            try:
+                _mdest = _atmp / "opencode"
+                _mdest.mkdir()
+                (_mdest / "opencode.jsonc").write_text(
+                    '{\n  "$schema": "https://opencode.ai/config.json"\n}\n',
+                    encoding="utf-8",
+                )
+                _before = (_mdest / "opencode.jsonc").read_text(encoding="utf-8")
+
+                # Без конфигурации включать нечего: честный отказ.
+                _m, _e = mcp_registry.enable(_mdest, _ast)
+                check(bool(_e), f"без конфигурации включение отказано: {_e}")
+                check(not _m, "успеха при отказе не сообщается")
+                check((_mdest / "opencode.jsonc").read_text(encoding="utf-8") == _before,
+                      "настройки не тронуты при отказе")
+                check(not mcp_registry.manual_config_path(_mdest, _ast.id).exists(),
+                      "файла с токеном не появилось")
+
+                # Мусор вместо конфигурации отвергается и ничего не портит.
+                for _junk in ("просто текст", '{"mcpServers":{}}', "   "):
+                    _ok, _why = mcp_registry.save_manual_config(
+                        _mdest, _ast.id, _junk)
+                    check(not _ok, f"мусор отвергнут ({_junk.strip()[:14]!r}): "
+                                   f"{_why[:44]}")
+                check((_mdest / "opencode.jsonc").read_text(encoding="utf-8") == _before,
+                      "мусор не тронул настройки")
+
+                # С настоящей конфигурацией - вписывается токен.
+                _ok, _why = mcp_registry.save_manual_config(
+                    _mdest, _ast.id, _paste)
+                check(_ok, f"конфигурация принята: {_why}")
+                _saved = mcp_registry.load_manual_config(_mdest, _ast.id)
+                check(bool(_saved), "конфигурация читается обратно")
+                check(bool(_saved) and _saved.get("url") ==
+                      "http://localhost:63342/api/mcp", "адрес разобран верно")
+                check(bool(_saved)
+                      and _saved.get("headers", {}).get("Authorization")
+                      == "Bearer SELFTEST-TOKEN", "токен разобран верно")
+                _cpath = mcp_registry.manual_config_path(_mdest, _ast.id)
+                check("opencode-base" not in str(_cpath),
+                      "конфигурация не попадает в репозиторий")
+
+                _m, _e = mcp_registry.enable(_mdest, _ast)
+                check(not _e, f"включение с конфигурацией прошло: {_e}")
+                _cfg = (_mdest / "opencode.jsonc").read_text(encoding="utf-8")
+                check("SELFTEST-TOKEN" in _cfg, "токен вписан в настройки")
+                check(opencode_caps.check_jsonc(_cfg),
+                      "настройки остались читаемыми")
+                check(any("Перезапусти" in _x for _x in _m),
+                      "напоминание про перезапуск opencode")
+
+                # Выключение убирает и блок, и токен с диска.
+                _m, _e = mcp_registry.disable(_mdest, _ast)
+                check(not _e, f"выключение прошло: {_e}")
+                _cfg_off = (_mdest / "opencode.jsonc").read_text(encoding="utf-8")
+                check("SELFTEST-TOKEN" not in _cfg_off,
+                      "токена в настройках не осталось")
+                check(not mcp_registry.manual_config_path(_mdest, _ast.id).exists(),
+                      "файл с токеном удалён — «выключил» значит выключил")
+                check(any("токеном удалена" in _x for _x in _m),
+                      "сказано вслух, что конфигурация удалена")
+            finally:
+                shutil.rmtree(_atmp, ignore_errors=True)
+
+        # Скилл android-studio: папка, шапка и запись в индексе.
+        _skill_dir = target / "skills" / "android-studio"
+        check((_skill_dir / "SKILL.md").is_file(),
+              "скилл android-studio лежит в skills/")
+        if (_skill_dir / "SKILL.md").is_file():
+            _stext = (_skill_dir / "SKILL.md").read_text(encoding="utf-8")
+            check(_stext.startswith("---\nname: android-studio\n"),
+                  "в шапке скилла имя android-studio")
+            for _tool in ("build_project", "lint_files", "analyze_calls",
+                          "xdebug_set_breakpoint", "xdebug_get_stack",
+                          "xdebug_get_frame_values", "./gradlew"):
+                check(_tool in _stext,
+                      f"скилл называет инструмент или замену: {_tool}")
 
         # Блок в окне: таблица и кнопки собраны и показывают реестр.
         _reg_tab = getattr(window.caps_tab, "reg_table", None)
