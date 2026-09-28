@@ -208,7 +208,14 @@ class CreateTab(ScrollPage):
         self.parent_edit.setPlaceholderText(
             "Папка, внутри которой появится новая база"
         )
-        default_parent = Path.home() / "Documents"
+        # По умолчанию — та самая папка DataBases, которую программа создаёт
+        # при первом запуске. Раньше здесь стояли «Документы», из-за чего
+        # базы уезжали мимо папки, которую же программа и рекомендует.
+        # Если создать не вышло (нет прав) — берём домашнюю папку.
+        try:
+            default_parent = core.ensure_data_bases_folder()
+        except OSError:
+            default_parent = Path.home()
         if not default_parent.is_dir():
             default_parent = Path.home()
         self.parent_edit.setText(str(default_parent))

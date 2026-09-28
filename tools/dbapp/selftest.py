@@ -2011,6 +2011,46 @@ def main() -> int:
         shutil.rmtree(_uz2, ignore_errors=True)
         echo(f"Временная папка убрана: {_uz2}")
 
+    # ---- 17. папка баз по умолчанию — DataBases: найдено 28.09
+    echo("\n--- 17. Базы по умолчанию в папке DataBases ---")
+
+    # Человек заметил: папка DataBases создаётся при первом запуске, но в
+    # поле создания базы стояли «Документы». Программа рекомендовала одну
+    # папку, а базы уезжали в другую.
+    _db = core.data_bases_folder()
+    check(_db.name == "DataBases", f"папка баз называется DataBases: {_db.name}")
+    check(_db.parent == core.desktop_dir(),
+          f"папка баз лежит на рабочем столе: {_db.parent}")
+
+    # Создание папки: проверяем на временной, настоящий рабочий стол не трогаем.
+    _dbt = Path(tempfile.mkdtemp(prefix="dbapp-databases-"))
+    _real_desktop = core.desktop_dir
+    try:
+        core.desktop_dir = lambda: _dbt
+        _made = core.data_bases_folder()
+        check(not _made.exists(), "до вызова папки нет")
+        core.ensure_data_bases_folder()
+        check(_made.is_dir(), f"ensure_data_bases_folder создал папку: {_made.name}")
+        core.ensure_data_bases_folder()
+        check(_made.is_dir(), "повторный вызов безвреден")
+    finally:
+        core.desktop_dir = _real_desktop
+        shutil.rmtree(_dbt, ignore_errors=True)
+
+    # В окне по умолчанию стоит именно она.
+    _ct = window.tabs.widget(0)
+    _shown = _ct.parent_edit.text().strip()
+    check(_shown == str(_db),
+          f"в поле создания базы папка DataBases, а не Документы: {_shown}")
+    check("Documents" not in _shown and "Документы" not in _shown,
+          f"Документы больше не подставляются: {_shown}")
+    _ct.name_edit.setText("Проба-дефолт")
+    _prev = _ct.path_preview.text().strip()
+    _path_part = _prev.partition(":")[2].strip() or _prev
+    check(_path_part.startswith(str(_db)),
+          f"новая база уедет в DataBases: {_path_part[:70]}")
+    shutil.rmtree(_dbt, ignore_errors=True)
+
     # ---- итог
     failed = [text for good, text in results if not good]
     echo("\n" + "=" * 62)
