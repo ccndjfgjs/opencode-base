@@ -1180,6 +1180,19 @@ def main() -> int:
     check(not missing,
           f"в образце {len(core.BRIDGE_FILES)} файлов; не хватает: "
           f"{missing or 'ничего'}")
+    # Найдено 28.09: в BRIDGE_FILES зашит список файлов моста, и новый
+    # модуль memory_tools.py в него не попал. Мост создавался, но не
+    # запускался: ImportError. Проверка прямо на это и смотрит.
+    _tpl_modules = {
+        p.stem for p in tpl.glob("*.py")
+    } - {"server", "ncp_core", "__init__"}
+    _copied = {"server", "ncp_core"} | {Path(n).stem for n in core.BRIDGE_FILES}
+    _lost = sorted(_tpl_modules - _copied)
+    check(not _lost,
+          f"в образце нет модулей, которые забыли внести в BRIDGE_FILES: "
+          f"{_lost or 'ничего'}")
+    check("memory_tools.py" in core.BRIDGE_FILES,
+          "модуль инструментов памяти входит в список копируемых файлов")
 
     # Переносимость: в образце не должно быть имени чужого пользователя,
     # иначе мост не заработает у другого человека. Исключение — сам мост
@@ -1237,9 +1250,13 @@ def main() -> int:
           f"состояние показывает библиотеку: {status.library}")
 
     # Проверку можно запустить и отдельно — кнопкой «Проверить».
+    # Число проверок не зашиваем: мост их прибавляет, и любое новое
+    # назначение ломало бы эту строку. Смотрим только на «все прошли».
     ok, output = core.bridge_selftest(bridge_dir)
-    check(ok and "26 проверок" in output,
-          "проверка моста запускается отдельно и проходит")
+    tail = [line.strip() for line in output.splitlines() if "ИТОГ" in line]
+    check(ok and tail and "все" in tail[-1],
+          f"проверка моста запускается отдельно и проходит: {tail[-1] if tail else 'нет строки ИТОГ'}")
+    check("[СБОЙ]" not in output, "в самопроверке моста нет ни одного сбоя")
 
     # В чужую непустую папку не пишем: там могут быть нужные файлы.
     foreign = btmp / "чужая-папка"

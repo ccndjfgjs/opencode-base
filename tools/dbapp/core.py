@@ -2877,9 +2877,14 @@ def create_base_shortcut(
 
 
 BRIDGE_TEMPLATE_DIR = ("tools", "ncp-bridge")
+#: Что копируется при создании моста. Список зашит, а не берётся из папки:
+#: иначе в мост попадёт мусор от разработки (__pycache__, .pyc, бэкапы),
+#: и мост перестанет собираться на чужом компьютере. Поэтому новый модуль
+#: моста нельзя забыть: он добавляется здесь.
 BRIDGE_FILES = (
     "server.py",
     "ncp_core.py",
+    "memory_tools.py",
     "config.json",
     "requirements.txt",
     "install.bat",
