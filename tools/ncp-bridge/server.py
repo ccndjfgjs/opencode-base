@@ -1129,6 +1129,52 @@ def mode_selftest(config: dict) -> int:
         _hint.unlink()
         _dot.unlink()
 
+        # ---- 8д. индекс обязан совпадать с диском
+        # Найдено 29.09 на живой базе: index.json заявлял 18 записей,
+        # на диске было 17, лишней была служебная _О-ПАПКЕ.md с пустым
+        # id. Причина - пересборку выполнял мост, загруженный в память
+        # до появления фильтра в коде. Блок 8г это не ловит: он смотрит
+        # только на рост счётчика и работает на чистой временной папке.
+        # Случай «индекс остался битым после чужой пересборки» - другой.
+        _idx = json.loads(_idx_file.read_text(encoding="utf-8"))
+        _real = sorted((temp_library / "записи").rglob("ncp-*.md"))
+        check(_idx.get("count") == len(_real),
+              f"шаг 8д: счётчик индекса равен числу файлов "
+              f"({_idx.get('count')} против {len(_real)})")
+        _foreign = [e for e in _idx.get("entries") or []
+                    if not str(e.get("id", "")).startswith("ncp-")]
+        check(not _foreign,
+              f"шаг 8д: в индексе нет записей без префикса ncp- "
+              f"({len(_foreign)})")
+        _lost = [e.get("path", "") for e in _idx.get("entries") or []
+                 if e.get("path") and not (temp_library / e["path"]).is_file()]
+        check(not _lost,
+              f"шаг 8д: все пути из индекса есть на диске ({len(_lost)} битых)")
+
+        # Тот же случай, что был в жизни: индекс портят руками -
+        # дописывают служебный файл как запись, - и он обязан
+        # восстановиться пересборкой.
+        _broken = dict(_idx)
+        _broken["count"] = len(_real) + 1
+        _broken["entries"] = list(_broken.get("entries") or []) + [{
+            "id": "_О-ПАПКЕ", "title": "_О-ПАПКЕ", "type": "note",
+            "topic": "личное", "status": "active", "created": "",
+            "updated": "", "tags": [], "source": "", "confidence": "",
+            "path": "записи/личное/_О-ПАПКЕ.md",
+        }]
+        _idx_file.write_text(json.dumps(_broken, ensure_ascii=False, indent=2),
+                             encoding="utf-8")
+        call(36, "ncp_reindex", {})
+        _fixed = json.loads(_idx_file.read_text(encoding="utf-8"))
+        _fixed_foreign = [e for e in _fixed.get("entries") or []
+                          if not str(e.get("id", "")).startswith("ncp-")]
+        check(_fixed.get("count") == len(_real),
+              f"шаг 8д: испорченный счётчик восстановлен "
+              f"({_fixed.get('count')})")
+        check(not _fixed_foreign,
+              f"шаг 8д: служебная запись из индекса убрана "
+              f"({len(_fixed_foreign)} осталось)")
+
         # ---- 9. ncp_reindex: перестройка индекса
         (temp_library / "index.json").write_text("{}", encoding="utf-8")
         answer = call(12, "ncp_reindex", {})

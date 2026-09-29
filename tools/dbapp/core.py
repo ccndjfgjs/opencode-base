@@ -849,6 +849,57 @@ def opener_body(base: Path) -> str:
     )
 
 
+def _rebuild_library_index(base: Path) -> int | None:
+    """Пересобирает указатель библиотеки из её файлов. Число или None.
+
+    Зачем отдельной функцией. Указатель - производная величина: он
+    обязан отражать то, что лежит в папке записей. Считать это в
+    create_base руками нельзя - завтра правила поменяются, и счётчик
+    снова разойдётся с диском. Поэтому берём ровно тот код, который
+    этим занимается в мосте.
+
+    None означает «не получилось». Это не повод срывать создание базы:
+    пустой указатель лучше, чем никакого, а записи в нём появятся при
+    первом сохранении.
+    """
+    import importlib.util
+    import sys
+
+    lib = base / "библиотека"
+    source = program_root() / "tools" / "ncp-bridge" / "ncp_core.py"
+    if not source.is_file() or not lib.is_dir():
+        return None
+    cache = source.parent / "__pycache__"
+    had_cache = cache.is_dir()
+    # Запрещаем запись байт-кода на время загрузки. Без этого
+    # exec_module создаёт __pycache__ рядом с образцом, и каждая
+    # созданная база оставляет мусор в конструкторе. Найдено 29.09
+    # прогоном: проверка «в образце моста нет чужого имени» упала
+    # на .pyc, который породил мой же код починки.
+    was_bytecode = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "ncp_core_для_новой_базы", source
+        )
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        # Модуль кладём в sys.modules: он сам этого требует при
+        # наследовании и при повторном вызове в той же сессии.
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        index = module.Library(lib).rebuild_index()
+    except Exception:  # noqa: BLE001 — создание базы важнее указателя
+        return None
+    finally:
+        sys.dont_write_bytecode = was_bytecode
+        if not had_cache and cache.is_dir():
+            shutil.rmtree(cache, ignore_errors=True)
+    count = index.get("count") if isinstance(index, dict) else None
+    return count if isinstance(count, int) else None
+
+
 def create_base(plan: CreationPlan, progress=None) -> list[str]:
     """Выполняет план: создаёт папки и файлы. Возвращает список сообщений."""
     log: list[str] = []
@@ -1026,13 +1077,25 @@ def create_base(plan: CreationPlan, progress=None) -> list[str]:
     if not memory.exists():
         memory.write_text(ACTIVE_MEMORY, encoding="utf-8")
 
+    # Указатель библиотеки собираем из файлов, а не берём из шаблона.
+    # Найдено 29.09: записи библиотеки копируются из конструктора, а
+    # индекс писался пустым шаблоном и объявлял count: 0 при двух
+    # записях на диске. Каждая новая база рождалась с врущим
+    # указателем, и заметить это было некому: спрашивали только
+    # «есть ли файл», а он был.
     index = target / "библиотека/index.json"
     if not index.exists():
-        data = dict(LIBRARY_INDEX)
-        data["updated"] = datetime.now().isoformat(timespec="seconds")
-        index.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        rebuilt = _rebuild_library_index(target)
+        if rebuilt:
+            say(f"Указатель библиотеки собран из файлов: записей {rebuilt}")
+        else:
+            data = dict(LIBRARY_INDEX)
+            data["updated"] = datetime.now().isoformat(timespec="seconds")
+            index.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            say("Указатель библиотеки записан пустым: пересборка не удалась, "
+                "записи появятся в нём после первого сохранения")
 
     marker = target / "база.json"
     marker.write_text(

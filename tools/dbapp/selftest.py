@@ -148,6 +148,44 @@ def main() -> int:
         check((target / "библиотека/АКТИВНАЯ-ПАМЯТЬ.md").is_file(),
               "активная память записана")
         check((target / "библиотека/index.json").is_file(), "указатель записан")
+
+        # Указатель должен совпадать со своей же папкой, а не просто
+        # существовать. Найдено 29.09: на живой базе index.json заявлял
+        # 18 записей, на диске было 17, лишней была служебная
+        # _О-ПАПКЕ.md с пустым id. Мост это ловит у себя, а конструктор
+        # раздаёт записи новым базам - и новая база родилась бы уже с
+        # битым указателем. Проверяем на только что созданной базе.
+        _nlib = target / "библиотека"
+        _nrecs = sorted((_nlib / "записи").rglob("ncp-*.md")) \
+            if (_nlib / "записи").is_dir() else []
+        try:
+            _ndata = json.loads(
+                (_nlib / "index.json").read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            _ndata = {}
+        check(isinstance(_ndata, dict),
+              "указатель новой базы читается как объект")
+        check(isinstance(_ndata, dict)
+              and _ndata.get("count") == len(_nrecs),
+              f"указатель новой базы совпадает с её диском: "
+              f"{_ndata.get('count') if isinstance(_ndata, dict) else '?'} "
+              f"против {len(_nrecs)} файлов")
+        _nbad = [e for e in (_ndata.get("entries") or [])
+                 if not str(e.get("id", "")).startswith("ncp-")]
+        check(not _nbad,
+              f"в указателе новой базы нет записей без префикса ncp-: "
+              f"{len(_nbad)}")
+        _nlost = [e.get("path", "") for e in (_ndata.get("entries") or [])
+                  if e.get("path") and not (_nlib / e["path"]).is_file()]
+        check(not _nlost,
+              f"все пути указателя новой базы есть на диске: {len(_nlost)} битых")
+        _ncat = _nlib / "КАТАЛОГ.md"
+        if _ncat.is_file():
+            _ncat_text = _ncat.read_text(encoding="utf-8")
+            check("_О-ПАПКЕ" not in _ncat_text,
+                  "в каталоге новой базы нет служебной папки")
+        else:
+            check(False, "в новой базе нет КАТАЛОГ.md - навигация по знаниям не работает")
         check((target / "база.json").is_file(), "отметка о создании записана")
         for folder in core.NEW_DIRS:
             if not (target / folder).is_dir():
