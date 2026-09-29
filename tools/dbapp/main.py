@@ -74,7 +74,13 @@ class ScrollPage(QScrollArea):
         inner.setAutoFillBackground(False)
         # страницу запрещаем сжимать: её высота — это её настоящая высота.
         # Иначе Qt подгоняет её под окно и рисует элементы друг поверх друга.
-        inner.setMinimumHeight(inner.sizeHint().height())
+        #
+        # Высота берётся не раньше нуля. У страницы, элементы которой
+        # ещё не разложены, sizeHint() равен -1, и Qt на каждый раз
+        # писал в служебный вывод: «Negative sizes (0,-1) are not
+        # possible». Ошибка безвредная, но шумная: она повторялась при
+        # каждом запуске и заглушала настоящие предупреждения.
+        inner.setMinimumHeight(max(0, inner.sizeHint().height()))
         inner.setSizePolicy(
             QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
         )
@@ -267,10 +273,10 @@ class CreateTab(ScrollPage):
 
         # Решение человека о чувствительных данных. По умолчанию
         # выключено: без прямой просьбы секретное не пишется.
-        self.chk_sensitive = QCheckBox(
-            "Разрешить в этой базе пароли и ключи "
-            "(иначе нейросеть откажется их записывать)"
-        )
+        # Подпись сокращена: флажок в Qt не переносит текст, а длинная
+        # подпись обрезалась по краю окна. Пояснение ушло в подсказку
+        # под флажком - там оно и должно быть.
+        self.chk_sensitive = QCheckBox("Разрешить пароли и ключи в этой базе")
         self.chk_sensitive.setToolTip(
             "Сними галочку — нейросеть не будет записывать пароли, ключи "
             "и токены даже по просьбе, а предложит хранилище. "
@@ -1713,15 +1719,24 @@ class BridgeTab(ScrollPage):
             )
         )
 
-        self.radio_open = QRadioButton("Для opencode (JSON)")
-        self.radio_harness = QRadioButton("Для Харнеса (YAML-оверлей)")
+        # Подписи короче, а подпись «Показать настройки» убрана из ряда:
+        # три элемента в одну строку не помещались, Qt сжимал переключатели
+        # и обрезал надписи. Теперь переключатели стоят отдельной строкой
+        # под заголовком группы, где им есть место.
+        self.radio_open = QRadioButton("Для opencode — JSON")
+        self.radio_harness = QRadioButton("Для Харнеса — YAML")
+        for radio in (self.radio_open, self.radio_harness):
+            ui.keep_width(radio)
         self.radio_open.setChecked(True)
         row_prog = QHBoxLayout()
-        row_prog.addWidget(QLabel("Показать настройки:"))
-        row_prog.addWidget(self.radio_open)
-        row_prog.addWidget(self.radio_harness)
+        row_prog.addWidget(ui.label("Показать настройки в виде:", kind="h2"))
         row_prog.addStretch(1)
         prog_layout.addLayout(row_prog)
+        row_prog2 = QHBoxLayout()
+        row_prog2.addWidget(self.radio_open)
+        row_prog2.addWidget(self.radio_harness)
+        row_prog2.addStretch(1)
+        prog_layout.addLayout(row_prog2)
 
         self.program_hint = ui.label("", kind="dim", wrap=True)
         prog_layout.addWidget(self.program_hint)
@@ -2191,7 +2206,7 @@ class CapsTab(ScrollPage):
         "pc": "Мост ПК — файлы, программы, скриншоты (всё через спрос)",
         "ncp": "Мост NCP — память, библиотека, 7 инструментов",
         "agents": "12 агентов — поиск, план, код, проверка и другие",
-        "antiblock": "Обход блокировок — запуск OpenCode через прокси, пул обновляется сам",
+        "antiblock": "Обход блокировок — запуск через прокси",
     }
 
     def __init__(self, parent=None) -> None:
@@ -2359,11 +2374,11 @@ class CapsTab(ScrollPage):
         )
         self.achecks: dict[str, QCheckBox] = {}
         for key, title in (
-            ("facade", "Переводчик и запуск (фасад 127.0.0.1:17890 + ярлык-запуск)"),
-            ("lists", "Бесплатные списки (SOCKS5-пул + VLESS-подписки + автообновление раз в сутки)"),
-            ("dns", "Защищённый DNS (DoH: Google/Cloudflare/Quad9/AdGuard) — запасной способ обхода"),
+            ("facade", "Переводчик и запуск (фасад + ярлык)"),
+            ("lists", "Бесплатные списки: SOCKS5 и VLESS, обновляются сами"),
+            ("dns", "Защищённый DNS (DoH) — запасной обход"),
             ("command", "Команда /обход внутри OpenCode"),
-            ("shortcut", "Ярлык «OpenCode (обход)» с иконкой программы на рабочий стол"),
+            ("shortcut", "Ярлык «OpenCode (обход)» на рабочий стол"),
         ):
             box = QCheckBox(title)
             box.setChecked(True)
@@ -2420,25 +2435,31 @@ class CapsTab(ScrollPage):
         self.caps_skills_list.setMaximumHeight(230)
         skills_layout.addWidget(self.caps_skills_list)
 
+        # Кнопки в два ряда, а не в один. Пять кнопок в ряд не влезали
+        # в окно уже при 1000 пикселях, и Qt сжимал их по 4-24 пикселя.
+        # В два ряда они помещаются при любой разумной ширине.
         row_skills = QHBoxLayout()
-        # Подписи короткие, полные - в подсказках. Пять длинных кнопок
-        # в ряд не помещались: Qt не сжимает их, а обрезает по краю, и
-        # на снимке было «ставить отмеченн» и «брать отмеченны».
         self.btn_skills_all = QPushButton("Отметить все")
         self.btn_skills_none = QPushButton("Снять все")
         self.btn_skills_reload = QPushButton("Обновить")
-        self.btn_skills_put = QPushButton("Поставить")
-        self.btn_skills_drop = QPushButton("Убрать")
-        self.btn_skills_reload.setToolTip("Перечитать список навыков")
-        self.btn_skills_put.setToolTip("Скопировать отмеченные навыки в opencode")
-        self.btn_skills_drop.setToolTip("Убрать отмеченные навыки из opencode")
         row_skills.addWidget(self.btn_skills_all)
         row_skills.addWidget(self.btn_skills_none)
         row_skills.addWidget(self.btn_skills_reload)
         row_skills.addStretch(1)
-        row_skills.addWidget(self.btn_skills_put)
-        row_skills.addWidget(self.btn_skills_drop)
         skills_layout.addLayout(row_skills)
+
+        row_skills2 = QHBoxLayout()
+        self.btn_skills_put = QPushButton("Поставить отмеченные")
+        self.btn_skills_drop = QPushButton("Убрать отмеченные")
+        self.btn_skills_reload.setToolTip("Перечитать список навыков")
+        self.btn_skills_put.setToolTip(
+            "Скопировать отмеченные навыки в opencode")
+        self.btn_skills_drop.setToolTip(
+            "Убрать отмеченные навыки из opencode")
+        row_skills2.addWidget(self.btn_skills_put)
+        row_skills2.addWidget(self.btn_skills_drop)
+        row_skills2.addStretch(1)
+        skills_layout.addLayout(row_skills2)
 
         self.caps_skills_hint = ui.label("", kind="dim", wrap=True)
         skills_layout.addWidget(self.caps_skills_hint)
@@ -2509,10 +2530,10 @@ class CapsTab(ScrollPage):
         mcp_layout.addWidget(self.reg_detail)
 
         row_mcp = QHBoxLayout()
-        self.btn_reg_check = QPushButton("Проверить всё")
+        self.btn_reg_check = QPushButton("Проверить")
         self.btn_reg_on = QPushButton("Включить")
         self.btn_reg_off = QPushButton("Выключить")
-        self.btn_reg_src = QPushButton("Открыть источник")
+        self.btn_reg_src = QPushButton("Источник")
         row_mcp.addWidget(self.btn_reg_check)
         row_mcp.addWidget(self.btn_reg_on)
         row_mcp.addWidget(self.btn_reg_off)
@@ -2561,6 +2582,7 @@ class CapsTab(ScrollPage):
         self.btn_reg_check.clicked.connect(self._reg_check_all)
         self.btn_reg_on.clicked.connect(self._reg_enable)
         self.btn_reg_off.clicked.connect(self._reg_disable)
+        self.btn_reg_src.setToolTip("Открыть папку с исходником сервера")
         self.btn_reg_src.clicked.connect(self._reg_open_source)
         self.reg_table.currentCellChanged.connect(
             lambda *_: self._reg_show_detail()
@@ -3453,7 +3475,11 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Управление базой")
         # Боковая колонка отнимает 214, поэтому окно стало шире прежнего:
         # раньше 880 делились на шесть вкладок, теперь 220 уходят в меню.
-        self.setMinimumSize(900, 620)
+        # Минимум 1000, а не 900: при 900 ряды кнопок не помещались, и Qt
+        # сжимал их на 10-24 пикселя. Ниже этого окно просто не должно
+        # открываться - пусть лучше не поместится целиком, чем появятся
+        # обрезанные подписи.
+        self.setMinimumSize(1000, 620)
         self.resize(1180, 880)
 
         central = QWidget()
@@ -3466,6 +3492,7 @@ class MainWindow(QMainWindow):
             ui.label(
                 "База — это папка с текстовыми файлами памяти, правил и скиллов.",
                 kind="dim",
+                wrap=True,
             )
         )
 
@@ -3497,6 +3524,17 @@ class MainWindow(QMainWindow):
 
         self.create_tab.base_ready.connect(self._suggest_import)
         self.create_tab.base_ready.connect(self._suggest_bridge)
+
+        # Перенос строк во всех списках окна. Списков семь, и каждый
+        # создавался в своём месте; пока перенос включали вручную, длинные
+        # описания навыков уезжали за край, а под списком появлялась
+        # горизонтальная полоса. Одна настройка на всё окно надёжнее
+        # семи одинаковых строк в семи местах.
+        self.fitted_lists = ui.fit_lists(central)
+        # Запрет молчаливого сжатия подписей. Qt ужимает кнопку или
+        # флажок на недостающие пиксели и обрезает текст; с этим
+        # ограничением обрезанный текст виден сразу, а не прячется.
+        self.kept_widths = ui.keep_text_width(central)
 
     def _suggest_bridge(self, path: str) -> None:
         """После создания базы предлагает завести мост NCP.

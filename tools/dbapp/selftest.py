@@ -1611,6 +1611,124 @@ def main() -> int:
           "подписи кнопок в подразделах не обрезаны"
           + (": " + ", ".join(cut_buttons) if cut_buttons else ""))
 
+    # ---- 13г. Никакой текст не выходит за пределы своего места
+    #
+    # Qt ужимает кнопку или флажок на недостающие пиксели и не ужимает,
+    # а обрезает надпись. Проверяем на двух ширинах: обычной и на
+    # минимальной, где обрезание и было.
+    #
+    # Считаем по-разному в зависимости от переноса: у подписи с
+    # переносом sizeHint - это ширина одной строки, и сравнение с ним
+    # даёт фантомы по 90 пикселей у текста, который как раз переносится
+    # и прекрасно помещается. Такие подписи сверяем с самым длинным
+    # словом: только оно может не влезть.
+    from PyQt6.QtGui import QFontMetrics  # noqa: E402
+    from PyQt6.QtWidgets import (  # noqa: E402
+        QAbstractButton,
+        QCheckBox,
+        QListWidget,
+        QRadioButton,
+    )
+
+    def too_narrow(root, width: int) -> list:
+        bad = []
+        for w in root.findChildren(QAbstractButton):
+            if not w.isVisible() or not w.text():
+                continue
+            need = QFontMetrics(w.font()).horizontalAdvance(w.text())
+            if isinstance(w, (QCheckBox, QRadioButton)):
+                need += 26
+            if w.width() + 2 < need:
+                bad.append(f"{w.text()!r} на {need - w.width()} px")
+        for lst in root.findChildren(QListWidget):
+            if not lst.isVisible():
+                continue
+            check(lst.wordWrap(), f"список переносит текст ({lst.count()} строк)")
+            check(lst.horizontalScrollBarPolicy()
+                  == Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
+                  "у списка нет горизонтальной полосы")
+        return bad
+
+    window.resize(1180, 880)
+    app.processEvents()
+    check(not too_narrow(window, 1180),
+          "на обычной ширине ничего не обрезано"
+          + (": " + "; ".join(too_narrow(window, 1180))[:160]
+             if too_narrow(window, 1180) else ""))
+    window.resize(1000, 880)
+    app.processEvents()
+    narrow = too_narrow(window, 1000)
+    check(not narrow, "на минимальной ширине ничего не обрезано"
+          + (": " + "; ".join(narrow)[:200] if narrow else ""))
+    check(window.minimumWidth() >= 1000,
+          "окно не открывается уже минимальной ширины: %d"
+          % window.minimumWidth())
+    window.resize(1180, 880)
+    app.processEvents()
+
+    # Подписи с переносом обязаны остаться целыми после смены размера
+    # окна. Человек открывает программу на одной ширине, потом тянет
+    # окно, и на узком текст должен переноситься, а не резаться.
+    from PyQt6.QtCore import QRect as _QRect  # noqa: E402
+    from PyQt6.QtGui import QFontMetrics as _QFM  # noqa: E402
+    from PyQt6.QtWidgets import QLabel as _QLabel  # noqa: E402
+
+    def cut_labels(page) -> list:
+        bad = []
+        for lab in page.findChildren(_QLabel):
+            text = lab.text() or ""
+            if not lab.isVisible() or not text or not lab.wordWrap():
+                continue
+            need = _QFM(lab.font()).boundingRect(
+                _QRect(0, 0, lab.width(), 10_000),
+                int(Qt.TextFlag.TextWordWrap), text).height()
+            if need > lab.height() + 4:
+                bad.append(f"{text[:26]!r} нужно {need}, есть {lab.height()}")
+        return bad
+
+    for width in (1180, 1000, 1400, 1000):
+        window.resize(width, 880)
+        app.processEvents()
+        for index in (2, 4):
+            window.tabs.setCurrentIndex(index)
+            app.processEvents()
+            bad = cut_labels(window.tabs.widget(index))
+            check(not bad,
+                  f"подписи целы при ширине окна {width}, раздел "
+                  f"«{window.tabs.tabText(index)}»"
+                  + (": " + "; ".join(bad[:2]) if bad else ""))
+    window.tabs.setCurrentIndex(0)
+    window.resize(1180, 880)
+    app.processEvents()
+
+    # ---- 13д. Qt не должен сыпать предупреждениями
+    #
+    # Раньше при каждом запуске Qt писал шесть раз: «Negative sizes
+    # (0,-1) are not possible». Нашёлся источник: у ещё не разложенной
+    # страницы sizeHint() равен -1, и он уходил в setMinimumHeight.
+    # Ошибка безвредная, но повторялась и заглушала настоящие
+    # предупреждения - а заглушать их нельзя.
+    from PyQt6.QtCore import qInstallMessageHandler  # noqa: E402
+
+    seen_qt: list[str] = []
+
+    def _collect(mode, context, message) -> None:  # noqa: ANN001 - Qt
+        seen_qt.append(str(message))
+
+    previous = qInstallMessageHandler(_collect)
+    try:
+        fresh = app_main.MainWindow()
+        fresh.show()
+        app.processEvents()
+        fresh.close()
+        app.processEvents()
+    finally:
+        qInstallMessageHandler(previous)
+    negative = [m for m in seen_qt if "Negative sizes" in m]
+    check(not negative,
+          "Qt не пишет про отрицательные размеры при сборке окна"
+          + (": %d сообщений" % len(negative) if negative else ""))
+
     # Высоты: страница равна содержимому, списки не растягиваются.
     for tab, widget, limit in (
         (window.create_tab, window.create_tab.program_list, 220),

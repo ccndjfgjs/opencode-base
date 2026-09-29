@@ -293,6 +293,86 @@ def mono_font(size: int = 13) -> QFont:
     return font
 
 
+def keep_width(widget, extra: int = 8) -> None:
+    """Запретить Qt сжимать элемент под его текст.
+
+    Qt по умолчанию готов ужать флажок или переключатель на недостающие
+    пиксели - и не ужимает, а обрезает надпись. На снимке это выглядит
+    как «текст зашёл за рамку», хотя код верен.
+
+    Здесь элементу задаётся минимальная ширина по его же подписи, и
+    дальше Qt переносит строку или растягивает её, но не режет текст.
+    """
+    from PyQt6.QtGui import QFontMetrics  # noqa: PLC0415 - нужен здесь
+
+    text = widget.text() if hasattr(widget, "text") else ""
+    if not text:
+        return
+    need = QFontMetrics(widget.font()).horizontalAdvance(text)
+    # у флажка и переключателя слева сама кнопка отметки
+    if hasattr(widget, "indicator") or "Check" in type(widget).__name__:
+        need += 26
+    widget.setMinimumWidth(need + extra)
+
+
+def fit_lists(root: QWidget) -> int:
+    """Включить перенос во всех списках окна и запретить сжатие подписей.
+
+    Почему централизованно. Списков в окне семь, и каждый создавался
+    в своём месте со своим набором подписей. Пока перенос включали
+    вручную по одному, длинные описания навыков уезжали за правый край
+    списка, а под ним появлялась горизонтальная полоса. Список,
+    который завтра добавит кто-то ещё, забыл бы то же самое.
+
+    Здесь перенос и запрет горизонтальной полосы ставятся сразу всем
+    спискам внутри окна. Возвращает число настроенных - чтобы вызов
+    можно было проверить, а не поверить.
+    """
+    from PyQt6.QtWidgets import QListWidget  # noqa: PLC0415
+
+    count = 0
+    for lst in root.findChildren(QListWidget):
+        lst.setWordWrap(True)
+        lst.setTextElideMode(Qt.TextElideMode.ElideNone)
+        lst.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        lst.setUniformItemSizes(False)
+        count += 1
+    return count
+
+
+def keep_text_width(root: QWidget) -> int:
+    """Запретить Qt сжимать кнопки, флажки и переключатели под текст.
+
+    Qt по умолчанию ужимает такой элемент на недостающие пиксели и не
+    ужимает, а обрезает надпись. На снимке это выглядит как «текст зашёл
+    за рамку», хотя код верен и ничего не нарушает.
+
+    Флажок Qt переносить не умеет вовсе: white-space в стиле на него не
+    действует, высота остаётся в одну строку. Поэтому длинные подписи
+    приходится сокращать, а здесь мы запрещаем молчаливое сжатие -
+    чтобы обрезанный текст стал виден сразу, а не «где-то что-то
+    обрезано».
+    """
+    from PyQt6.QtGui import QFontMetrics  # noqa: PLC0415
+    from PyQt6.QtWidgets import (  # noqa: PLC0415
+        QAbstractButton,
+        QCheckBox,
+        QRadioButton,
+    )
+
+    count = 0
+    for w in root.findChildren(QAbstractButton):
+        text = w.text()
+        if not text:
+            continue
+        need = QFontMetrics(w.font()).horizontalAdvance(text)
+        if isinstance(w, (QCheckBox, QRadioButton)):
+            need += 26
+        w.setMinimumWidth(need + 6)
+        count += 1
+    return count
+
+
 def line() -> QFrame:
     """Тонкая разделительная линия."""
     frame = QFrame()
