@@ -1449,22 +1449,90 @@ def main() -> int:
     btmp = Path(tempfile.mkdtemp(prefix="ncp_bridge_"))
 
     btab = window.bridge_tab
-    # Шесть вкладок: создание, подключение, мост NCP, opencode, темы и
+    # Шесть разделов: создание, подключение, мост NCP, возможности, темы и
     # инструкция. Раньше вкладки «Инструкция» не было — счётчик стоял на 5.
-    check(window.tabs.count() == 6, f"вкладок в окне: {window.tabs.count()}")
-    check(window.tabs.tabText(0) == "Создать новую базу",
-          f"первая вкладка — «{window.tabs.tabText(0)}»")
-    check(window.tabs.tabText(1) == "Подключить существующую",
-          f"вторая вкладка — «{window.tabs.tabText(1)}»")
-    check(window.tabs.tabText(2) == "Мост NCP — создать",
-          f"третья вкладка — «{window.tabs.tabText(2)}»")
-    check(window.tabs.tabText(3) == "opencode",
-          f"четвёртая вкладка — «{window.tabs.tabText(3)}»")
+    # Названия стали короче: в боковой колонке «Создать новую базу» не
+    # помещалось, и длинная надпись читалась как инструкция, а не как
+    # название раздела.
+    check(window.tabs.count() == 6, f"разделов в окне: {window.tabs.count()}")
+    check(window.tabs.tabText(0) == "Новая база",
+          f"первый раздел — «{window.tabs.tabText(0)}»")
+    check(window.tabs.tabText(1) == "Существующая база",
+          f"второй раздел — «{window.tabs.tabText(1)}»")
+    check(window.tabs.tabText(2) == "Мост NCP",
+          f"третий раздел — «{window.tabs.tabText(2)}»")
+    check(window.tabs.tabText(3) == "Возможности",
+          f"четвёртый раздел — «{window.tabs.tabText(3)}»")
     check(window.tabs.tabText(4) == "Темы",
-          f"пятая вкладка — «{window.tabs.tabText(4)}»")
+          f"пятый раздел — «{window.tabs.tabText(4)}»")
     check(window.tabs.tabText(5) == "Инструкция",
-          f"шестая вкладка — «{window.tabs.tabText(5)}»")
-    check(isinstance(btab, app_main.BridgeTab), "вкладка моста собрана")
+          f"шестой раздел — «{window.tabs.tabText(5)}»")
+    check(isinstance(btab, app_main.BridgeTab), "раздел моста собран")
+
+    # ---- 13а. Боковая навигация вместо вкладок
+    #
+    # Здесь важна не «есть ли панель», а её поведение. Три поломки
+    # находились только на глаз и только живьём:
+    #   - autoExclusive снимал отметку внутри Qt, мимо нашего кода, и
+    #     полоса прежнего раздела оставалась гореть — выглядело так,
+    #     будто выбраны два раздела сразу;
+    #   - клик по уже открытому разделу гасил его own-полосу, и раздел
+    #     был открыт, но не выбран;
+    #   - список и окно отчёта с политикой Expanding забирали в себя
+    #     лишнее место страницы, и внутри групп была пустота.
+    nav = window.nav
+    check(isinstance(nav, app_main.NavStack), "боковая навигация собрана")
+    # Про isVisible(): окно в самопроверке намеренно не показывается, и
+    # isVisible() у любого элемента всегда ложно — проверка ввела бы в
+    # заблуждение. Поэтому смотрим, что колонка не скрыта и достаточно
+    # широка, а живой показ проверяется отдельно, запуском окна.
+    check(not nav.nav.isHidden() and nav.nav.width() >= 180,
+          f"колонка навигации не скрыта и достаточно широка: {nav.nav.width()}")
+
+    def bar_color(item) -> str:
+        for part in item.bar.styleSheet().split(";"):
+            if "background" in part:
+                return part.split(":")[-1].strip()
+        return "?"
+
+    for index in range(nav.count()):
+        nav.setCurrentIndex(index)
+        marked = [i for i, it in enumerate(nav._items) if it.isChecked()]
+        check(marked == [index],
+              f"при выборе «{nav.tabText(index)}» отмечен только он")
+        lit = [i for i, it in enumerate(nav._items)
+               if bar_color(it) != "transparent"]
+        check(lit == [index],
+              f"полоса горит только у «{nav.tabText(index)}»: {lit}")
+        check(bar_color(nav._items[index]) == nav._items[index]._accent,
+              "полоса выбранного в его акценте")
+        check(nav.stack.currentWidget() is nav.widget(index),
+              "содержимое соответствует выбранному разделу")
+
+    # Клик мышью по пункту: раздел открывается, полоса не гаснет.
+    for index in range(nav.count()):
+        nav._items[index].click()
+        check(nav.currentIndex() == index,
+              f"клик по «{nav.tabText(index)}» открыл его")
+        check(nav._items[index].isChecked(),
+              f"после клика «{nav.tabText(index)}» остался отмечен")
+
+    nav.setCurrentIndex(0)
+    # Пункт самопереключаться не должен: отметка — часть оформления.
+    nav._items[0].click()
+    check(nav._items[0].isChecked(),
+          "клик по уже открытому разделу не гасит его полосу")
+
+    # Высоты: страница равна содержимому, списки не растягиваются.
+    for tab, widget, limit in (
+        (window.create_tab, window.create_tab.program_list, 220),
+        (window.create_tab, window.create_tab.log, 220),
+        (window.import_tab, window.import_tab.mine_list, 200),
+        (window.caps_tab, window.caps_tab.caps_skills_list, 260),
+    ):
+        check(widget.height() <= limit,
+              f"{type(tab).__name__}.{widget.objectName() or type(widget).__name__} "
+              f"не растянут: {widget.height()} <= {limit}")
 
     # Образец лежит внутри базы: значит, уедет на любой компьютер вместе
     # с программой. Ничего скачивать из интернета не нужно.

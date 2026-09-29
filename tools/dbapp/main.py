@@ -13,10 +13,13 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import core  # type: ignore[import-not-found]
     import ui  # type: ignore[import-not-found]
+    import ui_nav  # type: ignore[import-not-found]
     import mcp_registry  # type: ignore[import-not-found]
     import opencode_caps  # type: ignore[import-not-found]
 else:  # запуск как модуль
-    from . import core, ui, mcp_registry, opencode_caps
+    from . import core, ui, ui_nav, mcp_registry, opencode_caps
+
+from ui_nav import NavStack
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QFontMetrics
@@ -87,7 +90,14 @@ class ScrollPage(QScrollArea):
         self.refresh_height()
 
     def refresh_height(self) -> None:
-        """Держит минимальную высоту страницы по её содержимому."""
+        """Держит высоту страницы ровно по её содержимому.
+
+        Раньше задавалась только минимальная высота, и лишнее место на
+        высоком окне доезжало до списков и журнала: они растягивались и
+        внутри группы появлялась пустота. Теперь задан и потолок, поэтому
+        страница занимает ровно столько места, сколько нужно, а лишнее
+        остаётся пустым полем окна — там, где человек и не ищет текст.
+        """
         layout = self._inner.layout()
         if layout is None:
             return
@@ -96,6 +106,8 @@ class ScrollPage(QScrollArea):
         value = max(need, hint)
         if self._inner.minimumHeight() != value:
             self._inner.setMinimumHeight(value)
+        if self._inner.maximumHeight() != value:
+            self._inner.setMaximumHeight(value)
 
 
 class Worker(QThread):
@@ -310,7 +322,13 @@ class CreateTab(ScrollPage):
         attach_layout.addWidget(self.attach_check)
 
         self.program_list = QListWidget()
-        self.program_list.setMinimumHeight(150)
+        # Высота по содержимому, а не «сколько останется». С политикой
+        # Expanding список забирал в себя лишнее место страницы, и внутри
+        # группы появлялась пустота в пол-экрана.
+        self.program_list.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        self.program_list.setFixedHeight(150)
         attach_layout.addWidget(self.program_list)
 
         self.program_hint = ui.label("", kind="dim", wrap=True)
@@ -382,7 +400,11 @@ class CreateTab(ScrollPage):
         outer.addLayout(buttons)
 
         self.log = ui.LogView()
-        self.log.setMinimumHeight(170)
+        # Высота своя, лишнее место страницы сюда не затекает
+        self.log.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        self.log.setFixedHeight(170)
         outer.addWidget(self.log)
 
         self._created: Path | None = None
@@ -408,6 +430,20 @@ class CreateTab(ScrollPage):
         outer.activate()
         self.refresh_height()
 
+    def _fit_programs(self) -> None:
+        """Высота списка — по числу строк, но не больше шести.
+
+        Список на две программы высотой в пол-экрана выглядит так, будто
+        там что-то не загрузилось. Шесть строк — предел: дальше список
+        уже пора прокручивать, и это делает колесо мыши.
+        """
+        rows = self.program_list.count()
+        row_h = self.program_list.sizeHintForRow(0) if rows else 34
+        if row_h <= 0:
+            row_h = 34
+        height = min(rows, 6) * row_h + 2 * ui.S2 + 8
+        self.program_list.setFixedHeight(max(90, int(height)))
+
     def _fill_programs(self) -> None:
         from PyQt6.QtGui import QColor
 
@@ -420,8 +456,9 @@ class CreateTab(ScrollPage):
             item = QListWidgetItem(text)
             item.setData(1000, program.ident)
             if not installed:
-                item.setForeground(QColor(ui.TEXT_DIM))
+                item.setForeground(QColor(ui.TEXT_3))
             self.program_list.addItem(item)
+        self._fit_programs()
         # выбираем первую установленную
         for index in range(self.program_list.count()):
             ident = self.program_list.item(index).data(1000)
@@ -447,7 +484,7 @@ class CreateTab(ScrollPage):
             return
         text = f"Куда: {program.config_dir()}. {program.ability_note()}"
         if program.supports_skills:
-            self.program_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
+            self.program_hint.setStyleSheet(f"color: {ui.TEXT_3};")
         else:
             self.program_hint.setStyleSheet(f"color: {ui.WARN};")
             text += " Навыки не переносятся: программа их не читает."
@@ -523,7 +560,7 @@ class CreateTab(ScrollPage):
         self.btn_pick_link.setVisible(own)
 
         if not on:
-            self.link_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
+            self.link_hint.setStyleSheet(f"color: {ui.TEXT_3};")
             self.link_hint.setText("Ярлык создаваться не будет.")
             return
 
@@ -534,7 +571,7 @@ class CreateTab(ScrollPage):
             return
 
         name = self.name_edit.text().strip() or "имя базы"
-        self.link_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
+        self.link_hint.setStyleSheet(f"color: {ui.TEXT_3};")
         self.link_hint.setText(
             f"Появится файл «{core.safe_link_name(name)}.lnk» в папке:\n{where}\n"
             "Двойной щелчок по нему открывает папку базы в Проводнике."
@@ -568,20 +605,28 @@ class CreateTab(ScrollPage):
         try:
             name = core.validate_name(text)
         except core.NameError_ as exc:
-            self.name_edit.setProperty("bad", "true" if text.strip() else "false")
-            self.name_edit.style().unpolish(self.name_edit)
-            self.name_edit.style().polish(self.name_edit)
-            self.name_hint.setText(str(exc).replace("\n", " "))
-            self.name_hint.setStyleSheet(f"color: {ui.ERROR};")
+            # Пустое поле — это не ошибка, а начало работы. Раньше здесь
+            # сразу загоралась красная надпись, и человек, ещё ничего не
+            # сделавший, уже чувствовал, что напортил. Ошибку показываем
+            # только когда в поле реально что-то не так.
+            if not text.strip():
+                self._set_name_bad(False)
+                self.name_hint.setStyleSheet(f"color: {ui.TEXT_3};")
+                self.name_hint.setText(
+                    "Имя станет именем папки. Пробелы и буквы любого языка "
+                    "разрешены; нельзя только  < > : \" / \\ | ? *"
+                )
+            else:
+                self._set_name_bad(True)
+                self.name_hint.setText(str(exc).replace("\n", " "))
+                self.name_hint.setStyleSheet(f"color: {ui.ERROR};")
             self.path_preview.setText("")
             self.btn_create.setEnabled(False)
             self._plan = None
             return
 
-        self.name_edit.setProperty("bad", "false")
-        self.name_edit.style().unpolish(self.name_edit)
-        self.name_edit.style().polish(self.name_edit)
-        self.name_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
+        self._set_name_bad(False)
+        self.name_hint.setStyleSheet(f"color: {ui.TEXT_3};")
         self.name_hint.setText(
             "Имя станет именем папки. Пробелы и буквы любого языка разрешены; "
             "нельзя только  < > : \" / \\ | ? *"
@@ -589,6 +634,15 @@ class CreateTab(ScrollPage):
         self.path_preview.setText(f"База появится здесь:  {Path(parent) / name}")
         self.btn_create.setEnabled(True)
         self._plan = None
+
+    def _set_name_bad(self, bad: bool) -> None:
+        """Покрасить рамку поля: неправильное имя — заметно, но не кричит."""
+        value = "true" if bad else "false"
+        if self.name_edit.property("bad") == value:
+            return
+        self.name_edit.setProperty("bad", value)
+        self.name_edit.style().unpolish(self.name_edit)
+        self.name_edit.style().polish(self.name_edit)
 
     # ---- действия
 
@@ -857,7 +911,11 @@ class ImportTab(ScrollPage):
 
         # --- список баз, созданных этой программой
         self.mine_list = QListWidget()
-        self.mine_list.setMinimumHeight(120)
+        # Высота своя, лишнее место страницы сюда не затекает
+        self.mine_list.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        self.mine_list.setFixedHeight(120)
         self.mine_list.setMaximumHeight(160)
         source_layout.addWidget(
             ui.label("Созданные вами базы — выберите из списка:", kind="dim")
@@ -909,7 +967,11 @@ class ImportTab(ScrollPage):
         box_target = QGroupBox("2. Подключение к OpenCode")
         target_layout = QVBoxLayout(box_target)
         self.target_list = QListWidget()
-        self.target_list.setMinimumHeight(170)
+        # Высота своя, лишнее место страницы сюда не затекает
+        self.target_list.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        self.target_list.setFixedHeight(170)
         target_layout.addWidget(self.target_list)
         self.target_hint = ui.label("", kind="dim", wrap=True)
         target_layout.addWidget(self.target_hint)
@@ -929,7 +991,11 @@ class ImportTab(ScrollPage):
             )
         )
         self.skills_list = QListWidget()
-        self.skills_list.setMinimumHeight(180)
+        # Высота своя, лишнее место страницы сюда не затекает
+        self.skills_list.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        self.skills_list.setFixedHeight(180)
         self.skills_list.setMaximumHeight(230)
         skills_layout.addWidget(self.skills_list)
 
@@ -961,7 +1027,11 @@ class ImportTab(ScrollPage):
         outer.addLayout(buttons)
 
         self.log = ui.LogView()
-        self.log.setMinimumHeight(170)
+        # Высота своя, лишнее место страницы сюда не затекает
+        self.log.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        self.log.setFixedHeight(170)
         outer.addWidget(self.log)
 
         # Слежение за списком подключаем здесь, когда созданы и список,
@@ -1000,7 +1070,7 @@ class ImportTab(ScrollPage):
             item = QListWidgetItem(text)
             item.setData(1000, program.ident)
             if not installed:
-                item.setForeground(QColor(ui.TEXT_DIM))
+                item.setForeground(QColor(ui.TEXT_3))
             self.target_list.addItem(item)
         for index in range(self.target_list.count()):
             ident = self.target_list.item(index).data(1000)
@@ -1037,7 +1107,7 @@ class ImportTab(ScrollPage):
                 "здесь сама."
             )
         else:
-            self.mine_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
+            self.mine_hint.setStyleSheet(f"color: {ui.TEXT_3};")
             self.mine_hint.setText(f"Найдено баз: {len(found)}")
 
     def _fill_mine(self) -> None:
@@ -1069,7 +1139,7 @@ class ImportTab(ScrollPage):
                 "здесь сама, и путь подставится без поисков."
             )
         else:
-            self.mine_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
+            self.mine_hint.setStyleSheet(f"color: {ui.TEXT_3};")
             main_txt = f" Основная сейчас: {main_base.name}." if main_base else ""
             self.mine_hint.setText(
                 f"Найдено баз: {len(entries)}.{main_txt} Выберите одну — путь "
@@ -1340,7 +1410,7 @@ class ImportTab(ScrollPage):
                 Qt.CheckState.Checked if keep else Qt.CheckState.Unchecked
             )
             if not desc:
-                row.setForeground(QColor(ui.TEXT_DIM))
+                row.setForeground(QColor(ui.TEXT_3))
             self.skills_list.addItem(row)
             self._skills_data.append(skill)
 
@@ -1374,19 +1444,19 @@ class ImportTab(ScrollPage):
             raw = self.source_edit.text().strip()
             folder = Path(raw) if raw else None
             if not raw:
-                self.skills_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
+                self.skills_hint.setStyleSheet(f"color: {ui.TEXT_3};")
                 self.skills_hint.setText(
                     "Сначала выберите базу в шаге 1 — здесь появятся "
                     "её навыки."
                 )
             elif folder and (folder / "skills").is_dir():
-                self.skills_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
+                self.skills_hint.setStyleSheet(f"color: {ui.TEXT_3};")
                 self.skills_hint.setText(
                     "В этой базе навыков нет — наполните папку skills, "
                     "и они появятся здесь."
                 )
             else:
-                self.skills_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
+                self.skills_hint.setStyleSheet(f"color: {ui.TEXT_3};")
                 self.skills_hint.setText("Навыков не найдено.")
         elif chosen == total:
             self.skills_hint.setStyleSheet(f"color: {ui.OK};")
@@ -1426,7 +1496,7 @@ class ImportTab(ScrollPage):
             return
         text = f"Куда: {program.config_dir()}. {program.ability_note()}"
         if program.supports_skills:
-            self.target_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
+            self.target_hint.setStyleSheet(f"color: {ui.TEXT_3};")
         else:
             self.target_hint.setStyleSheet(f"color: {ui.WARN};")
             text += " Навыки не переносятся: программа их не читает."
@@ -1634,7 +1704,11 @@ class BridgeTab(ScrollPage):
 
         prog_layout.addWidget(QLabel("Настройки моста — их можно скопировать:"))
         self.snippet = ui.LogView()
-        self.snippet.setMinimumHeight(110)
+        # Высота своя, лишнее место страницы сюда не затекает
+        self.snippet.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        self.snippet.setFixedHeight(110)
         prog_layout.addWidget(self.snippet)
 
         row_save = QHBoxLayout()
@@ -1661,7 +1735,11 @@ class BridgeTab(ScrollPage):
         outer.addLayout(buttons)
 
         self.log = ui.LogView()
-        self.log.setMinimumHeight(170)
+        # Высота своя, лишнее место страницы сюда не затекает
+        self.log.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        self.log.setFixedHeight(170)
         outer.addWidget(self.log)
 
         # Связи — только здесь, когда все элементы уже созданы. Если
@@ -1694,7 +1772,7 @@ class BridgeTab(ScrollPage):
                 self.where_hint.setStyleSheet(f"color: {ui.WARN};")
                 text = status.problem
             else:
-                self.where_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
+                self.where_hint.setStyleSheet(f"color: {ui.TEXT_3};")
                 text = "Папки пока нет — она будет создана при первом создании моста."
             self.where_hint.setText(text)
         else:
@@ -1994,7 +2072,11 @@ class ManualConfigDialog(QDialog):
             '{"mcpServers": {"' + self.server.id + '": {"url": "http://localhost:.../api/mcp",\n'
             '  "headers": {"Authorization": "Bearer ..."}}}}'
         )
-        self.text.setMinimumHeight(110)
+        # Высота своя, лишнее место страницы сюда не затекает
+        self.text.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        self.text.setFixedHeight(110)
         # Моноширинный шрифт, как у окошка лога: конфигурация - это JSON,
         # и в пропорциональном шрифте её структура плохо читается.
         _font = QFont("Consolas")
@@ -2219,7 +2301,11 @@ class CapsTab(ScrollPage):
             )
         )
         self.caps_skills_list = QListWidget()
-        self.caps_skills_list.setMinimumHeight(180)
+        # Высота своя, лишнее место страницы сюда не затекает
+        self.caps_skills_list.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        self.caps_skills_list.setFixedHeight(180)
         self.caps_skills_list.setMaximumHeight(230)
         skills_layout.addWidget(self.caps_skills_list)
 
@@ -2269,7 +2355,11 @@ class CapsTab(ScrollPage):
         self.reg_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.reg_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.reg_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.reg_table.setMinimumHeight(150)
+        # Высота своя, лишнее место страницы сюда не затекает
+        self.reg_table.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        self.reg_table.setFixedHeight(150)
         self.reg_table.setMaximumHeight(190)
         # Ширины заданы явно, потому что Qt по умолчанию распределяет
         # место неудачно: снимок показал обрезанные до «Windo…» имена и
@@ -2293,7 +2383,11 @@ class CapsTab(ScrollPage):
 
         self.reg_detail = QPlainTextEdit()
         self.reg_detail.setReadOnly(True)
-        self.reg_detail.setMinimumHeight(120)
+        # Высота своя, лишнее место страницы сюда не затекает
+        self.reg_detail.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        self.reg_detail.setFixedHeight(120)
         mcp_layout.addWidget(self.reg_detail)
 
         row_mcp = QHBoxLayout()
@@ -2328,7 +2422,11 @@ class CapsTab(ScrollPage):
         outer.addLayout(buttons)
 
         self.log = ui.LogView()
-        self.log.setMinimumHeight(170)
+        # Высота своя, лишнее место страницы сюда не затекает
+        self.log.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        self.log.setFixedHeight(170)
         outer.addWidget(self.log)
 
         # Связи — только здесь, когда все элементы уже созданы.
@@ -2768,7 +2866,7 @@ class CapsTab(ScrollPage):
         total = self.caps_skills_list.count()
         chosen = len(self._chosen_caps_skills())
         if total == 0:
-            self.caps_skills_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
+            self.caps_skills_hint.setStyleSheet(f"color: {ui.TEXT_3};")
             self.caps_skills_hint.setText("В базе навыков нет — нечего ставить.")
         elif chosen == total:
             self.caps_skills_hint.setStyleSheet(f"color: {ui.OK};")
@@ -2780,7 +2878,7 @@ class CapsTab(ScrollPage):
                 "«Убрать» спрячет все навыки программы в _previous-version."
             )
         else:
-            self.caps_skills_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
+            self.caps_skills_hint.setStyleSheet(f"color: {ui.TEXT_3};")
             self.caps_skills_hint.setText(f"Отмечено: {chosen} из {total}.")
 
     def _install_skills(self) -> None:
@@ -2840,7 +2938,7 @@ class CapsTab(ScrollPage):
             self.state_hint.setStyleSheet(f"color: {ui.OK};")
             self.state_hint.setText("Уже стоит:\n- " + "\n- ".join(inside))
         else:
-            self.state_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
+            self.state_hint.setStyleSheet(f"color: {ui.TEXT_3};")
             self.state_hint.setText("Наших возможностей здесь пока нет.")
 
     # ---- выбор папки
@@ -3223,8 +3321,10 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Управление базой")
-        self.setMinimumSize(720, 560)
-        self.resize(880, 900)
+        # Боковая колонка отнимает 214, поэтому окно стало шире прежнего:
+        # раньше 880 делились на шесть вкладок, теперь 220 уходят в меню.
+        self.setMinimumSize(900, 620)
+        self.resize(1180, 880)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -3239,21 +3339,31 @@ class MainWindow(QMainWindow):
             )
         )
 
-        tabs = QTabWidget()
-        self.tabs = tabs
+        nav = NavStack()
+        self.tabs = nav  # имя оставлено: на вкладки ссылается остальной код
+        self.nav = nav
         self.create_tab = CreateTab()
         self.import_tab = ImportTab()
         self.bridge_tab = BridgeTab()
         self.caps_tab = CapsTab()
         self.themes_tab = ThemesTab()
         self.help_tab = HelpTab()
-        tabs.addTab(self.create_tab, "Создать новую базу")
-        tabs.addTab(self.import_tab, "Подключить существующую")
-        tabs.addTab(self.bridge_tab, "Мост NCP — создать")
-        tabs.addTab(self.caps_tab, "opencode")
-        tabs.addTab(self.themes_tab, "Темы")
-        tabs.addTab(self.help_tab, "Инструкция")
-        layout.addWidget(tabs, 1)
+        # Порядок и группировка: сначала то, чем пользуются при настройке
+        # (создать, подключить, мост), потом то, что настраивают один раз
+        # (возможности, оформление), и в конце справка.
+        nav.addPage(self.create_tab, "Новая база",
+                    "создать с нуля", ui.ACCENT, "База")
+        nav.addPage(self.import_tab, "Существующая база",
+                    "подключить готовую", ui.ACCENT, "")
+        nav.addPage(self.bridge_tab, "Мост NCP",
+                    "связь с библиотекой", ui.ACCENT, "")
+        nav.addPage(self.caps_tab, "Возможности",
+                    "скиллы, серверы, память", ui.ACCENT_OPEN, "opencode")
+        nav.addPage(self.themes_tab, "Темы",
+                    "внешний вид и шрифты", ui.ACCENT_LOOK, "Оформление")
+        nav.addPage(self.help_tab, "Инструкция",
+                    "как пользоваться", ui.ACCENT_HELP, "Справка")
+        layout.addWidget(nav, 1)
 
         self.create_tab.base_ready.connect(self._suggest_import)
         self.create_tab.base_ready.connect(self._suggest_bridge)
