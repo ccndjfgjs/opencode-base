@@ -34,14 +34,25 @@ from ui_status import StatusBar
 NAV_WIDTH = 214
 
 
-def nav_qss() -> str:
+def nav_qss(plain: bool = False) -> str:
     """Оформление боковой колонки. Отдельной функцией, чтобы панель
-    не зависела от общей темы и её можно было бы снять одним вызовом."""
+    не зависела от общей темы и её можно было бы снять одним вызовом.
+
+    plain=True — без рамки: так оформляется вложенная колонка подразделов
+    внутри раздела, чтобы не было «колонки в колонке»."""
     return f"""
     QFrame#nav {{
         background: {ui.PANEL};
         border: 1px solid {ui.BORDER};
         border-radius: {ui.R_M}px;
+    }}
+    /* Вложенная колонка подразделов: рамки нет намеренно. Две рамки
+       одна в другой читаются как «колонка в колонке» и съедают
+       внимание; без рамки видно, что это продолжение того же списка. */
+    QFrame#navplain {{
+        background: transparent;
+        border: none;
+        border-radius: 0;
     }}
     QLabel#navgroup {{
         color: {ui.TEXT_3};
@@ -65,6 +76,20 @@ def nav_qss() -> str:
     QToolButton#navitem:checked {{
         background: {ui.PANEL_ALT};
         border-color: {ui.BORDER};
+    }}
+    /* Вложенный пункт: рамки при наведении нет, только смена фона.
+       С рамкой он читается как отдельное окно, а это всё тот же
+       список разделов. */
+    QToolButton#navitem[plain="true"] {{
+        border: none;
+        background: transparent;
+    }}
+    QToolButton#navitem[plain="true"]:hover {{
+        background: {ui.PANEL_ALT};
+    }}
+    QToolButton#navitem[plain="true"]:checked {{
+        background: {ui.PANEL_ALT};
+        border: none;
     }}
     QToolButton#navitem:focus {{ border-color: {ui.ACCENT}; }}
     QLabel#navtitle {{
@@ -94,8 +119,18 @@ class NavItem(QToolButton):
     весь прямоугольник.
     """
 
-    def __init__(self, title: str, subtitle: str, accent: str) -> None:
+    def __init__(
+        self,
+        title: str,
+        subtitle: str,
+        accent: str,
+        plain: bool = False,
+    ) -> None:
         super().__init__()
+        if plain:
+            # у вложенного пункта чуть меньше отступ слева: он стоит
+            # рядом с содержимым, а не является самостоятельным разделом
+            self.setProperty("plain", "true")
         self.setObjectName("navitem")
         self.setCheckable(True)
         # autoExclusive выключен намеренно. Он снимает отметку с прежнего
@@ -173,8 +208,24 @@ class NavStack(QWidget):
 
     page_changed = pyqtSignal(int)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        with_status: bool = True,
+        plain: bool = False,
+    ) -> None:
+        """with_status=False — колонка без панели состояния.
+
+        Нужна для вложенной навигации: внутри раздела «Возможности» есть
+        свои подразделы, и вторая панель состояния с тем же путём и теми
+        же счётчиками была бы просто повтором того, что человек видит
+        слева. Повтор мешает, а не помогает.
+
+        plain=True — без рамки вокруг самой колонки, чтобы вложенный
+        список не читался как «колонка в колонке».
+        """
         super().__init__(parent)
+        self._plain = plain
         self._pages: list[QWidget] = []
         self._titles: list[str] = []
         self._items: list[NavItem] = []
@@ -187,9 +238,9 @@ class NavStack(QWidget):
 
         # --- левая колонка
         self.nav = QFrame()
-        self.nav.setObjectName("nav")
+        self.nav.setObjectName("navplain" if plain else "nav")
         self.nav.setFixedWidth(NAV_WIDTH)
-        self.nav.setStyleSheet(nav_qss())
+        self.nav.setStyleSheet(nav_qss(plain))
         nav_layout = QVBoxLayout(self.nav)
         nav_layout.setContentsMargins(0, 0, 0, 0)
         nav_layout.setSpacing(0)
@@ -213,8 +264,10 @@ class NavStack(QWidget):
 
         # Панель состояния — внизу колонки и всегда на виду: путь,
         # состояние моста и счётчики не должны прятаться в разделах.
-        self.status = StatusBar()
-        nav_layout.addWidget(self.status, 0)
+        self.status = None
+        if with_status:
+            self.status = StatusBar()
+            nav_layout.addWidget(self.status, 0)
         outer.addWidget(self.nav)
 
         # --- полоса акцента между колонкой и содержимым
@@ -252,7 +305,7 @@ class NavStack(QWidget):
         self._titles.append(title)
         self.stack.addWidget(page)
 
-        item = NavItem(title, subtitle, accent)
+        item = NavItem(title, subtitle, accent, plain=self._plain)
         item.clicked.connect(lambda _=False, i=index: self.setCurrentIndex(i))
         self._items_layout.insertWidget(self._items_layout.count() - 1, item)
         self._items.append(item)

@@ -182,6 +182,13 @@ def apply_dark_theme(app) -> None:
             padding: 8px 9px; font-weight: 600;
         }}
 
+        /* --- панель без заголовка: коробка, но без лишней надписи */
+        QWidget#panel {{
+            background: {PANEL};
+            border: 1px solid {BORDER};
+            border-radius: {R_M}px;
+        }}
+
         /* --- группы: рамка одна, она не лепит всё подряд в коробки */
         QGroupBox {{
             border: 1px solid {BORDER}; border-radius: {R_M}px;

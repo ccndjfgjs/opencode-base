@@ -21,7 +21,7 @@ else:  # запуск как модуль
 
 from ui_nav import NavStack
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QFontMetrics
 from PyQt6.QtWidgets import (
     QApplication,
@@ -84,10 +84,30 @@ class ScrollPage(QScrollArea):
         """Пересчитываем нужную высоту при каждом показе вкладки."""
         super().showEvent(event)
         self.refresh_height()
+        self._sync_width()
 
     def resizeEvent(self, event) -> None:  # noqa: D102
         super().resizeEvent(event)
         self.refresh_height()
+        self._sync_width()
+
+    def _sync_width(self) -> None:
+        """Ограничить ширину страницы шириной окна - с задержкой.
+
+        Почему с задержкой. В момент showEvent и resizeEvent вьюпорт ещё
+        не пересчитан: Qt сообщает старую ширину. Если записать её сразу,
+        страница намертво застревает на старой ширине - так и вышло:
+        содержимое сжалось в узкую колонку, а путь обрезался. Отложенный
+        вызов выполняется уже после того, как Qt пересчитал вьюпорт.
+        """
+        QTimer.singleShot(0, self._apply_width)
+
+    def _apply_width(self) -> None:
+        width = self.viewport().width()
+        if width <= 0:
+            return
+        if self._inner.maximumWidth() != width:
+            self._inner.setMaximumWidth(width)
 
     def refresh_height(self) -> None:
         """Держит высоту страницы ровно по её содержимому.
@@ -97,6 +117,9 @@ class ScrollPage(QScrollArea):
         внутри группы появлялась пустота. Теперь задан и потолок, поэтому
         страница занимает ровно столько места, сколько нужно, а лишнее
         остаётся пустым полем окна — там, где человек и не ищет текст.
+
+        Ширину здесь не трогаем: её считает _apply_width, иначе размер
+        записывается до пересчёта вьюпорта и страница застревает.
         """
         layout = self._inner.layout()
         if layout is None:
@@ -406,6 +429,7 @@ class CreateTab(ScrollPage):
         )
         self.log.setFixedHeight(170)
         outer.addWidget(self.log)
+        outer.addStretch(1)
 
         self._created: Path | None = None
 
@@ -2196,9 +2220,69 @@ class CapsTab(ScrollPage):
             )
         )
 
-        # --- шаг 1: что поставить
-        box_what = QGroupBox("1. Что поставить в opencode")
+        # --- подразделы
+        #
+        # Шесть блоков подряд читались как простыня в два экрана. Теперь
+        # внутри раздела своя колонка подразделов, и каждый блок стоит
+        # там, где он нужен. Панели состояния внутри нет намеренно: она
+        # уже есть слева, и вторая мешала бы больше, чем помогала.
+        # plain=True - без рамки вокруг вложенной колонки: с рамкой
+        # она читается как «колонка в колонке» и съедает внимание.
+        self.sub = NavStack(with_status=False, plain=True)
+        self.sub.nav.setFixedWidth(196)
+        outer.addWidget(self.sub, 1)
+
+        sub_what = QWidget()
+        lay_what = QVBoxLayout(sub_what)
+        lay_what.setContentsMargins(0, 0, 0, 0)
+        lay_what.setSpacing(10)
+
+        sub_block = QWidget()
+        lay_block = QVBoxLayout(sub_block)
+        lay_block.setContentsMargins(0, 0, 0, 0)
+        lay_block.setSpacing(10)
+
+        sub_prov = QWidget()
+        lay_prov = QVBoxLayout(sub_prov)
+        lay_prov.setContentsMargins(0, 0, 0, 0)
+        lay_prov.setSpacing(10)
+
+        sub_skills = QWidget()
+        lay_skills = QVBoxLayout(sub_skills)
+        lay_skills.setContentsMargins(0, 0, 0, 0)
+        lay_skills.setSpacing(10)
+
+        sub_mcp = QWidget()
+        lay_mcp = QVBoxLayout(sub_mcp)
+        lay_mcp.setContentsMargins(0, 0, 0, 0)
+        lay_mcp.setSpacing(10)
+
+        self.sub.addPage(sub_what, "Что поставить", "флажки и папка",
+                         ui.ACCENT_OPEN, "")
+        self.sub.addPage(sub_prov, "Провайдеры", "новые пресеты моделей",
+                         ui.ACCENT_OPEN, "")
+        self.sub.addPage(sub_block, "Обход блокировок", "прокси, DNS, ярлык",
+                         ui.ACCENT_OPEN, "")
+        self.sub.addPage(sub_skills, "Навыки", "поштучно или сразу",
+                         ui.ACCENT_OPEN, "")
+        self.sub.addPage(sub_mcp, "Серверы MCP", "из реестра",
+                         ui.ACCENT_OPEN, "")
+
+        # --- что поставить
+        # Заголовка блока нет: подраздел уже называется «Что поставить»,
+        # и вторая такая же надпись прямо под ним читалась как сбой.
+        # Блок сделан панелью, а не группой: рамка без подписи — просто
+        # коробка, а панель читается как содержимое подраздела.
+        box_what = QWidget()
+        box_what.setObjectName("panel")
+        # Панель равна своему содержимому: QStackedWidget задаёт
+        # всем страницам одинаковую высоту, и растянувшаяся панель
+        # расталкивала собственные элементы по вертикали.
+        box_what.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
         what_layout = QVBoxLayout(box_what)
+        what_layout.setContentsMargins(14, 14, 14, 14)
         self.checks: dict[str, QCheckBox] = {}
         for name, _title in opencode_caps.CAPS_CHOICES:
             box = QCheckBox(self.TITLES.get(name, name))
@@ -2213,10 +2297,10 @@ class CapsTab(ScrollPage):
                 )
         except OSError:
             pass
-        outer.addWidget(box_what)
+        lay_what.addWidget(box_what)
 
         # --- шаг 2: куда
-        box_where = QGroupBox("2. Куда ставится")
+        box_where = QGroupBox("Куда ставится")
         where_layout = QVBoxLayout(box_where)
         self.dest_edit = QLineEdit()
         self.dest_edit.setPlaceholderText("Папка настроек opencode")
@@ -2232,15 +2316,19 @@ class CapsTab(ScrollPage):
         row.addWidget(btn_pick_dest)
         where_layout.addLayout(row)
         self.state_hint = ui.label("", kind="dim", wrap=True)
+        # Подпись в этом окне печатает цвет по частям: заголовок «Уже
+        # стоит» зелёный, перечень под ним серый. Поэтому разметка
+        # внутри текста, а не цветом всей подписи.
+        self.state_hint.setTextFormat(Qt.TextFormat.RichText)
         where_layout.addWidget(self.state_hint)
-        outer.addWidget(box_where)
+        lay_what.addWidget(box_where)
+        lay_what.addStretch(1)
 
-        # --- шаг 3: провайдеры моделей (новых пресетов)
-        box_prov = QGroupBox("3. Провайдеры моделей (новые пресеты)")
+        # --- провайдеры моделей (новых пресетов)
+        box_prov = QGroupBox("Провайдеры, которых нет в opencode")
         prov_layout = QVBoxLayout(box_prov)
         prov_layout.addWidget(
             ui.label(
-                "Провайдеры, которых нет среди встроенных в opencode. "
                 "Ключи не спрашиваем и не храним: задай их сам через "
                 "/connect в opencode или переменными окружения.",
                 kind="dim",
@@ -2253,16 +2341,18 @@ class CapsTab(ScrollPage):
             box.setChecked(False)
             prov_layout.addWidget(box)
             self.pchecks[name] = box
-        outer.addWidget(box_prov)
+        lay_prov.addWidget(box_prov)
+        lay_prov.addStretch(1)
 
         # --- шаг 4: обход блокировок — состав набора
-        box_ab = QGroupBox("4. Обход блокировок — что именно поставить")
+        box_ab = QGroupBox("Что именно поставить")
         ab_layout = QVBoxLayout(box_ab)
         ab_layout.addWidget(
             ui.label(
-                "Работает только вместе с галочкой «Обход блокировок» выше. "
-                "Прокси отдаётся только запущенному через ярлык OpenCode, "
-                "остальные программы идут напрямую.",
+                "Работает только вместе с галочкой «Обход блокировок» — она "
+                "в подразделе «Что поставить». Прокси отдаётся только "
+                "запущенному через ярлык OpenCode, остальные программы идут "
+                "напрямую.",
                 kind="dim",
                 wrap=True,
             )
@@ -2286,21 +2376,42 @@ class CapsTab(ScrollPage):
         row_ab.addWidget(self.btn_ab_dns)
         row_ab.addStretch(1)
         ab_layout.addLayout(row_ab)
-        outer.addWidget(box_ab)
+        lay_block.addWidget(box_ab)
+        lay_block.addStretch(1)
 
-        # --- шаг 5: навыки поштучно
-        box_skills = QGroupBox("5. Навыки — какие поставить в opencode")
+        # --- навыки поштучно
+        # Заголовка группы нет: подраздел уже называется «Навыки», и ещё
+        # одна надпись сверху не добавляла смысла, а съедала высоту.
+        box_skills = QWidget()
+        box_skills.setObjectName("panel")
+        # Панель равна своему содержимому: QStackedWidget задаёт
+        # всем страницам одинаковую высоту, и растянувшаяся панель
+        # расталкивала собственные элементы по вертикали.
+        box_skills.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
         skills_layout = QVBoxLayout(box_skills)
+        skills_layout.setContentsMargins(14, 14, 14, 14)
         skills_layout.addWidget(
             ui.label(
-                "Отметь нужные: отмеченные скопируются целиком, неотмеченные "
-                "уйдут в _previous-version — выбор всегда можно переиграть. "
-                "После установки перезапусти opencode.",
+                "Отметь нужные: отмеченные скопируются целиком, "
+                "неотмеченные уйдут в _previous-version — выбор можно "
+                "переиграть. После установки перезапусти opencode.",
                 kind="dim",
                 wrap=True,
             )
         )
         self.caps_skills_list = QListWidget()
+        # Описания навыков длинные, а список узкий. Раньше они
+        # обрезались по краю и под списком появлялась горизонтальная
+        # полоса прокрутки: читать приходилось, перемотанное вбок.
+        # Теперь текст переносится по словам, а полосы нет вовсе.
+        self.caps_skills_list.setWordWrap(True)
+        self.caps_skills_list.setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.caps_skills_list.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.caps_skills_list.setUniformItemSizes(False)
         # Высота своя, лишнее место страницы сюда не затекает
         self.caps_skills_list.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
@@ -2310,11 +2421,17 @@ class CapsTab(ScrollPage):
         skills_layout.addWidget(self.caps_skills_list)
 
         row_skills = QHBoxLayout()
+        # Подписи короткие, полные - в подсказках. Пять длинных кнопок
+        # в ряд не помещались: Qt не сжимает их, а обрезает по краю, и
+        # на снимке было «ставить отмеченн» и «брать отмеченны».
         self.btn_skills_all = QPushButton("Отметить все")
         self.btn_skills_none = QPushButton("Снять все")
-        self.btn_skills_reload = QPushButton("Обновить список")
-        self.btn_skills_put = QPushButton("Поставить отмеченные")
-        self.btn_skills_drop = QPushButton("Убрать отмеченные")
+        self.btn_skills_reload = QPushButton("Обновить")
+        self.btn_skills_put = QPushButton("Поставить")
+        self.btn_skills_drop = QPushButton("Убрать")
+        self.btn_skills_reload.setToolTip("Перечитать список навыков")
+        self.btn_skills_put.setToolTip("Скопировать отмеченные навыки в opencode")
+        self.btn_skills_drop.setToolTip("Убрать отмеченные навыки из opencode")
         row_skills.addWidget(self.btn_skills_all)
         row_skills.addWidget(self.btn_skills_none)
         row_skills.addWidget(self.btn_skills_reload)
@@ -2325,10 +2442,11 @@ class CapsTab(ScrollPage):
 
         self.caps_skills_hint = ui.label("", kind="dim", wrap=True)
         skills_layout.addWidget(self.caps_skills_hint)
-        outer.addWidget(box_skills)
+        lay_skills.addWidget(box_skills)
+        lay_skills.addStretch(1)
 
         # --- шаг 6. Серверы MCP из реестра
-        box_mcp = QGroupBox("6. Серверы MCP — что можно включить")
+        box_mcp = QGroupBox("Серверы из реестра")
         mcp_layout = QVBoxLayout(box_mcp)
         mcp_layout.addWidget(
             ui.label(
@@ -2404,7 +2522,8 @@ class CapsTab(ScrollPage):
 
         self.reg_hint = ui.label("", kind="dim", wrap=True)
         mcp_layout.addWidget(self.reg_hint)
-        outer.addWidget(box_mcp)
+        lay_mcp.addWidget(box_mcp)
+        lay_mcp.addStretch(1)
 
         # --- кнопки
         buttons = QHBoxLayout()
@@ -2935,11 +3054,22 @@ class CapsTab(ScrollPage):
         inside += [title for name, (title, _k, _b) in opencode_caps.PROVIDER_PRESETS.items()
                    if pstatus.get(name)]
         if inside:
-            self.state_hint.setStyleSheet(f"color: {ui.OK};")
-            self.state_hint.setText("Уже стоит:\n- " + "\n- ".join(inside))
+            # Зелёным - только заголовок, а не весь перечень. Раньше
+            # зелёным был весь список, и зелёный переставал значить
+            # «всё в порядке»: им был залит обычный перечень из шести
+            # строк, и глаз перестал замечать зелёный в этом окне.
+            items = "<br>".join(
+                f'<span style="color:{ui.TEXT_3};">- {t}</span>'
+                for t in inside
+            )
+            self.state_hint.setText(
+                f'<span style="color:{ui.OK};">Уже стоит:</span><br>{items}'
+            )
         else:
-            self.state_hint.setStyleSheet(f"color: {ui.TEXT_3};")
-            self.state_hint.setText("Наших возможностей здесь пока нет.")
+            self.state_hint.setText(
+                f'<span style="color:{ui.TEXT_3};">'
+                "Наших возможностей здесь пока нет.</span>"
+            )
 
     # ---- выбор папки
 

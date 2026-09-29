@@ -1562,6 +1562,55 @@ def main() -> int:
           and bar.size_label.text().endswith(("Б", "КБ", "МБ", "ГБ")),
           "размер с единицей измерения: %s" % bar.size_label.text())
 
+    # ---- 13в. Подразделы внутри «Возможностей» и непроглоченные тексты
+    #
+    # Qt не сжимает элемент под текст, а обрезает. На снимках это
+    # выглядело как «ставить отмеченн», «проверяе» и обрезанные пути:
+    # три разные поломки одного класса, и все три нашлись только
+    # глазами. Здесь они ловятся измерением.
+    #
+    # Импорт Qt именно здесь и до первого обращения: Python считает
+    # переменную локальной для всей функции с момента импорта, и стоит
+    # поставить его ниже первого использования, как было, - выходит
+    # UnboundLocalError на пустом месте.
+    from PyQt6.QtCore import Qt  # noqa: E402
+
+    sub = window.caps_tab.sub
+    check(isinstance(sub, app_main.NavStack), "колонка подразделов собрана")
+    check(sub.count() == 5, "подразделов внутри раздела: %d" % sub.count())
+    check(sub.status is None,
+          "внутри раздела нет второй панели состояния")
+    check(sub.nav.objectName() == "navplain",
+          "вложенная колонка без рамки: %s" % sub.nav.objectName())
+    check(window.caps_tab.caps_skills_list.wordWrap(),
+          "описания навыков переносятся, а не обрезаются")
+    check(window.caps_tab.caps_skills_list.horizontalScrollBarPolicy()
+          == Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
+          "под списком навыков нет горизонтальной полосы")
+
+    for index in range(sub.count()):
+        sub.setCurrentIndex(index)
+        marked = [i for i, it in enumerate(sub._items) if it.isChecked()]
+        check(marked == [index],
+              f"подраздел «{sub.tabText(index)}» отмечен один")
+        check(sub.stack.currentWidget() is sub.widget(index),
+              f"содержимое «{sub.tabText(index)}» на месте")
+
+    # Проверка на обрезанный текст: у каждой кнопки и каждой подписи
+    # с переносом ширина должна быть не меньше нужной.
+    from PyQt6.QtWidgets import QPushButton as _PB  # noqa: E402
+
+    cut_buttons = []
+    for index in range(sub.count()):
+        sub.setCurrentIndex(index)
+        for b in sub.widget(index).findChildren(_PB):
+            if b.width() + 2 < b.sizeHint().width():
+                cut_buttons.append(f"{b.text()} ({b.width()}"
+                                   f" из {b.sizeHint().width()})")
+    check(not cut_buttons,
+          "подписи кнопок в подразделах не обрезаны"
+          + (": " + ", ".join(cut_buttons) if cut_buttons else ""))
+
     # Высоты: страница равна содержимому, списки не растягиваются.
     for tab, widget, limit in (
         (window.create_tab, window.create_tab.program_list, 220),
