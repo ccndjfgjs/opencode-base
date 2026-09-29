@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
 )
 
 import ui
+from ui_status import StatusBar
 
 NAV_WIDTH = 214
 
@@ -208,7 +209,12 @@ class NavStack(QWidget):
         self._items_layout.setSpacing(2)
         self._items_layout.addStretch(1)
         self._scroll.setWidget(self._items_box)
-        nav_layout.addWidget(self._scroll)
+        nav_layout.addWidget(self._scroll, 1)
+
+        # Панель состояния — внизу колонки и всегда на виду: путь,
+        # состояние моста и счётчики не должны прятаться в разделах.
+        self.status = StatusBar()
+        nav_layout.addWidget(self.status, 0)
         outer.addWidget(self.nav)
 
         # --- полоса акцента между колонкой и содержимым

@@ -96,7 +96,7 @@ def apply_dark_theme(app) -> None:
     app.setStyleSheet(
         f"""
         QWidget {{
-            font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif;
+            font-family: "Segoe UI", "Segoe UI Variable Text", sans-serif;
             font-size: 14px;
             color: {TEXT};
         }}
@@ -225,7 +225,7 @@ def apply_dark_theme(app) -> None:
 
         /* --- четыре уровня текста вместо двух */
         QLabel#h1 {{
-            font-family: "Segoe UI Variable Display", "Segoe UI", sans-serif;
+            font-family: "Segoe UI Semibold", "Segoe UI", sans-serif;
             font-size: 22px; font-weight: 600; color: {TEXT};
         }}
         QLabel#h2 {{
@@ -262,12 +262,17 @@ def apply_dark_theme(app) -> None:
 
 
 def app_font() -> QFont:
-    """Шрифт окна: системный, с моноширинными цифрами.
+    """Шрифт окна: обычный системный, с моноширинными цифрами.
 
     Моноширинные цифры нужны в столбцах чисел - иначе единицы и
     восьмёрки разной ширины и столбец «танцует».
+
+    Почему именно «Segoe UI», а не «Segoe UI Variable Text». Второго
+    шрифта в системе нет, и Qt молча подставлял вместо него другой -
+    имя в коде врало, а как именно подставится, зависело от версии
+    Qt. Имя берём настоящее: есть - значит, отображается как заказано.
     """
-    font = QFont("Segoe UI Variable Text")
+    font = QFont("Segoe UI")
     font.setStyleHint(QFont.StyleHint.SansSerif)
     font.setPointSizeF(10.5)
     return font

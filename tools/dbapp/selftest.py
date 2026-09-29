@@ -1523,6 +1523,45 @@ def main() -> int:
     check(nav._items[0].isChecked(),
           "клик по уже открытому разделу не гасит его полосу")
 
+    # ---- 13б. Панель состояния
+    #
+    # Панель врёт легче, чем что-либо в окне: она обязана совпадать с
+    # тем, что core говорит по-настоящему. Проверяем числа, а не вид.
+    bar = nav.status
+    check(bar.state_label.text() != "проверяю…",
+          "состояние панели определено: «%s»" % bar.state_label.text())
+    live = core.current_base()
+    if live is not None:
+        info = core.base_info(live)
+        check(bar.skills_label.text() == "скиллы: %d" % info["skills"],
+              "счётчик скиллов совпадает с базой: %s" % bar.skills_label.text())
+        check(live.name in bar.path_label.text()
+              or str(live) in bar.path_label.text(),
+              "путь в панели указывает на основную базу: %s"
+              % bar.path_label.text())
+        lib = core.library_dir(live)
+        want_notes = (sum(1 for p in lib.iterdir() if p.is_dir())
+                      if lib.is_dir() else 0)
+        check(bar.notes_label.text() == "записи: %d" % want_notes,
+              "счётчик записей совпадает с библиотекой: %s"
+              % bar.notes_label.text())
+    else:
+        check(bar.state_label.text() == "база не подключена",
+              "без базы панель говорит об этом прямо")
+    # Моста нет - панель обязана это признать, а не молчать.
+    if not core.find_bridges():
+        check(bar.state_label.text() == "мост не создан",
+              "без моста панель говорит прямо: %s" % bar.state_label.text())
+    check(bar._anim is not None,
+          "точка дышит: анимация запущена даже когда моста нет")
+    bar.set_pulse(False)
+    check(bar._anim is None, "пульс выключается по требованию")
+    bar.set_pulse(True)
+    check(bar._anim is not None, "пульс включается обратно")
+    check(bar.size_label.text().startswith("размер: ")
+          and bar.size_label.text().endswith(("Б", "КБ", "МБ", "ГБ")),
+          "размер с единицей измерения: %s" % bar.size_label.text())
+
     # Высоты: страница равна содержимому, списки не растягиваются.
     for tab, widget, limit in (
         (window.create_tab, window.create_tab.program_list, 220),
