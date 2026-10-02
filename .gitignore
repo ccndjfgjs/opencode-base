@@ -47,3 +47,16 @@ projects/
 библиотека/АКТИВНАЯ-ПАМЯТЬ.md
 библиотека/КАТАЛОГ.md
 библиотека/index.json
+
+# Личное и секретное: отпечаток железа, пароль прокси,
+# конфигурация VPN, кэш и база. Репозиторий публичный,
+# а внутри отсюда на весь мир: идентификатор железа и пароль
+# оттуда уже не возвратить.
+config/.secrets/
+config/cache/
+config/data/
+config/device_id
+config/hwid
+config/preferences.json
+config/*.db
+config/*.log

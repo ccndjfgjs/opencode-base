@@ -6,6 +6,9 @@
 
 from __future__ import annotations
 
+import getpass
+import json
+import os
 import sys
 from pathlib import Path
 
@@ -13,15 +16,14 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import core  # type: ignore[import-not-found]
     import ui  # type: ignore[import-not-found]
-    import ui_nav  # type: ignore[import-not-found]
     import mcp_registry  # type: ignore[import-not-found]
     import opencode_caps  # type: ignore[import-not-found]
+    import android_studio  # type: ignore[import-not-found]
+    import bridges  # type: ignore[import-not-found]
 else:  # запуск как модуль
-    from . import core, ui, ui_nav, mcp_registry, opencode_caps
+    from . import core, ui, mcp_registry, opencode_caps, android_studio, bridges
 
-from ui_nav import NavStack
-
-from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QFontMetrics
 from PyQt6.QtWidgets import (
     QApplication,
@@ -74,13 +76,7 @@ class ScrollPage(QScrollArea):
         inner.setAutoFillBackground(False)
         # страницу запрещаем сжимать: её высота — это её настоящая высота.
         # Иначе Qt подгоняет её под окно и рисует элементы друг поверх друга.
-        #
-        # Высота берётся не раньше нуля. У страницы, элементы которой
-        # ещё не разложены, sizeHint() равен -1, и Qt на каждый раз
-        # писал в служебный вывод: «Negative sizes (0,-1) are not
-        # possible». Ошибка безвредная, но шумная: она повторялась при
-        # каждом запуске и заглушала настоящие предупреждения.
-        inner.setMinimumHeight(max(0, inner.sizeHint().height()))
+        inner.setMinimumHeight(inner.sizeHint().height())
         inner.setSizePolicy(
             QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
         )
@@ -90,43 +86,13 @@ class ScrollPage(QScrollArea):
         """Пересчитываем нужную высоту при каждом показе вкладки."""
         super().showEvent(event)
         self.refresh_height()
-        self._sync_width()
 
     def resizeEvent(self, event) -> None:  # noqa: D102
         super().resizeEvent(event)
         self.refresh_height()
-        self._sync_width()
-
-    def _sync_width(self) -> None:
-        """Ограничить ширину страницы шириной окна - с задержкой.
-
-        Почему с задержкой. В момент showEvent и resizeEvent вьюпорт ещё
-        не пересчитан: Qt сообщает старую ширину. Если записать её сразу,
-        страница намертво застревает на старой ширине - так и вышло:
-        содержимое сжалось в узкую колонку, а путь обрезался. Отложенный
-        вызов выполняется уже после того, как Qt пересчитал вьюпорт.
-        """
-        QTimer.singleShot(0, self._apply_width)
-
-    def _apply_width(self) -> None:
-        width = self.viewport().width()
-        if width <= 0:
-            return
-        if self._inner.maximumWidth() != width:
-            self._inner.setMaximumWidth(width)
 
     def refresh_height(self) -> None:
-        """Держит высоту страницы ровно по её содержимому.
-
-        Раньше задавалась только минимальная высота, и лишнее место на
-        высоком окне доезжало до списков и журнала: они растягивались и
-        внутри группы появлялась пустота. Теперь задан и потолок, поэтому
-        страница занимает ровно столько места, сколько нужно, а лишнее
-        остаётся пустым полем окна — там, где человек и не ищет текст.
-
-        Ширину здесь не трогаем: её считает _apply_width, иначе размер
-        записывается до пересчёта вьюпорта и страница застревает.
-        """
+        """Держит минимальную высоту страницы по её содержимому."""
         layout = self._inner.layout()
         if layout is None:
             return
@@ -135,8 +101,6 @@ class ScrollPage(QScrollArea):
         value = max(need, hint)
         if self._inner.minimumHeight() != value:
             self._inner.setMinimumHeight(value)
-        if self._inner.maximumHeight() != value:
-            self._inner.setMaximumHeight(value)
 
 
 class Worker(QThread):
@@ -273,10 +237,10 @@ class CreateTab(ScrollPage):
 
         # Решение человека о чувствительных данных. По умолчанию
         # выключено: без прямой просьбы секретное не пишется.
-        # Подпись сокращена: флажок в Qt не переносит текст, а длинная
-        # подпись обрезалась по краю окна. Пояснение ушло в подсказку
-        # под флажком - там оно и должно быть.
-        self.chk_sensitive = QCheckBox("Разрешить пароли и ключи в этой базе")
+        self.chk_sensitive = QCheckBox(
+            "Разрешить в этой базе пароли и ключи "
+            "(иначе нейросеть откажется их записывать)"
+        )
         self.chk_sensitive.setToolTip(
             "Сними галочку — нейросеть не будет записывать пароли, ключи "
             "и токены даже по просьбе, а предложит хранилище. "
@@ -351,13 +315,7 @@ class CreateTab(ScrollPage):
         attach_layout.addWidget(self.attach_check)
 
         self.program_list = QListWidget()
-        # Высота по содержимому, а не «сколько останется». С политикой
-        # Expanding список забирал в себя лишнее место страницы, и внутри
-        # группы появлялась пустота в пол-экрана.
-        self.program_list.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
-        self.program_list.setFixedHeight(150)
+        self.program_list.setMinimumHeight(150)
         attach_layout.addWidget(self.program_list)
 
         self.program_hint = ui.label("", kind="dim", wrap=True)
@@ -429,13 +387,8 @@ class CreateTab(ScrollPage):
         outer.addLayout(buttons)
 
         self.log = ui.LogView()
-        # Высота своя, лишнее место страницы сюда не затекает
-        self.log.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
-        self.log.setFixedHeight(170)
+        self.log.setMinimumHeight(170)
         outer.addWidget(self.log)
-        outer.addStretch(1)
 
         self._created: Path | None = None
 
@@ -460,20 +413,6 @@ class CreateTab(ScrollPage):
         outer.activate()
         self.refresh_height()
 
-    def _fit_programs(self) -> None:
-        """Высота списка — по числу строк, но не больше шести.
-
-        Список на две программы высотой в пол-экрана выглядит так, будто
-        там что-то не загрузилось. Шесть строк — предел: дальше список
-        уже пора прокручивать, и это делает колесо мыши.
-        """
-        rows = self.program_list.count()
-        row_h = self.program_list.sizeHintForRow(0) if rows else 34
-        if row_h <= 0:
-            row_h = 34
-        height = min(rows, 6) * row_h + 2 * ui.S2 + 8
-        self.program_list.setFixedHeight(max(90, int(height)))
-
     def _fill_programs(self) -> None:
         from PyQt6.QtGui import QColor
 
@@ -486,9 +425,8 @@ class CreateTab(ScrollPage):
             item = QListWidgetItem(text)
             item.setData(1000, program.ident)
             if not installed:
-                item.setForeground(QColor(ui.TEXT_3))
+                item.setForeground(QColor(ui.TEXT_DIM))
             self.program_list.addItem(item)
-        self._fit_programs()
         # выбираем первую установленную
         for index in range(self.program_list.count()):
             ident = self.program_list.item(index).data(1000)
@@ -514,7 +452,7 @@ class CreateTab(ScrollPage):
             return
         text = f"Куда: {program.config_dir()}. {program.ability_note()}"
         if program.supports_skills:
-            self.program_hint.setStyleSheet(f"color: {ui.TEXT_3};")
+            self.program_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
         else:
             self.program_hint.setStyleSheet(f"color: {ui.WARN};")
             text += " Навыки не переносятся: программа их не читает."
@@ -590,7 +528,7 @@ class CreateTab(ScrollPage):
         self.btn_pick_link.setVisible(own)
 
         if not on:
-            self.link_hint.setStyleSheet(f"color: {ui.TEXT_3};")
+            self.link_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
             self.link_hint.setText("Ярлык создаваться не будет.")
             return
 
@@ -601,7 +539,7 @@ class CreateTab(ScrollPage):
             return
 
         name = self.name_edit.text().strip() or "имя базы"
-        self.link_hint.setStyleSheet(f"color: {ui.TEXT_3};")
+        self.link_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
         self.link_hint.setText(
             f"Появится файл «{core.safe_link_name(name)}.lnk» в папке:\n{where}\n"
             "Двойной щелчок по нему открывает папку базы в Проводнике."
@@ -635,28 +573,20 @@ class CreateTab(ScrollPage):
         try:
             name = core.validate_name(text)
         except core.NameError_ as exc:
-            # Пустое поле — это не ошибка, а начало работы. Раньше здесь
-            # сразу загоралась красная надпись, и человек, ещё ничего не
-            # сделавший, уже чувствовал, что напортил. Ошибку показываем
-            # только когда в поле реально что-то не так.
-            if not text.strip():
-                self._set_name_bad(False)
-                self.name_hint.setStyleSheet(f"color: {ui.TEXT_3};")
-                self.name_hint.setText(
-                    "Имя станет именем папки. Пробелы и буквы любого языка "
-                    "разрешены; нельзя только  < > : \" / \\ | ? *"
-                )
-            else:
-                self._set_name_bad(True)
-                self.name_hint.setText(str(exc).replace("\n", " "))
-                self.name_hint.setStyleSheet(f"color: {ui.ERROR};")
+            self.name_edit.setProperty("bad", "true" if text.strip() else "false")
+            self.name_edit.style().unpolish(self.name_edit)
+            self.name_edit.style().polish(self.name_edit)
+            self.name_hint.setText(str(exc).replace("\n", " "))
+            self.name_hint.setStyleSheet(f"color: {ui.ERROR};")
             self.path_preview.setText("")
             self.btn_create.setEnabled(False)
             self._plan = None
             return
 
-        self._set_name_bad(False)
-        self.name_hint.setStyleSheet(f"color: {ui.TEXT_3};")
+        self.name_edit.setProperty("bad", "false")
+        self.name_edit.style().unpolish(self.name_edit)
+        self.name_edit.style().polish(self.name_edit)
+        self.name_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
         self.name_hint.setText(
             "Имя станет именем папки. Пробелы и буквы любого языка разрешены; "
             "нельзя только  < > : \" / \\ | ? *"
@@ -664,15 +594,6 @@ class CreateTab(ScrollPage):
         self.path_preview.setText(f"База появится здесь:  {Path(parent) / name}")
         self.btn_create.setEnabled(True)
         self._plan = None
-
-    def _set_name_bad(self, bad: bool) -> None:
-        """Покрасить рамку поля: неправильное имя — заметно, но не кричит."""
-        value = "true" if bad else "false"
-        if self.name_edit.property("bad") == value:
-            return
-        self.name_edit.setProperty("bad", value)
-        self.name_edit.style().unpolish(self.name_edit)
-        self.name_edit.style().polish(self.name_edit)
 
     # ---- действия
 
@@ -941,11 +862,7 @@ class ImportTab(ScrollPage):
 
         # --- список баз, созданных этой программой
         self.mine_list = QListWidget()
-        # Высота своя, лишнее место страницы сюда не затекает
-        self.mine_list.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
-        self.mine_list.setFixedHeight(120)
+        self.mine_list.setMinimumHeight(120)
         self.mine_list.setMaximumHeight(160)
         source_layout.addWidget(
             ui.label("Созданные вами базы — выберите из списка:", kind="dim")
@@ -997,11 +914,7 @@ class ImportTab(ScrollPage):
         box_target = QGroupBox("2. Подключение к OpenCode")
         target_layout = QVBoxLayout(box_target)
         self.target_list = QListWidget()
-        # Высота своя, лишнее место страницы сюда не затекает
-        self.target_list.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
-        self.target_list.setFixedHeight(170)
+        self.target_list.setMinimumHeight(170)
         target_layout.addWidget(self.target_list)
         self.target_hint = ui.label("", kind="dim", wrap=True)
         target_layout.addWidget(self.target_hint)
@@ -1021,11 +934,7 @@ class ImportTab(ScrollPage):
             )
         )
         self.skills_list = QListWidget()
-        # Высота своя, лишнее место страницы сюда не затекает
-        self.skills_list.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
-        self.skills_list.setFixedHeight(180)
+        self.skills_list.setMinimumHeight(180)
         self.skills_list.setMaximumHeight(230)
         skills_layout.addWidget(self.skills_list)
 
@@ -1057,11 +966,7 @@ class ImportTab(ScrollPage):
         outer.addLayout(buttons)
 
         self.log = ui.LogView()
-        # Высота своя, лишнее место страницы сюда не затекает
-        self.log.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
-        self.log.setFixedHeight(170)
+        self.log.setMinimumHeight(170)
         outer.addWidget(self.log)
 
         # Слежение за списком подключаем здесь, когда созданы и список,
@@ -1100,7 +1005,7 @@ class ImportTab(ScrollPage):
             item = QListWidgetItem(text)
             item.setData(1000, program.ident)
             if not installed:
-                item.setForeground(QColor(ui.TEXT_3))
+                item.setForeground(QColor(ui.TEXT_DIM))
             self.target_list.addItem(item)
         for index in range(self.target_list.count()):
             ident = self.target_list.item(index).data(1000)
@@ -1137,7 +1042,7 @@ class ImportTab(ScrollPage):
                 "здесь сама."
             )
         else:
-            self.mine_hint.setStyleSheet(f"color: {ui.TEXT_3};")
+            self.mine_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
             self.mine_hint.setText(f"Найдено баз: {len(found)}")
 
     def _fill_mine(self) -> None:
@@ -1169,7 +1074,7 @@ class ImportTab(ScrollPage):
                 "здесь сама, и путь подставится без поисков."
             )
         else:
-            self.mine_hint.setStyleSheet(f"color: {ui.TEXT_3};")
+            self.mine_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
             main_txt = f" Основная сейчас: {main_base.name}." if main_base else ""
             self.mine_hint.setText(
                 f"Найдено баз: {len(entries)}.{main_txt} Выберите одну — путь "
@@ -1440,7 +1345,7 @@ class ImportTab(ScrollPage):
                 Qt.CheckState.Checked if keep else Qt.CheckState.Unchecked
             )
             if not desc:
-                row.setForeground(QColor(ui.TEXT_3))
+                row.setForeground(QColor(ui.TEXT_DIM))
             self.skills_list.addItem(row)
             self._skills_data.append(skill)
 
@@ -1474,19 +1379,19 @@ class ImportTab(ScrollPage):
             raw = self.source_edit.text().strip()
             folder = Path(raw) if raw else None
             if not raw:
-                self.skills_hint.setStyleSheet(f"color: {ui.TEXT_3};")
+                self.skills_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
                 self.skills_hint.setText(
                     "Сначала выберите базу в шаге 1 — здесь появятся "
                     "её навыки."
                 )
             elif folder and (folder / "skills").is_dir():
-                self.skills_hint.setStyleSheet(f"color: {ui.TEXT_3};")
+                self.skills_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
                 self.skills_hint.setText(
                     "В этой базе навыков нет — наполните папку skills, "
                     "и они появятся здесь."
                 )
             else:
-                self.skills_hint.setStyleSheet(f"color: {ui.TEXT_3};")
+                self.skills_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
                 self.skills_hint.setText("Навыков не найдено.")
         elif chosen == total:
             self.skills_hint.setStyleSheet(f"color: {ui.OK};")
@@ -1526,7 +1431,7 @@ class ImportTab(ScrollPage):
             return
         text = f"Куда: {program.config_dir()}. {program.ability_note()}"
         if program.supports_skills:
-            self.target_hint.setStyleSheet(f"color: {ui.TEXT_3};")
+            self.target_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
         else:
             self.target_hint.setStyleSheet(f"color: {ui.WARN};")
             text += " Навыки не переносятся: программа их не читает."
@@ -1719,35 +1624,22 @@ class BridgeTab(ScrollPage):
             )
         )
 
-        # Подписи короче, а подпись «Показать настройки» убрана из ряда:
-        # три элемента в одну строку не помещались, Qt сжимал переключатели
-        # и обрезал надписи. Теперь переключатели стоят отдельной строкой
-        # под заголовком группы, где им есть место.
-        self.radio_open = QRadioButton("Для opencode — JSON")
-        self.radio_harness = QRadioButton("Для Харнеса — YAML")
-        for radio in (self.radio_open, self.radio_harness):
-            ui.keep_width(radio)
+        self.radio_open = QRadioButton("Для opencode (JSON)")
+        self.radio_harness = QRadioButton("Для Харнеса (YAML-оверлей)")
         self.radio_open.setChecked(True)
         row_prog = QHBoxLayout()
-        row_prog.addWidget(ui.label("Показать настройки в виде:", kind="h2"))
+        row_prog.addWidget(QLabel("Показать настройки:"))
+        row_prog.addWidget(self.radio_open)
+        row_prog.addWidget(self.radio_harness)
         row_prog.addStretch(1)
         prog_layout.addLayout(row_prog)
-        row_prog2 = QHBoxLayout()
-        row_prog2.addWidget(self.radio_open)
-        row_prog2.addWidget(self.radio_harness)
-        row_prog2.addStretch(1)
-        prog_layout.addLayout(row_prog2)
 
         self.program_hint = ui.label("", kind="dim", wrap=True)
         prog_layout.addWidget(self.program_hint)
 
         prog_layout.addWidget(QLabel("Настройки моста — их можно скопировать:"))
         self.snippet = ui.LogView()
-        # Высота своя, лишнее место страницы сюда не затекает
-        self.snippet.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
-        self.snippet.setFixedHeight(110)
+        self.snippet.setMinimumHeight(110)
         prog_layout.addWidget(self.snippet)
 
         row_save = QHBoxLayout()
@@ -1774,11 +1666,7 @@ class BridgeTab(ScrollPage):
         outer.addLayout(buttons)
 
         self.log = ui.LogView()
-        # Высота своя, лишнее место страницы сюда не затекает
-        self.log.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
-        self.log.setFixedHeight(170)
+        self.log.setMinimumHeight(170)
         outer.addWidget(self.log)
 
         # Связи — только здесь, когда все элементы уже созданы. Если
@@ -1811,7 +1699,7 @@ class BridgeTab(ScrollPage):
                 self.where_hint.setStyleSheet(f"color: {ui.WARN};")
                 text = status.problem
             else:
-                self.where_hint.setStyleSheet(f"color: {ui.TEXT_3};")
+                self.where_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
                 text = "Папки пока нет — она будет создана при первом создании моста."
             self.where_hint.setText(text)
         else:
@@ -2084,12 +1972,24 @@ class ManualConfigDialog(QDialog):
         box = QVBoxLayout(self)
         box.setSpacing(8)
 
-        intro = ui.label(
-            f"{server.name} включается у себя, внутри своей программы. "
-            "Отсюда включить его нельзя — это действие в её окне. "
-            "Но конфигурацию принять можно: скопируй её там и вставь сюда.",
-            wrap=True,
-        )
+        known_url = str(
+            (server.raw.get("connection") or {}).get("url") or ""
+        ).strip()
+        if known_url:
+            intro = ui.label(
+                f"Проще нажать «Настроить автоматически» в блоке серверов: "
+                f"программа сама поставит плагин в {server.name}, включит "
+                "сервер и проверит его. Это окно нужно, только если плагин "
+                "уже стоит руками и осталось вписать адрес.",
+                wrap=True,
+            )
+        else:
+            intro = ui.label(
+                f"{server.name} включается у себя, внутри своей программы. "
+                "Отсюда включить его нельзя — это действие в её окне. "
+                "Но конфигурацию принять можно: скопируй её там и вставь сюда.",
+                wrap=True,
+            )
         box.addWidget(intro)
 
         steps = server.setup_steps
@@ -2099,23 +1999,39 @@ class ManualConfigDialog(QDialog):
                 box.addWidget(ui.label(f"  {index}. {text}", wrap=True))
 
         box.addSpacing(4)
-        box.addWidget(
-            ui.label(
-                "Вставь сюда конфигурацию целиком — вместе с адресом и токеном:",
-                wrap=True,
+        # Адрес известен программе заранее, а у этого сервера токена нет
+        # вовсе. Поэтому поле подставляем сами, а не просим человека
+        # идти за конфигурацией, которой он не может достать: прежний
+        # текст звал кнопку Copy Config, которой в студии 2026.1 нет.
+        if known_url:
+            box.addWidget(
+                ui.label(
+                    "Адрес сервера известен программе, он уже подставлен ниже. "
+                    "Ничего копировать из студии не нужно. Проверь глазами и "
+                    "нажми «Записать»:",
+                    wrap=True,
+                )
             )
-        )
+        else:
+            box.addWidget(
+                ui.label(
+                    "Вставь сюда конфигурацию целиком — вместе с адресом:",
+                    wrap=True,
+                )
+            )
 
         self.text = QPlainTextEdit()
+        if known_url:
+            self.text.setPlainText(
+                json.dumps(
+                    {"mcpServers": {self.server.id: {"url": known_url}}},
+                    ensure_ascii=False, indent=2,
+                )
+            )
         self.text.setPlaceholderText(
-            '{"mcpServers": {"' + self.server.id + '": {"url": "http://localhost:.../api/mcp",\n'
-            '  "headers": {"Authorization": "Bearer ..."}}}}'
+            '{"mcpServers": {"' + self.server.id + '": {"url": "http://localhost:.../api/mcp"}}}'
         )
-        # Высота своя, лишнее место страницы сюда не затекает
-        self.text.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
-        self.text.setFixedHeight(110)
+        self.text.setMinimumHeight(110)
         # Моноширинный шрифт, как у окошка лога: конфигурация - это JSON,
         # и в пропорциональном шрифте её структура плохо читается.
         _font = QFont("Consolas")
@@ -2147,6 +2063,14 @@ class ManualConfigDialog(QDialog):
         row.addWidget(self.btn_ok)
         box.addLayout(row)
 
+        # Подсказка зависит от того, подставили мы адрес сами.
+        if known_url:
+            self.status.setText(
+                "Адрес подставлен программой. Если сервер ещё не отвечает, "
+                "нажми «Настроить автоматически» в блоке серверов — "
+                "поставить плагин и включить его проще."
+            )
+            return
         # Сразу подсказываем про буфер, если там есть что вставить.
         clipboard = QApplication.clipboard()
         if clipboard is not None and self._looks_like_config(clipboard.text()):
@@ -2189,6 +2113,122 @@ class ManualConfigDialog(QDialog):
         return self.text.toPlainText()
 
 
+class ObsPasswordDialog(QDialog):
+    """Окно пароля WebSocket-сервера OBS.
+
+    Отдельное окно, а не строчка в таблице, потому что здесь есть
+    решение, которое нельзя принять за человека: пароль либо уже есть,
+    либо его нужно выпустить. Показываем и то, и другое, и третье —
+    вписать свой.
+
+    Куда сохранять копию — необязательно. Не выбрал путь, значит пароль
+    всё равно лежит рядом с настройками, оттуда его и возьмёт лаунчер.
+    Просто тогда человек не найдёт его глазами, поэтому предлагаем.
+    """
+
+    def __init__(self, current: str, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Пароль WebSocket-сервера OBS")
+        self.setMinimumWidth(560)
+        self._path: Path | None = None
+
+        box = QVBoxLayout(self)
+        box.setSpacing(8)
+
+        box.addWidget(ui.label(
+            "Мост OBS подключается к OBS по паролю. Программа умеет "
+            "выпустить его сама, но ты можешь вписать свой. Пароль не "
+            "попадёт в opencode.jsonc: он лежит отдельным файлом, "
+            "потому что конфиг открыт и переносится между компьютерами.",
+            wrap=True,
+        ))
+
+        row = QHBoxLayout()
+        self.field = QLineEdit()
+        self.field.setEchoMode(QLineEdit.EchoMode.Password)
+        self.field.setPlaceholderText(
+            "Пароль, 8–20 символов, с буквами и цифрами"
+        )
+        if current:
+            self.field.setText(current)
+        row.addWidget(self.field, 1)
+        self.btn_gen = QPushButton("Сгенерировать")
+        self.btn_gen.clicked.connect(self._generate)
+        self.btn_show = QPushButton("Показать")
+        self.btn_show.setCheckable(True)
+        self.btn_show.toggled.connect(self._toggle)
+        row.addWidget(self.btn_gen)
+        row.addWidget(self.btn_show)
+        box.addLayout(row)
+
+        self.status = ui.label("", wrap=True)
+        self.status.setObjectName("hint")
+        box.addWidget(self.status)
+
+        row2 = QHBoxLayout()
+        self.btn_save = QPushButton("Сохранить копию пароля…")
+        self.btn_save.clicked.connect(self._choose_path)
+        row2.addWidget(self.btn_save)
+        self.path_label = ui.label("", kind="dim", wrap=True)
+        row2.addWidget(self.path_label, 1)
+        box.addLayout(row2)
+
+        row3 = QHBoxLayout()
+        row3.addStretch(1)
+        self.btn_cancel = QPushButton("Отмена")
+        self.btn_cancel.clicked.connect(self.reject)
+        self.btn_ok = QPushButton("Дальше")
+        self.btn_ok.setObjectName("primary")
+        self.btn_ok.setDefault(True)
+        self.btn_ok.clicked.connect(self.accept)
+        row3.addWidget(self.btn_cancel)
+        row3.addWidget(self.btn_ok)
+        box.addLayout(row3)
+
+        self._refresh_status()
+
+    def _generate(self) -> None:
+        self.field.setText(bridges.generate_password())
+        self.btn_show.setChecked(True)
+        self._refresh_status()
+
+    def _toggle(self, show: bool) -> None:
+        mode = (QLineEdit.EchoMode.Normal if show
+                else QLineEdit.EchoMode.Password)
+        self.field.setEchoMode(mode)
+
+    def _refresh_status(self) -> None:
+        value = self.field.text()
+        if not value:
+            self.status.setText(
+                "Пусто. Нажми «Сгенерировать» — это надёжнее, чем придумывать."
+            )
+        elif bridges.password_is_valid(value):
+            self.status.setText("Пароль годный.")
+        else:
+            self.status.setText(
+                f"Нужен от {bridges.OBS_PASSWORD_MIN} до "
+                f"{bridges.OBS_PASSWORD_MAX} символов, со строчной буквой, "
+                "заглавной и цифрой."
+            )
+
+    def _choose_path(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Куда сохранить пароль", "",
+            "Текстовый файл (*.txt);;Все файлы (*)",
+        )
+        if not path:
+            return
+        self._path = Path(path)
+        self.path_label.setText(f"Сохраню в: {self._path}")
+
+    def password(self) -> str:
+        return self.field.text().strip()
+
+    def save_path(self) -> Path | None:
+        return self._path
+
+
 class CapsTab(ScrollPage):
     """Возможности базы для opencode — установка по выбору.
 
@@ -2206,7 +2246,7 @@ class CapsTab(ScrollPage):
         "pc": "Мост ПК — файлы, программы, скриншоты (всё через спрос)",
         "ncp": "Мост NCP — память, библиотека, 7 инструментов",
         "agents": "12 агентов — поиск, план, код, проверка и другие",
-        "antiblock": "Обход блокировок — запуск через прокси",
+        "antiblock": "Обход блокировок — запуск OpenCode через прокси, пул обновляется сам",
     }
 
     def __init__(self, parent=None) -> None:
@@ -2235,69 +2275,9 @@ class CapsTab(ScrollPage):
             )
         )
 
-        # --- подразделы
-        #
-        # Шесть блоков подряд читались как простыня в два экрана. Теперь
-        # внутри раздела своя колонка подразделов, и каждый блок стоит
-        # там, где он нужен. Панели состояния внутри нет намеренно: она
-        # уже есть слева, и вторая мешала бы больше, чем помогала.
-        # plain=True - без рамки вокруг вложенной колонки: с рамкой
-        # она читается как «колонка в колонке» и съедает внимание.
-        self.sub = NavStack(with_status=False, plain=True)
-        self.sub.nav.setFixedWidth(196)
-        outer.addWidget(self.sub, 1)
-
-        sub_what = QWidget()
-        lay_what = QVBoxLayout(sub_what)
-        lay_what.setContentsMargins(0, 0, 0, 0)
-        lay_what.setSpacing(10)
-
-        sub_block = QWidget()
-        lay_block = QVBoxLayout(sub_block)
-        lay_block.setContentsMargins(0, 0, 0, 0)
-        lay_block.setSpacing(10)
-
-        sub_prov = QWidget()
-        lay_prov = QVBoxLayout(sub_prov)
-        lay_prov.setContentsMargins(0, 0, 0, 0)
-        lay_prov.setSpacing(10)
-
-        sub_skills = QWidget()
-        lay_skills = QVBoxLayout(sub_skills)
-        lay_skills.setContentsMargins(0, 0, 0, 0)
-        lay_skills.setSpacing(10)
-
-        sub_mcp = QWidget()
-        lay_mcp = QVBoxLayout(sub_mcp)
-        lay_mcp.setContentsMargins(0, 0, 0, 0)
-        lay_mcp.setSpacing(10)
-
-        self.sub.addPage(sub_what, "Что поставить", "флажки и папка",
-                         ui.ACCENT_OPEN, "")
-        self.sub.addPage(sub_prov, "Провайдеры", "новые пресеты моделей",
-                         ui.ACCENT_OPEN, "")
-        self.sub.addPage(sub_block, "Обход блокировок", "прокси, DNS, ярлык",
-                         ui.ACCENT_OPEN, "")
-        self.sub.addPage(sub_skills, "Навыки", "поштучно или сразу",
-                         ui.ACCENT_OPEN, "")
-        self.sub.addPage(sub_mcp, "Серверы MCP", "из реестра",
-                         ui.ACCENT_OPEN, "")
-
-        # --- что поставить
-        # Заголовка блока нет: подраздел уже называется «Что поставить»,
-        # и вторая такая же надпись прямо под ним читалась как сбой.
-        # Блок сделан панелью, а не группой: рамка без подписи — просто
-        # коробка, а панель читается как содержимое подраздела.
-        box_what = QWidget()
-        box_what.setObjectName("panel")
-        # Панель равна своему содержимому: QStackedWidget задаёт
-        # всем страницам одинаковую высоту, и растянувшаяся панель
-        # расталкивала собственные элементы по вертикали.
-        box_what.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
+        # --- шаг 1: что поставить
+        box_what = QGroupBox("1. Что поставить в opencode")
         what_layout = QVBoxLayout(box_what)
-        what_layout.setContentsMargins(14, 14, 14, 14)
         self.checks: dict[str, QCheckBox] = {}
         for name, _title in opencode_caps.CAPS_CHOICES:
             box = QCheckBox(self.TITLES.get(name, name))
@@ -2312,10 +2292,10 @@ class CapsTab(ScrollPage):
                 )
         except OSError:
             pass
-        lay_what.addWidget(box_what)
+        outer.addWidget(box_what)
 
         # --- шаг 2: куда
-        box_where = QGroupBox("Куда ставится")
+        box_where = QGroupBox("2. Куда ставится")
         where_layout = QVBoxLayout(box_where)
         self.dest_edit = QLineEdit()
         self.dest_edit.setPlaceholderText("Папка настроек opencode")
@@ -2331,19 +2311,15 @@ class CapsTab(ScrollPage):
         row.addWidget(btn_pick_dest)
         where_layout.addLayout(row)
         self.state_hint = ui.label("", kind="dim", wrap=True)
-        # Подпись в этом окне печатает цвет по частям: заголовок «Уже
-        # стоит» зелёный, перечень под ним серый. Поэтому разметка
-        # внутри текста, а не цветом всей подписи.
-        self.state_hint.setTextFormat(Qt.TextFormat.RichText)
         where_layout.addWidget(self.state_hint)
-        lay_what.addWidget(box_where)
-        lay_what.addStretch(1)
+        outer.addWidget(box_where)
 
-        # --- провайдеры моделей (новых пресетов)
-        box_prov = QGroupBox("Провайдеры, которых нет в opencode")
+        # --- шаг 3: провайдеры моделей (новых пресетов)
+        box_prov = QGroupBox("3. Провайдеры моделей (новые пресеты)")
         prov_layout = QVBoxLayout(box_prov)
         prov_layout.addWidget(
             ui.label(
+                "Провайдеры, которых нет среди встроенных в opencode. "
                 "Ключи не спрашиваем и не храним: задай их сам через "
                 "/connect в opencode или переменными окружения.",
                 kind="dim",
@@ -2356,29 +2332,27 @@ class CapsTab(ScrollPage):
             box.setChecked(False)
             prov_layout.addWidget(box)
             self.pchecks[name] = box
-        lay_prov.addWidget(box_prov)
-        lay_prov.addStretch(1)
+        outer.addWidget(box_prov)
 
         # --- шаг 4: обход блокировок — состав набора
-        box_ab = QGroupBox("Что именно поставить")
+        box_ab = QGroupBox("4. Обход блокировок — что именно поставить")
         ab_layout = QVBoxLayout(box_ab)
         ab_layout.addWidget(
             ui.label(
-                "Работает только вместе с галочкой «Обход блокировок» — она "
-                "в подразделе «Что поставить». Прокси отдаётся только "
-                "запущенному через ярлык OpenCode, остальные программы идут "
-                "напрямую.",
+                "Работает только вместе с галочкой «Обход блокировок» выше. "
+                "Прокси отдаётся только запущенному через ярлык OpenCode, "
+                "остальные программы идут напрямую.",
                 kind="dim",
                 wrap=True,
             )
         )
         self.achecks: dict[str, QCheckBox] = {}
         for key, title in (
-            ("facade", "Переводчик и запуск (фасад + ярлык)"),
-            ("lists", "Бесплатные списки: SOCKS5 и VLESS, обновляются сами"),
-            ("dns", "Защищённый DNS (DoH) — запасной обход"),
+            ("facade", "Переводчик и запуск (фасад 127.0.0.1:17890 + ярлык-запуск)"),
+            ("lists", "Бесплатные списки (SOCKS5-пул + VLESS-подписки + автообновление раз в сутки)"),
+            ("dns", "Защищённый DNS (DoH: Google/Cloudflare/Quad9/AdGuard) — запасной способ обхода"),
             ("command", "Команда /обход внутри OpenCode"),
-            ("shortcut", "Ярлык «OpenCode (обход)» на рабочий стол"),
+            ("shortcut", "Ярлык «OpenCode (обход)» с иконкой программы на рабочий стол"),
         ):
             box = QCheckBox(title)
             box.setChecked(True)
@@ -2391,83 +2365,45 @@ class CapsTab(ScrollPage):
         row_ab.addWidget(self.btn_ab_dns)
         row_ab.addStretch(1)
         ab_layout.addLayout(row_ab)
-        lay_block.addWidget(box_ab)
-        lay_block.addStretch(1)
+        outer.addWidget(box_ab)
 
-        # --- навыки поштучно
-        # Заголовка группы нет: подраздел уже называется «Навыки», и ещё
-        # одна надпись сверху не добавляла смысла, а съедала высоту.
-        box_skills = QWidget()
-        box_skills.setObjectName("panel")
-        # Панель равна своему содержимому: QStackedWidget задаёт
-        # всем страницам одинаковую высоту, и растянувшаяся панель
-        # расталкивала собственные элементы по вертикали.
-        box_skills.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
+        # --- шаг 5: навыки поштучно
+        box_skills = QGroupBox("5. Навыки — какие поставить в opencode")
         skills_layout = QVBoxLayout(box_skills)
-        skills_layout.setContentsMargins(14, 14, 14, 14)
         skills_layout.addWidget(
             ui.label(
-                "Отметь нужные: отмеченные скопируются целиком, "
-                "неотмеченные уйдут в _previous-version — выбор можно "
-                "переиграть. После установки перезапусти opencode.",
+                "Отметь нужные: отмеченные скопируются целиком, неотмеченные "
+                "уйдут в _previous-version — выбор всегда можно переиграть. "
+                "После установки перезапусти opencode.",
                 kind="dim",
                 wrap=True,
             )
         )
         self.caps_skills_list = QListWidget()
-        # Описания навыков длинные, а список узкий. Раньше они
-        # обрезались по краю и под списком появлялась горизонтальная
-        # полоса прокрутки: читать приходилось, перемотанное вбок.
-        # Теперь текст переносится по словам, а полосы нет вовсе.
-        self.caps_skills_list.setWordWrap(True)
-        self.caps_skills_list.setTextElideMode(Qt.TextElideMode.ElideNone)
-        self.caps_skills_list.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
-        self.caps_skills_list.setUniformItemSizes(False)
-        # Высота своя, лишнее место страницы сюда не затекает
-        self.caps_skills_list.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
-        self.caps_skills_list.setFixedHeight(180)
+        self.caps_skills_list.setMinimumHeight(180)
         self.caps_skills_list.setMaximumHeight(230)
         skills_layout.addWidget(self.caps_skills_list)
 
-        # Кнопки в два ряда, а не в один. Пять кнопок в ряд не влезали
-        # в окно уже при 1000 пикселях, и Qt сжимал их по 4-24 пикселя.
-        # В два ряда они помещаются при любой разумной ширине.
         row_skills = QHBoxLayout()
         self.btn_skills_all = QPushButton("Отметить все")
         self.btn_skills_none = QPushButton("Снять все")
-        self.btn_skills_reload = QPushButton("Обновить")
+        self.btn_skills_reload = QPushButton("Обновить список")
+        self.btn_skills_put = QPushButton("Поставить отмеченные")
+        self.btn_skills_drop = QPushButton("Убрать отмеченные")
         row_skills.addWidget(self.btn_skills_all)
         row_skills.addWidget(self.btn_skills_none)
         row_skills.addWidget(self.btn_skills_reload)
         row_skills.addStretch(1)
+        row_skills.addWidget(self.btn_skills_put)
+        row_skills.addWidget(self.btn_skills_drop)
         skills_layout.addLayout(row_skills)
-
-        row_skills2 = QHBoxLayout()
-        self.btn_skills_put = QPushButton("Поставить отмеченные")
-        self.btn_skills_drop = QPushButton("Убрать отмеченные")
-        self.btn_skills_reload.setToolTip("Перечитать список навыков")
-        self.btn_skills_put.setToolTip(
-            "Скопировать отмеченные навыки в opencode")
-        self.btn_skills_drop.setToolTip(
-            "Убрать отмеченные навыки из opencode")
-        row_skills2.addWidget(self.btn_skills_put)
-        row_skills2.addWidget(self.btn_skills_drop)
-        row_skills2.addStretch(1)
-        skills_layout.addLayout(row_skills2)
 
         self.caps_skills_hint = ui.label("", kind="dim", wrap=True)
         skills_layout.addWidget(self.caps_skills_hint)
-        lay_skills.addWidget(box_skills)
-        lay_skills.addStretch(1)
+        outer.addWidget(box_skills)
 
         # --- шаг 6. Серверы MCP из реестра
-        box_mcp = QGroupBox("Серверы из реестра")
+        box_mcp = QGroupBox("6. Серверы MCP — что можно включить")
         mcp_layout = QVBoxLayout(box_mcp)
         mcp_layout.addWidget(
             ui.label(
@@ -2494,11 +2430,7 @@ class CapsTab(ScrollPage):
         self.reg_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.reg_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.reg_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        # Высота своя, лишнее место страницы сюда не затекает
-        self.reg_table.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
-        self.reg_table.setFixedHeight(150)
+        self.reg_table.setMinimumHeight(150)
         self.reg_table.setMaximumHeight(190)
         # Ширины заданы явно, потому что Qt по умолчанию распределяет
         # место неудачно: снимок показал обрезанные до «Windo…» имена и
@@ -2522,20 +2454,23 @@ class CapsTab(ScrollPage):
 
         self.reg_detail = QPlainTextEdit()
         self.reg_detail.setReadOnly(True)
-        # Высота своя, лишнее место страницы сюда не затекает
-        self.reg_detail.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
-        self.reg_detail.setFixedHeight(120)
+        self.reg_detail.setMinimumHeight(120)
         mcp_layout.addWidget(self.reg_detail)
 
         row_mcp = QHBoxLayout()
-        self.btn_reg_check = QPushButton("Проверить")
+        self.btn_reg_check = QPushButton("Проверить всё")
         self.btn_reg_on = QPushButton("Включить")
+        self.btn_reg_auto = QPushButton("Настроить автоматически")
+        self.btn_reg_auto.setToolTip(
+            "Android Studio: поставить плагин из набора программы, включить "
+            "сервер в студии, проверить его и вписать в настройки opencode"
+        )
+        self.btn_reg_auto.setEnabled(False)
         self.btn_reg_off = QPushButton("Выключить")
-        self.btn_reg_src = QPushButton("Источник")
+        self.btn_reg_src = QPushButton("Открыть источник")
         row_mcp.addWidget(self.btn_reg_check)
         row_mcp.addWidget(self.btn_reg_on)
+        row_mcp.addWidget(self.btn_reg_auto)
         row_mcp.addWidget(self.btn_reg_off)
         row_mcp.addWidget(self.btn_reg_src)
         row_mcp.addStretch(1)
@@ -2543,8 +2478,7 @@ class CapsTab(ScrollPage):
 
         self.reg_hint = ui.label("", kind="dim", wrap=True)
         mcp_layout.addWidget(self.reg_hint)
-        lay_mcp.addWidget(box_mcp)
-        lay_mcp.addStretch(1)
+        outer.addWidget(box_mcp)
 
         # --- кнопки
         buttons = QHBoxLayout()
@@ -2562,11 +2496,7 @@ class CapsTab(ScrollPage):
         outer.addLayout(buttons)
 
         self.log = ui.LogView()
-        # Высота своя, лишнее место страницы сюда не затекает
-        self.log.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
-        self.log.setFixedHeight(170)
+        self.log.setMinimumHeight(170)
         outer.addWidget(self.log)
 
         # Связи — только здесь, когда все элементы уже созданы.
@@ -2581,8 +2511,8 @@ class CapsTab(ScrollPage):
         self.caps_skills_list.itemChanged.connect(self._caps_skills_changed)
         self.btn_reg_check.clicked.connect(self._reg_check_all)
         self.btn_reg_on.clicked.connect(self._reg_enable)
+        self.btn_reg_auto.clicked.connect(self._reg_auto)
         self.btn_reg_off.clicked.connect(self._reg_disable)
-        self.btn_reg_src.setToolTip("Открыть папку с исходником сервера")
         self.btn_reg_src.clicked.connect(self._reg_open_source)
         self.reg_table.currentCellChanged.connect(
             lambda *_: self._reg_show_detail()
@@ -2645,6 +2575,30 @@ class CapsTab(ScrollPage):
         if dest is None:
             return False
         return mcp_registry.load_manual_config(dest, server.id) is not None
+
+    # Серверы, которые программа умеет настроить целиком сама.
+    AUTO_SERVERS = ("android-studio", "obs", "android-emulator")
+
+    def _reg_auto_possible(self, server: mcp_registry.Server | None) -> tuple[bool, str]:
+        """Можно ли настроить автоматически и что этому мешает.
+
+        Автонастройка умеет ровно три вещи: Android Studio, OBS и
+        эмулятор Android. Остальные серверы запускаются командой, и
+        «Настроить автоматически» для них был бы кнопкой вроде
+        работающей.
+        """
+        if server is None:
+            return False, (
+                "Выберите строку в списке: автонастройка есть у Android "
+                "Studio, OBS и Android-эмулятора. У LDPlayer она не нужна — "
+                "ему достаточно кнопки «Включить»."
+            )
+        if server.id not in self.AUTO_SERVERS:
+            return False, (
+                f"Автонастройки для «{server.name}» нет: сервер запускается "
+                "командой, достаточно кнопки «Включить»."
+            )
+        return True, ""
 
     def _reg_state_text(self, server: mcp_registry.Server) -> str:
         """Состояние для колонки. Короткое - иначе таблица разъезжается.
@@ -2764,6 +2718,11 @@ class CapsTab(ScrollPage):
 
     def _reg_show_detail(self) -> None:
         server = self._reg_current()
+        # Кнопка автонастройки жива только для Android Studio. Для
+        # остальных серверов её нажатие было бы враньём, поэтому гасим
+        # её, а не ждём ошибки по нажатию.
+        possible, _ = self._reg_auto_possible(server)
+        self.btn_reg_auto.setEnabled(possible)
         if server is None:
             self.reg_detail.setPlainText("Выберите сервер, чтобы увидеть подробности.")
             return
@@ -2859,6 +2818,81 @@ class CapsTab(ScrollPage):
             return mcp_registry.enable(dest, server, progress=progress)
 
         self._start(job, "registry")
+
+    def _reg_auto(self) -> None:
+        """Настраивает Android Studio целиком, без конфигураций вручную."""
+        dest = self._reg_dest()
+        if dest is None:
+            self._warn("Не выбрана папка настроек opencode.")
+            return
+        server = self._reg_current()
+        possible, why = self._reg_auto_possible(server)
+        if not possible or server is None:
+            self._warn(why)
+            return
+
+        # Ключ реестра с путём установки OBS. Без него студия не знает,
+        # где установлена, и падает с ошибкой про языковой файл, хотя
+        # файл на месте. Запись в реестр — внешнее действие, поэтому
+        # спрашиваем отдельно и по умолчанию отвечаем «нет».
+        fix_install_path = False
+        # У OBS пароль спрашивается отдельно: его негде взять, кроме
+        # самого человека или генератора программы.
+        password = ""
+        if server.id == "obs":
+            trouble = bridges.obs_install_problem()
+            if trouble:
+                answer = QMessageBox.question(
+                    self,
+                    "OBS не знает, где установлена",
+                    trouble
+                    + "\n\nСоздать ключ реестра HKCU\\Software\\OBSStudio "
+                      "с путём установки? Запись делается только для "
+                      "текущего пользователя и ничего не удаляет.",
+                    QMessageBox.StandardButton.Yes
+                    | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    self._warn(trouble)
+                    return
+                fix_install_path = True
+            password = self._ask_obs_password(dest)
+            if password is None:
+                return
+
+        def job(progress):
+            if server.id == "android-studio":
+                return android_studio.auto_setup(dest, server, progress=progress)
+            if server.id == "obs":
+                return bridges.auto_setup_obs(
+                    dest, server, password, progress=progress,
+                    allow_install_path_fix=fix_install_path)
+            return bridges.auto_setup_emulator(dest, server, progress=progress)
+
+        self._start(job, "registry")
+
+    def _ask_obs_password(self, dest: Path) -> str | None:
+        """Спрашивает пароль OBS: показать, сгенерировать, вписать свой.
+
+        None означает «человек закрыл окно» — тогда ничего не делаем.
+        """
+        current = bridges.read_password(dest)
+        dialog = ObsPasswordDialog(current, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        password = dialog.password()
+        if not password:
+            self._warn("Пароль пустой. Мост без него не подключится.")
+            return None
+        if dialog.save_path():
+            ok, note = bridges.copy_password_to(dest, dialog.save_path())
+            if ok:
+                self.log.add(note, "ok")
+            else:
+                self._warn(note)
+                return None
+        return password
 
     def _reg_ask_config(self, server: mcp_registry.Server, dest: Path) -> None:
         """Спрашивает конфигурацию и, если её дали, включает сервер."""
@@ -3007,7 +3041,7 @@ class CapsTab(ScrollPage):
         total = self.caps_skills_list.count()
         chosen = len(self._chosen_caps_skills())
         if total == 0:
-            self.caps_skills_hint.setStyleSheet(f"color: {ui.TEXT_3};")
+            self.caps_skills_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
             self.caps_skills_hint.setText("В базе навыков нет — нечего ставить.")
         elif chosen == total:
             self.caps_skills_hint.setStyleSheet(f"color: {ui.OK};")
@@ -3019,7 +3053,7 @@ class CapsTab(ScrollPage):
                 "«Убрать» спрячет все навыки программы в _previous-version."
             )
         else:
-            self.caps_skills_hint.setStyleSheet(f"color: {ui.TEXT_3};")
+            self.caps_skills_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
             self.caps_skills_hint.setText(f"Отмечено: {chosen} из {total}.")
 
     def _install_skills(self) -> None:
@@ -3076,22 +3110,11 @@ class CapsTab(ScrollPage):
         inside += [title for name, (title, _k, _b) in opencode_caps.PROVIDER_PRESETS.items()
                    if pstatus.get(name)]
         if inside:
-            # Зелёным - только заголовок, а не весь перечень. Раньше
-            # зелёным был весь список, и зелёный переставал значить
-            # «всё в порядке»: им был залит обычный перечень из шести
-            # строк, и глаз перестал замечать зелёный в этом окне.
-            items = "<br>".join(
-                f'<span style="color:{ui.TEXT_3};">- {t}</span>'
-                for t in inside
-            )
-            self.state_hint.setText(
-                f'<span style="color:{ui.OK};">Уже стоит:</span><br>{items}'
-            )
+            self.state_hint.setStyleSheet(f"color: {ui.OK};")
+            self.state_hint.setText("Уже стоит:\n- " + "\n- ".join(inside))
         else:
-            self.state_hint.setText(
-                f'<span style="color:{ui.TEXT_3};">'
-                "Наших возможностей здесь пока нет.</span>"
-            )
+            self.state_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
+            self.state_hint.setText("Наших возможностей здесь пока нет.")
 
     # ---- выбор папки
 
@@ -3473,14 +3496,8 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Управление базой")
-        # Боковая колонка отнимает 214, поэтому окно стало шире прежнего:
-        # раньше 880 делились на шесть вкладок, теперь 220 уходят в меню.
-        # Минимум 1000, а не 900: при 900 ряды кнопок не помещались, и Qt
-        # сжимал их на 10-24 пикселя. Ниже этого окно просто не должно
-        # открываться - пусть лучше не поместится целиком, чем появятся
-        # обрезанные подписи.
-        self.setMinimumSize(1000, 620)
-        self.resize(1180, 880)
+        self.setMinimumSize(720, 560)
+        self.resize(880, 900)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -3492,49 +3509,27 @@ class MainWindow(QMainWindow):
             ui.label(
                 "База — это папка с текстовыми файлами памяти, правил и скиллов.",
                 kind="dim",
-                wrap=True,
             )
         )
 
-        nav = NavStack()
-        self.tabs = nav  # имя оставлено: на вкладки ссылается остальной код
-        self.nav = nav
+        tabs = QTabWidget()
+        self.tabs = tabs
         self.create_tab = CreateTab()
         self.import_tab = ImportTab()
         self.bridge_tab = BridgeTab()
         self.caps_tab = CapsTab()
         self.themes_tab = ThemesTab()
         self.help_tab = HelpTab()
-        # Порядок и группировка: сначала то, чем пользуются при настройке
-        # (создать, подключить, мост), потом то, что настраивают один раз
-        # (возможности, оформление), и в конце справка.
-        nav.addPage(self.create_tab, "Новая база",
-                    "создать с нуля", ui.ACCENT, "База")
-        nav.addPage(self.import_tab, "Существующая база",
-                    "подключить готовую", ui.ACCENT, "")
-        nav.addPage(self.bridge_tab, "Мост NCP",
-                    "связь с библиотекой", ui.ACCENT, "")
-        nav.addPage(self.caps_tab, "Возможности",
-                    "скиллы, серверы, память", ui.ACCENT_OPEN, "opencode")
-        nav.addPage(self.themes_tab, "Темы",
-                    "внешний вид и шрифты", ui.ACCENT_LOOK, "Оформление")
-        nav.addPage(self.help_tab, "Инструкция",
-                    "как пользоваться", ui.ACCENT_HELP, "Справка")
-        layout.addWidget(nav, 1)
+        tabs.addTab(self.create_tab, "Создать новую базу")
+        tabs.addTab(self.import_tab, "Подключить существующую")
+        tabs.addTab(self.bridge_tab, "Мост NCP — создать")
+        tabs.addTab(self.caps_tab, "opencode")
+        tabs.addTab(self.themes_tab, "Темы")
+        tabs.addTab(self.help_tab, "Инструкция")
+        layout.addWidget(tabs, 1)
 
         self.create_tab.base_ready.connect(self._suggest_import)
         self.create_tab.base_ready.connect(self._suggest_bridge)
-
-        # Перенос строк во всех списках окна. Списков семь, и каждый
-        # создавался в своём месте; пока перенос включали вручную, длинные
-        # описания навыков уезжали за край, а под списком появлялась
-        # горизонтальная полоса. Одна настройка на всё окно надёжнее
-        # семи одинаковых строк в семи местах.
-        self.fitted_lists = ui.fit_lists(central)
-        # Запрет молчаливого сжатия подписей. Qt ужимает кнопку или
-        # флажок на недостающие пиксели и обрезает текст; с этим
-        # ограничением обрезанный текст виден сразу, а не прячется.
-        self.kept_widths = ui.keep_text_width(central)
 
     def _suggest_bridge(self, path: str) -> None:
         """После создания базы предлагает завести мост NCP.
@@ -3616,10 +3611,181 @@ class MainWindow(QMainWindow):
         )
 
 
+# ------------------------------------------------- единственный экземпляр
+
+#: Имя локального сокета, которым программа занимает место единственного
+#: экземпляра.
+APP_SOCKET_NAME = "opencode-base-dbapp"
+
+#: Сервер держим в переменной модуля: если он попадёт в сборщик мусора,
+#: сокет закроется и защита перестанет работать.
+_SINGLE_SERVER = None
+_SINGLE_WINDOW = None
+
+
+def _socket_name() -> str:
+    """Имя сокета с учётом пользователя.
+
+    На одном компьютере могут работать два разных человека, и общее
+    имя заставило бы их мешать друг другу.
+    """
+    try:
+        user = os.environ.get("USERNAME") or getpass.getuser()
+    except Exception:  # noqa: BLE001 - имя пользователя не повод не открыться
+        user = "user"
+    return f"{APP_SOCKET_NAME}-{user or 'user'}"
+
+
+def _lock_path() -> Path:
+    """Путь файла-метки «занято»."""
+    import tempfile
+
+    name = _socket_name()
+    return Path(tempfile.gettempdir()) / f"{name}.lock"
+
+
+def _pid_alive(pid: int) -> bool:
+    """Жив ли процесс с таким номером.
+
+    os.kill(pid, 0) на Windows вызывает TerminateProcess, а это
+    убийство, поэтому здесь спрашиваем у системы через OpenProcess.
+    """
+    if pid <= 0:
+        return False
+    if os.name != "nt":
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+        return True
+    import ctypes
+
+    query = 0x1000  # PROCESS_QUERY_LIMITED_INFORMATION
+    still_active = 259
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(query, False, pid)
+    if not handle:
+        return False
+    try:
+        code = ctypes.c_ulong()
+        if kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return code.value == still_active
+        return True
+    except Exception:  # noqa: BLE001
+        return True
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _acquire_instance_lock() -> bool:
+    """Занять метку экземпляра. True — место свободно, оно наше.
+
+    Метка создаётся одной операцией O_EXCL: выиграть может ровно один,
+    даже если десять процессов стартуют в одну миллисекунду. Один
+    локальный сокет такой гарантии не даёт — три копии успевали
+    создать слушатель по очереди и все три считали себя первыми.
+    """
+    path = _lock_path()
+    for _ in range(3):
+        try:
+            handle = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                holder = int(path.read_text(encoding="utf-8").strip() or "0")
+            except (OSError, ValueError):
+                holder = 0
+            if holder and holder != os.getpid() and _pid_alive(holder):
+                return False
+            # метка осталась от аварийно убитого запуска — забираем
+            try:
+                path.unlink()
+            except OSError:
+                return False
+            continue
+        except OSError:
+            return True  # метку создать нельзя — не блокируем запуск
+        with os.fdopen(handle, "w", encoding="utf-8") as fh:
+            fh.write(str(os.getpid()))
+        return True
+    return False
+
+
+def _raise_window() -> None:
+    """Показать уже открытое окно."""
+    window = _SINGLE_WINDOW
+    if window is None:
+        return
+    try:
+        window.showNormal()
+        window.raise_()
+        window.activateWindow()
+    except RuntimeError:
+        # окно уже закрыто, а сокет ещё жив — просто молча выходим
+        pass
+
+
+def claim_single_instance() -> bool:
+    """Занять место единственного экземпляра.
+
+    True — мы первые и должны открыть окно. False — программа уже
+    запущена: её окно показано, а этот процесс тихо завершается.
+
+    Зачем. Окружение на этой машине удваивает запуск любого Python:
+    один и тот же процесс появляется дважды, и повторяется это даже
+    для пустого скрипта, который только спит. Программа с этим ничего
+    не может поделать — зато может не показывать лишние окна. Без
+    защиты один щелчок по ярлыку открывал три-четыре окна.
+    """
+    global _SINGLE_SERVER, _SINGLE_WINDOW
+    # Метка проверяется первой и решает всё: если место занято, второй
+    # экземпляр должен показать чужое окно и выйти.
+    if not _acquire_instance_lock():
+        return False
+    try:
+        from PyQt6.QtNetwork import QLocalServer, QLocalSocket
+    except ImportError:
+        # Qt без сети: метку уже взяли, окно всё равно откроется
+        return True
+
+    name = _socket_name()
+    probe = QLocalSocket()
+    probe.connectToServer(name)
+    if probe.waitForConnected(400):
+        probe.write(b"show")
+        probe.flush()
+        probe.waitForBytesWritten(400)
+        probe.disconnectFromServer()
+        return False
+
+    # Сокета нет: значит мы первые. Остатки от аварийно убитого
+    # прежнего запуска убираем, иначе сервер не поднимется.
+    QLocalServer.removeServer(name)
+    server = QLocalServer()
+    server.setSocketOptions(
+        QLocalServer.SocketOption.UserAccessOption)
+    if not server.listen(name):
+        # Занять не вышло: лучше открыться, чем молча не показаться
+        return True
+
+    def _on_connection() -> None:
+        conn = server.nextPendingConnection()
+        if conn is None:
+            return
+        conn.readyRead.connect(_raise_window)
+        conn.disconnected.connect(conn.deleteLater)
+
+    server.newConnection.connect(_on_connection)
+    _SINGLE_SERVER = server
+    return True
+
+
 def run() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("Управление базой")
     ui.apply_dark_theme(app)
+
+    if not claim_single_instance():
+        return 0
 
     if not core.first_run_done():
         folder = core.ensure_data_bases_folder()
@@ -3629,7 +3795,9 @@ def run() -> int:
         dlg.exec()
         core.mark_first_run_done()
 
+    global _SINGLE_WINDOW
     window = MainWindow()
+    _SINGLE_WINDOW = window
     window.show()
     return app.exec()
 

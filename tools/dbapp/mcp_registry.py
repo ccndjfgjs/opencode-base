@@ -413,6 +413,39 @@ def drop_manual_config(dest: Path, server_id: str) -> bool:
         return False
 
 
+def resolve_command(command: list[str]) -> list[str]:
+    """Подставляет пути вместо плейсхолдеров в команде запуска.
+
+    Зачем. Реестр едет в публичный репозиторий, поэтому абсолютный путь
+    компьютера в нём быть не может: у другого человека он неверен. Но в
+    настройки opencode путь надо — иначе мост не запустится. Значит в
+    реестре лежат плейсхолдеры, а подстановка происходит здесь, на
+    машине человека.
+
+    Плейсхолдеры:
+        {PROGRAM}      — папка программы, где лежат мосты и thirdparty
+        {DBAPP_PYTHON} — Python, на котором работает сама программа
+    """
+    if not any("{PROGRAM}" in part or "{DBAPP_PYTHON}" in part
+               for part in command):
+        return list(command)
+    from core import find_python, program_root
+
+    root = str(program_root())
+    python = str(find_python() or "python")
+    out: list[str] = []
+    for part in command:
+        part = part.replace("{PROGRAM}", root).replace("{DBAPP_PYTHON}", python)
+        # Разделители в разных частях команды разные: путь программы на
+        # Windows приходит с обратными слэшами, а остальное написано с
+        # прямыми. В настройках это выглядит неровно, поэтому приводим к
+        # одному виду. На других системах ничего не меняется.
+        if os.name == "nt":
+            part = part.replace("/", "\\")
+        out.append(part)
+    return out
+
+
 def build_block(server: Server, manual: dict | None = None) -> str:
     """Кусок JSONC для секции mcp в opencode.jsonc. Пусто, если нечего.
 
@@ -434,7 +467,9 @@ def build_block(server: Server, manual: dict | None = None) -> str:
         if headers:
             body["headers"] = headers
     else:
-        command = [str(part) for part in (conn.get("command") or [])]
+        command = resolve_command(
+            [str(part) for part in (conn.get("command") or [])]
+        )
         if not command:
             return ""
         body = {"type": "local", "command": command, "enabled": True}
@@ -586,16 +621,47 @@ def enable(dest: Path, server: Server, progress=None) -> tuple[list[str], list[s
 
     cfg = Path(dest) / "opencode.jsonc"
     try:
-        text = cfg.read_text(encoding="utf-8") if cfg.is_file() else "{}"
+        original = cfg.read_text(encoding="utf-8") if cfg.is_file() else "{}"
     except (OSError, UnicodeDecodeError) as exc:
         return ([], [f"Настройки не прочитались: {exc}"])
     try:
-        text = ensure_object(text, "mcp")
+        text = ensure_object(original, "mcp")
         text = insert_entry(text, "mcp", server.id, block)
     except ValueError as exc:
         return ([], [f"Настройки сломаны — правь вручную: {exc}"])
     if not check_jsonc(text):
         return ([], ["После вставки файл перестал читаться — не пишу его."])
+    # Перезапись без нужды вредна: opencode следит за файлом и
+    # перезапускает серверы MCP на каждое его изменение. Повторное
+    # нажатие кнопки, когда блок уже записан, файл трогать не должно —
+    # иначе на каждое нажатие рождается новый экземпляр моста, и
+    # они копятся до трёх-четырёх копий.
+    #
+    # Сравниваем не тексты, а смысл: insert_entry при повторе оставляет
+    # после себя лишние пустые строки, и побайтовое сравнение всегда
+    # считает файл изменившимся.
+    from opencode_caps import BEGIN_TPL, END_TPL
+    begin = BEGIN_TPL.format(name=f"mcp.{server.id}")
+    end = END_TPL.format(name=f"mcp.{server.id}")
+
+    def _norm(chunk: str) -> str:
+        # Запятая в конце строки не считается различием: build_block её
+        # возвращает, а insert_entry перед записью срезает. Без этого
+        # сравнение всегда говорило бы «файл изменился».
+        return "\n".join(
+            line.strip().rstrip(",")
+            for line in chunk.splitlines() if line.strip()
+        )
+
+    if begin in original and end in original:
+        current = original[original.index(begin) + len(begin):
+                           original.index(end)]
+        if _norm(current) == _norm(block):
+            messages.append(
+                f"Сервер «{server.name}» уже записан в настройки — "
+                "файл не трогаю, opencode не перезапускаю"
+            )
+            return messages, errors
     try:
         backup = _write_config(dest, text)
     except OSError as exc:

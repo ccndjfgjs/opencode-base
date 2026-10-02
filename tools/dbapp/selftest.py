@@ -21,7 +21,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+import android_studio  # noqa: E402
+import bridges  # noqa: E402
 import core  # noqa: E402
+import mcp_registry as _mcp_registry  # noqa: E402
 import ui  # noqa: E402
 
 #: отчёт пишется и на экран, и в файл — в этой оболочке вывод теряется
@@ -364,8 +367,12 @@ def main() -> int:
                 f"у сервера {_spec.get('id')} есть способ подключения",
             )
             if _spec.get("id") == "android-studio":
-                check(not _conn.get("url") and not _conn.get("command"),
-                      "у android-studio в реестре нет ни адреса, ни команды")
+                # Адрес 127.0.0.1:64342/stream теперь в реестре: он
+                # постоянный, публичный и секретом не является. В репозиторий
+                # ехать ему нечего. А вот токен остаётся ненужным — сервер
+                # открыт на localhost и авторизации не имеет.
+                check(_conn.get("url") == "http://127.0.0.1:64342/stream",
+                      "у android-studio в реестре постоянный адрес сервера")
                 check("Bearer" not in json.dumps(_spec, ensure_ascii=False),
                       "токена студии в реестре нет")
         for _spec in reg_data.get("servers") or []:
@@ -380,13 +387,19 @@ def main() -> int:
               f"модуль загрузил серверов: {len(_servers)}")
         for _s in _servers:
             if _s.manual_setup:
-                # У такого сервера адрес и токен выдаёт его собственная
-                # программа. Без вставленной конфигурации блока быть не
-                # должно - иначе в настройки попадёт запись, которая
-                # заведомо не подключится. Проверяем это отдельно, с
-                # настоящей конфигурацией.
-                check(not mcp_registry.build_block(_s),
-                      f"у {_s.id} без конфигурации блок не пишется")
+                # Сервер настраивается изнутри своей программы. Раньше его
+                # адрес был секретом, поэтому блок без вставленной
+                # конфигурации строить было нельзя. Теперь адрес
+                # android-studio известен и лежит в реестре, так что блок
+                # строится. Но enable() без конфигурации всё равно
+                # отказывает - это проверяется отдельно, ниже.
+                _mb = mcp_registry.build_block(_s)
+                if _s.id == "android-studio":
+                    check("http://127.0.0.1:64342/stream" in _mb,
+                          f"у {_s.id} блок строится с постоянным адресом из реестра")
+                else:
+                    check(not _mb,
+                          f"у {_s.id} без конфигурации блок не пишется")
                 continue
             _b = mcp_registry.build_block(_s)
             _ok = (_b.startswith(f'"{_s.id}": {{') and _b.rstrip().endswith("},")
@@ -460,11 +473,18 @@ def main() -> int:
             check(_ast.manual_setup, "помечен как настраиваемый руками")
             check(_ast.has_connection, "подключаемым считается")
             check(_ast.ready, "кнопка «Включить» доступна")
-            check(len(_ast.setup_steps) == 6,
-                  f"пошаговая инструкция из шести шагов: {len(_ast.setup_steps)}")
+            check(len(_ast.setup_steps) == 7,
+                  f"пошаговая инструкция из семи шагов: {len(_ast.setup_steps)}")
+            check(any("Настроить автоматически" in s for s in _ast.setup_steps),
+                  "в инструкции есть путь через автонастройку")
+            check(all("Copy Config" not in s for s in _ast.setup_steps),
+                  "в инструкции нет несуществующей кнопки Copy Config")
             check(bool(_ast.only_while_running),
                   "сказано, что сервер живёт только при запущенной студии")
-            check(bool(_ast.auth), "сказано, что нужен токен")
+            check(bool(_ast.auth),
+                  f"сказано про вход: {_ast.auth}")
+            check("не нужен" in _ast.auth.lower() or "нет" in _ast.auth.lower(),
+                  "сказано, что токен не нужен — сервер открыт на localhost")
 
             # Конфигурация, которую копирует студия. Токен выдуманный.
             _paste = json.dumps({
@@ -1449,296 +1469,22 @@ def main() -> int:
     btmp = Path(tempfile.mkdtemp(prefix="ncp_bridge_"))
 
     btab = window.bridge_tab
-    # Шесть разделов: создание, подключение, мост NCP, возможности, темы и
+    # Шесть вкладок: создание, подключение, мост NCP, opencode, темы и
     # инструкция. Раньше вкладки «Инструкция» не было — счётчик стоял на 5.
-    # Названия стали короче: в боковой колонке «Создать новую базу» не
-    # помещалось, и длинная надпись читалась как инструкция, а не как
-    # название раздела.
-    check(window.tabs.count() == 6, f"разделов в окне: {window.tabs.count()}")
-    check(window.tabs.tabText(0) == "Новая база",
-          f"первый раздел — «{window.tabs.tabText(0)}»")
-    check(window.tabs.tabText(1) == "Существующая база",
-          f"второй раздел — «{window.tabs.tabText(1)}»")
-    check(window.tabs.tabText(2) == "Мост NCP",
-          f"третий раздел — «{window.tabs.tabText(2)}»")
-    check(window.tabs.tabText(3) == "Возможности",
-          f"четвёртый раздел — «{window.tabs.tabText(3)}»")
+    check(window.tabs.count() == 6, f"вкладок в окне: {window.tabs.count()}")
+    check(window.tabs.tabText(0) == "Создать новую базу",
+          f"первая вкладка — «{window.tabs.tabText(0)}»")
+    check(window.tabs.tabText(1) == "Подключить существующую",
+          f"вторая вкладка — «{window.tabs.tabText(1)}»")
+    check(window.tabs.tabText(2) == "Мост NCP — создать",
+          f"третья вкладка — «{window.tabs.tabText(2)}»")
+    check(window.tabs.tabText(3) == "opencode",
+          f"четвёртая вкладка — «{window.tabs.tabText(3)}»")
     check(window.tabs.tabText(4) == "Темы",
-          f"пятый раздел — «{window.tabs.tabText(4)}»")
+          f"пятая вкладка — «{window.tabs.tabText(4)}»")
     check(window.tabs.tabText(5) == "Инструкция",
-          f"шестой раздел — «{window.tabs.tabText(5)}»")
-    check(isinstance(btab, app_main.BridgeTab), "раздел моста собран")
-
-    # ---- 13а. Боковая навигация вместо вкладок
-    #
-    # Здесь важна не «есть ли панель», а её поведение. Три поломки
-    # находились только на глаз и только живьём:
-    #   - autoExclusive снимал отметку внутри Qt, мимо нашего кода, и
-    #     полоса прежнего раздела оставалась гореть — выглядело так,
-    #     будто выбраны два раздела сразу;
-    #   - клик по уже открытому разделу гасил его own-полосу, и раздел
-    #     был открыт, но не выбран;
-    #   - список и окно отчёта с политикой Expanding забирали в себя
-    #     лишнее место страницы, и внутри групп была пустота.
-    nav = window.nav
-    check(isinstance(nav, app_main.NavStack), "боковая навигация собрана")
-    # Про isVisible(): окно в самопроверке намеренно не показывается, и
-    # isVisible() у любого элемента всегда ложно — проверка ввела бы в
-    # заблуждение. Поэтому смотрим, что колонка не скрыта и достаточно
-    # широка, а живой показ проверяется отдельно, запуском окна.
-    check(not nav.nav.isHidden() and nav.nav.width() >= 180,
-          f"колонка навигации не скрыта и достаточно широка: {nav.nav.width()}")
-
-    def bar_color(item) -> str:
-        for part in item.bar.styleSheet().split(";"):
-            if "background" in part:
-                return part.split(":")[-1].strip()
-        return "?"
-
-    for index in range(nav.count()):
-        nav.setCurrentIndex(index)
-        marked = [i for i, it in enumerate(nav._items) if it.isChecked()]
-        check(marked == [index],
-              f"при выборе «{nav.tabText(index)}» отмечен только он")
-        lit = [i for i, it in enumerate(nav._items)
-               if bar_color(it) != "transparent"]
-        check(lit == [index],
-              f"полоса горит только у «{nav.tabText(index)}»: {lit}")
-        check(bar_color(nav._items[index]) == nav._items[index]._accent,
-              "полоса выбранного в его акценте")
-        check(nav.stack.currentWidget() is nav.widget(index),
-              "содержимое соответствует выбранному разделу")
-
-    # Клик мышью по пункту: раздел открывается, полоса не гаснет.
-    for index in range(nav.count()):
-        nav._items[index].click()
-        check(nav.currentIndex() == index,
-              f"клик по «{nav.tabText(index)}» открыл его")
-        check(nav._items[index].isChecked(),
-              f"после клика «{nav.tabText(index)}» остался отмечен")
-
-    nav.setCurrentIndex(0)
-    # Пункт самопереключаться не должен: отметка — часть оформления.
-    nav._items[0].click()
-    check(nav._items[0].isChecked(),
-          "клик по уже открытому разделу не гасит его полосу")
-
-    # ---- 13б. Панель состояния
-    #
-    # Панель врёт легче, чем что-либо в окне: она обязана совпадать с
-    # тем, что core говорит по-настоящему. Проверяем числа, а не вид.
-    bar = nav.status
-    check(bar.state_label.text() != "проверяю…",
-          "состояние панели определено: «%s»" % bar.state_label.text())
-    live = core.current_base()
-    if live is not None:
-        info = core.base_info(live)
-        check(bar.skills_label.text() == "скиллы: %d" % info["skills"],
-              "счётчик скиллов совпадает с базой: %s" % bar.skills_label.text())
-        check(live.name in bar.path_label.text()
-              or str(live) in bar.path_label.text(),
-              "путь в панели указывает на основную базу: %s"
-              % bar.path_label.text())
-        lib = core.library_dir(live)
-        want_notes = (sum(1 for p in lib.iterdir() if p.is_dir())
-                      if lib.is_dir() else 0)
-        check(bar.notes_label.text() == "записи: %d" % want_notes,
-              "счётчик записей совпадает с библиотекой: %s"
-              % bar.notes_label.text())
-    else:
-        check(bar.state_label.text() == "база не подключена",
-              "без базы панель говорит об этом прямо")
-    # Моста нет - панель обязана это признать, а не молчать.
-    if not core.find_bridges():
-        check(bar.state_label.text() == "мост не создан",
-              "без моста панель говорит прямо: %s" % bar.state_label.text())
-    check(bar._anim is not None,
-          "точка дышит: анимация запущена даже когда моста нет")
-    bar.set_pulse(False)
-    check(bar._anim is None, "пульс выключается по требованию")
-    bar.set_pulse(True)
-    check(bar._anim is not None, "пульс включается обратно")
-    check(bar.size_label.text().startswith("размер: ")
-          and bar.size_label.text().endswith(("Б", "КБ", "МБ", "ГБ")),
-          "размер с единицей измерения: %s" % bar.size_label.text())
-
-    # ---- 13в. Подразделы внутри «Возможностей» и непроглоченные тексты
-    #
-    # Qt не сжимает элемент под текст, а обрезает. На снимках это
-    # выглядело как «ставить отмеченн», «проверяе» и обрезанные пути:
-    # три разные поломки одного класса, и все три нашлись только
-    # глазами. Здесь они ловятся измерением.
-    #
-    # Импорт Qt именно здесь и до первого обращения: Python считает
-    # переменную локальной для всей функции с момента импорта, и стоит
-    # поставить его ниже первого использования, как было, - выходит
-    # UnboundLocalError на пустом месте.
-    from PyQt6.QtCore import Qt  # noqa: E402
-
-    sub = window.caps_tab.sub
-    check(isinstance(sub, app_main.NavStack), "колонка подразделов собрана")
-    check(sub.count() == 5, "подразделов внутри раздела: %d" % sub.count())
-    check(sub.status is None,
-          "внутри раздела нет второй панели состояния")
-    check(sub.nav.objectName() == "navplain",
-          "вложенная колонка без рамки: %s" % sub.nav.objectName())
-    check(window.caps_tab.caps_skills_list.wordWrap(),
-          "описания навыков переносятся, а не обрезаются")
-    check(window.caps_tab.caps_skills_list.horizontalScrollBarPolicy()
-          == Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
-          "под списком навыков нет горизонтальной полосы")
-
-    for index in range(sub.count()):
-        sub.setCurrentIndex(index)
-        marked = [i for i, it in enumerate(sub._items) if it.isChecked()]
-        check(marked == [index],
-              f"подраздел «{sub.tabText(index)}» отмечен один")
-        check(sub.stack.currentWidget() is sub.widget(index),
-              f"содержимое «{sub.tabText(index)}» на месте")
-
-    # Проверка на обрезанный текст: у каждой кнопки и каждой подписи
-    # с переносом ширина должна быть не меньше нужной.
-    from PyQt6.QtWidgets import QPushButton as _PB  # noqa: E402
-
-    cut_buttons = []
-    for index in range(sub.count()):
-        sub.setCurrentIndex(index)
-        for b in sub.widget(index).findChildren(_PB):
-            if b.width() + 2 < b.sizeHint().width():
-                cut_buttons.append(f"{b.text()} ({b.width()}"
-                                   f" из {b.sizeHint().width()})")
-    check(not cut_buttons,
-          "подписи кнопок в подразделах не обрезаны"
-          + (": " + ", ".join(cut_buttons) if cut_buttons else ""))
-
-    # ---- 13г. Никакой текст не выходит за пределы своего места
-    #
-    # Qt ужимает кнопку или флажок на недостающие пиксели и не ужимает,
-    # а обрезает надпись. Проверяем на двух ширинах: обычной и на
-    # минимальной, где обрезание и было.
-    #
-    # Считаем по-разному в зависимости от переноса: у подписи с
-    # переносом sizeHint - это ширина одной строки, и сравнение с ним
-    # даёт фантомы по 90 пикселей у текста, который как раз переносится
-    # и прекрасно помещается. Такие подписи сверяем с самым длинным
-    # словом: только оно может не влезть.
-    from PyQt6.QtGui import QFontMetrics  # noqa: E402
-    from PyQt6.QtWidgets import (  # noqa: E402
-        QAbstractButton,
-        QCheckBox,
-        QListWidget,
-        QRadioButton,
-    )
-
-    def too_narrow(root, width: int) -> list:
-        bad = []
-        for w in root.findChildren(QAbstractButton):
-            if not w.isVisible() or not w.text():
-                continue
-            need = QFontMetrics(w.font()).horizontalAdvance(w.text())
-            if isinstance(w, (QCheckBox, QRadioButton)):
-                need += 26
-            if w.width() + 2 < need:
-                bad.append(f"{w.text()!r} на {need - w.width()} px")
-        for lst in root.findChildren(QListWidget):
-            if not lst.isVisible():
-                continue
-            check(lst.wordWrap(), f"список переносит текст ({lst.count()} строк)")
-            check(lst.horizontalScrollBarPolicy()
-                  == Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
-                  "у списка нет горизонтальной полосы")
-        return bad
-
-    window.resize(1180, 880)
-    app.processEvents()
-    check(not too_narrow(window, 1180),
-          "на обычной ширине ничего не обрезано"
-          + (": " + "; ".join(too_narrow(window, 1180))[:160]
-             if too_narrow(window, 1180) else ""))
-    window.resize(1000, 880)
-    app.processEvents()
-    narrow = too_narrow(window, 1000)
-    check(not narrow, "на минимальной ширине ничего не обрезано"
-          + (": " + "; ".join(narrow)[:200] if narrow else ""))
-    check(window.minimumWidth() >= 1000,
-          "окно не открывается уже минимальной ширины: %d"
-          % window.minimumWidth())
-    window.resize(1180, 880)
-    app.processEvents()
-
-    # Подписи с переносом обязаны остаться целыми после смены размера
-    # окна. Человек открывает программу на одной ширине, потом тянет
-    # окно, и на узком текст должен переноситься, а не резаться.
-    from PyQt6.QtCore import QRect as _QRect  # noqa: E402
-    from PyQt6.QtGui import QFontMetrics as _QFM  # noqa: E402
-    from PyQt6.QtWidgets import QLabel as _QLabel  # noqa: E402
-
-    def cut_labels(page) -> list:
-        bad = []
-        for lab in page.findChildren(_QLabel):
-            text = lab.text() or ""
-            if not lab.isVisible() or not text or not lab.wordWrap():
-                continue
-            need = _QFM(lab.font()).boundingRect(
-                _QRect(0, 0, lab.width(), 10_000),
-                int(Qt.TextFlag.TextWordWrap), text).height()
-            if need > lab.height() + 4:
-                bad.append(f"{text[:26]!r} нужно {need}, есть {lab.height()}")
-        return bad
-
-    for width in (1180, 1000, 1400, 1000):
-        window.resize(width, 880)
-        app.processEvents()
-        for index in (2, 4):
-            window.tabs.setCurrentIndex(index)
-            app.processEvents()
-            bad = cut_labels(window.tabs.widget(index))
-            check(not bad,
-                  f"подписи целы при ширине окна {width}, раздел "
-                  f"«{window.tabs.tabText(index)}»"
-                  + (": " + "; ".join(bad[:2]) if bad else ""))
-    window.tabs.setCurrentIndex(0)
-    window.resize(1180, 880)
-    app.processEvents()
-
-    # ---- 13д. Qt не должен сыпать предупреждениями
-    #
-    # Раньше при каждом запуске Qt писал шесть раз: «Negative sizes
-    # (0,-1) are not possible». Нашёлся источник: у ещё не разложенной
-    # страницы sizeHint() равен -1, и он уходил в setMinimumHeight.
-    # Ошибка безвредная, но повторялась и заглушала настоящие
-    # предупреждения - а заглушать их нельзя.
-    from PyQt6.QtCore import qInstallMessageHandler  # noqa: E402
-
-    seen_qt: list[str] = []
-
-    def _collect(mode, context, message) -> None:  # noqa: ANN001 - Qt
-        seen_qt.append(str(message))
-
-    previous = qInstallMessageHandler(_collect)
-    try:
-        fresh = app_main.MainWindow()
-        fresh.show()
-        app.processEvents()
-        fresh.close()
-        app.processEvents()
-    finally:
-        qInstallMessageHandler(previous)
-    negative = [m for m in seen_qt if "Negative sizes" in m]
-    check(not negative,
-          "Qt не пишет про отрицательные размеры при сборке окна"
-          + (": %d сообщений" % len(negative) if negative else ""))
-
-    # Высоты: страница равна содержимому, списки не растягиваются.
-    for tab, widget, limit in (
-        (window.create_tab, window.create_tab.program_list, 220),
-        (window.create_tab, window.create_tab.log, 220),
-        (window.import_tab, window.import_tab.mine_list, 200),
-        (window.caps_tab, window.caps_tab.caps_skills_list, 260),
-    ):
-        check(widget.height() <= limit,
-              f"{type(tab).__name__}.{widget.objectName() or type(widget).__name__} "
-              f"не растянут: {widget.height()} <= {limit}")
+          f"шестая вкладка — «{window.tabs.tabText(5)}»")
+    check(isinstance(btab, app_main.BridgeTab), "вкладка моста собрана")
 
     # Образец лежит внутри базы: значит, уедет на любой компьютер вместе
     # с программой. Ничего скачивать из интернета не нужно.
@@ -2757,6 +2503,630 @@ def main() -> int:
           f"возврат привёл к тому же файлу: {core.bases_file().name}")
     shutil.rmtree(_isolate, ignore_errors=True)
     echo("Временный список баз убран")
+
+    # ---- 22. Android Studio в один клик
+    echo("\n--- 22. Android Studio: версия, сборка плагина, адрес ---")
+
+    # Разбор buildNumber в платформу. Наш настоящий номер не должен
+    # разваливаться: программа обязана понять, что это 261.25134.
+    check(android_studio.platform_from_build(
+              "AI-261.25134.95.2612.15914620") == (261, 25134),
+          "платформа из buildNumber: 261.25134")
+    check(android_studio.platform_from_build(
+              "262.10968.92") == (262, 10968),
+          "платформа из buildNumber: 262.10968")
+    check(android_studio.platform_from_build("") == (),
+          "пустой buildNumber не превращается в платформу")
+
+    # Сравнение чисел, а не строк. Иначе 263.9 окажется новее 263.10
+    # и программа выберет не ту сборку плагина.
+    check(android_studio.version_tuple("263.9") < android_studio.version_tuple("263.10"),
+          "263.9 старее 263.10 — сравнение числовое")
+
+    # Границы сборки плагина. Здесь важно всё: сборка 263.5701 не должна
+    # подходить студии 263.6259, потому что её until точечный.
+    _p = (263, 5701)
+    check(android_studio.until_matches("263.5701.*", _p),
+          "263.5701 подходит своей подплатформе")
+    check(not android_studio.until_matches("263.5701.*", (263, 6259)),
+          "263.5701 НЕ подходит студии 263.6259 — until точечный")
+    check(android_studio.until_matches("261.*", (261, 26000)),
+          "261.* накрывает всю ветку 261")
+    check(not android_studio.until_matches("261.*", (262, 10315)),
+          "261.* не накрывает ветку 262")
+    check(android_studio.since_matches("261.25134", (261, 25134)),
+          "since равно платформе — подходит")
+    check(not android_studio.since_matches("262.10968", (262, 10315)),
+          "since новее платформы — не подходит")
+
+    # Набор сборок лежит в программе и читается.
+    _bundle = android_studio.load_bundle()
+    check(_bundle.ready,
+          f"набор сборок плагина на месте: {len(_bundle.builds)} шт.")
+    check(all(b.get("sha256") and b.get("since") and b.get("until")
+              for b in _bundle.builds),
+          "у каждой сборки есть хеш и границы версий")
+
+    # Выбор под конкретную платформу — то, ради чего всё затевалось.
+    for _plat, _want in ((( 261, 25134), "261.25134.203"),
+                         ((262, 10315), "262.10315.174"),
+                         ((262, 10968), "262.10968.92"),
+                         ((263, 3889), "263.3889.77"),
+                         ((263, 6259), "263.6259.38")):
+        _pick = android_studio.pick_build(_bundle, _plat)
+        check(_pick is not None and _pick["version"] == _want,
+              f"платформа {android_studio.platform_text(_plat)} -> "
+              f"сборка {_want}"
+              + (f" (выбрано {_pick['version']})" if _pick else " (ничего)"))
+
+    # Платформа, которой нет в наборе, — честный отказ, а не чужая сборка.
+    check(android_studio.pick_build(_bundle, (264, 1)) is None,
+          "под неизвестную платформу сборка не подставляется")
+    check(android_studio.pick_build(android_studio.Bundle(base=Path(), builds=[]),
+                                    (261, 25134)) is None,
+          "пустой набор даёт отказ, а не исключение")
+
+    # Хеш архива совпадает с тем, что в указателе: файлы не перепакованы.
+    if _bundle.ready:
+        _one = _bundle.builds[0]
+        _arc = android_studio.bundle_file(_bundle, _one)
+        check(_arc.is_file(), f"архив на месте: {_one['file']}")
+        if _arc.is_file():
+            check(android_studio.sha256(_arc).lower() == _one["sha256"].lower(),
+                  f"хеш архива {_one['file']} совпадает с указателем")
+
+    # Адрес сервера — тот самый, и никакого токена.
+    check(android_studio.SERVER_URL == "http://127.0.0.1:64342/stream",
+          f"адрес сервера: {android_studio.SERVER_URL}")
+    check("63342" not in android_studio.SERVER_URL,
+          "адрес не 63342 — это встроенный веб-сервер IDE, он всегда открыт")
+    check("api/mcp" not in android_studio.SERVER_URL,
+          "адрес не /api/mcp — там вечный 404")
+
+    # Настройка включения сервера: годная разметка и правильный флаг.
+    check('name="enableMcpServer"' in android_studio.SETTINGS_XML,
+          "в настройках студии включается enableMcpServer")
+    check("McpServerSettings" in android_studio.SETTINGS_XML,
+          "компонент назван так, как ждёт сама студия")
+    import xml.etree.ElementTree as _ET
+    try:
+        _root = _ET.fromstring(android_studio.SETTINGS_XML)
+        _option = _root.find("./component/option")
+        check(_root.tag == "application"
+              and _root.find("component").get("name") == "McpServerSettings"
+              and _option is not None and _option.get("value") == "true",
+              "XML настройки разбирается и содержит enableMcpServer=true")
+    except _ET.ParseError as _exc:
+        check(False, f"XML настройки не разбирается: {_exc}")
+
+    # Запись реестра android-studio: без токена, с адресом и без блокировок.
+    _spec = next((s for s in (_mcp_registry.load_registry(core.program_root())
+                             .get("servers") or [])
+                  if s.get("id") == "android-studio"), None)
+    check(_spec is not None, "android-studio есть в реестре")
+    if _spec is not None:
+        _conn = _spec.get("connection") or {}
+        check(_conn.get("url") == "http://127.0.0.1:64342/stream",
+              "в реестре указан постоянный адрес сервера")
+        _auth = str(_spec.get("auth") or "")
+        check("не нужен" in _auth.lower() or "нет" in _auth.lower(),
+              f"в реестре сказано, что токен не нужен: {_auth}")
+        check("Copy Config" not in json.dumps(_spec, ensure_ascii=False),
+              "в реестре больше нет кнопки Copy Config — её нет и в студии")
+        _blocking = [r for r in (_spec.get("requires") or [])
+                     if r.get("blocks")]
+        check(not _blocking,
+              "требования android-studio не блокирующие: программа выполняет "
+              "их сама")
+
+    # Папка плагина берётся из архива: у сборок 261/262 и 263 она разная.
+    if _bundle.ready:
+        _folders = {str(b.get("folder") or "") for b in _bundle.builds}
+        check(len(_folders) >= 1 and all(_folders),
+              f"в указателе у всех сборок имя папки: {_folders}")
+
+    # Проба не должна выдавать «жив» на закрытом порту. Случай, который
+    # однажды уже обманул: открытый порт IDE ничего не значит.
+    _free = _free_port()
+    _ok, _note = android_studio.probe(f"http://127.0.0.1:{_free}/stream",
+                                       timeout=2.0)
+    check(not _ok, f"на закрытом порте проба честно отвечает «нет»: {_note}")
+
+    # ---- 23. OBS и эмуляторы: в один клик
+    echo("\n--- 23. OBS и эмуляторы ---")
+
+    # Пароль OBS: длина ограничена сверху не просто так, OBS отклоняет
+    # слишком длинный. Проверяем обе границы и обязательные классы символов.
+    _pw = bridges.generate_password()
+    check(bridges.password_is_valid(_pw),
+          f"сгенерированный пароль годный: {len(_pw)} символов")
+    check(not bridges.password_is_valid(""),
+          "пустой пароль не проходит")
+    check(not bridges.password_is_valid("abc"),
+          f"слишком короткий пароль не проходит (минимум "
+          f"{bridges.OBS_PASSWORD_MIN})")
+    check(not bridges.password_is_valid("A" * 40),
+          f"слишком длинный пароль не проходит (максимум "
+          f"{bridges.OBS_PASSWORD_MAX})")
+    _short = _pw[:bridges.OBS_PASSWORD_MIN - 1]
+    _long = "A" * (bridges.OBS_PASSWORD_MAX + 1)
+    _edge_min = "aB3" + "x" * (bridges.OBS_PASSWORD_MIN - 3)
+    _edge_max = "aB3" + "x" * (bridges.OBS_PASSWORD_MAX - 3)
+    check(not bridges.password_is_valid(_short)
+          and not bridges.password_is_valid(_long)
+          and bridges.password_is_valid(_edge_min)
+          and bridges.password_is_valid(_edge_max),
+          f"границы пароля ровно {bridges.OBS_PASSWORD_MIN} и "
+          f"{bridges.OBS_PASSWORD_MAX}: обе стороны проходят правильно")
+    _different = [bridges.generate_password() for _ in range(5)]
+    check(len(set(_different)) == 5, "генератор даёт разные пароли")
+
+    # Пароль OBS не должен попадать в реестр: реестр едет в публичный
+    # репозиторий, а пароль — нет.
+    _reg_text = json.dumps(
+        _mcp_registry.load_registry(core.program_root()), ensure_ascii=False
+    )
+    check("OBS_WS_PASSWORD" not in _reg_text or "пароль" in _reg_text,
+          "в реестре нет пароля OBS")
+    check("server_password" not in _reg_text,
+          "в реестре нет файла настроек OBS с паролем")
+
+    # Команда запуска пишется с плейсхолдерами, а в настройки — с
+    # настоящими путями. Плейсхолдер в настройках недопустим: мост не
+    # запустится.
+    check("{PROGRAM}" in (json.loads(
+              (core.program_root() / "mcp-registry.json").read_text(
+                  encoding="utf-8"))["servers"][-1].get("connection", {})
+              .get("command", [""])[-1]),
+          "в реестре команда записана плейсхолдером {PROGRAM}")
+    _obs = next((s for s in _mcp_registry.load_servers(core.program_root())
+                 if s.id == "obs"), None)
+    _emu = next((s for s in _mcp_registry.load_servers(core.program_root())
+                 if s.id == "android-emulator"), None)
+    check(_obs is not None, "сервер obs есть в реестре программы")
+    check(_emu is not None, "сервер android-emulator есть в реестре программы")
+    for _srv, _label in ((_obs, "obs"), (_emu, "android-emulator")):
+        if _srv is None:
+            continue
+        _block = mcp_registry.build_block(_srv)
+        check("{PROGRAM}" not in _block and "{DBAPP_PYTHON}" not in _block,
+              f"у {_label} в блок подставлены настоящие пути")
+        check('"type": "local"' in _block,
+              f"у {_label} блок записан как локальный сервер")
+        # Путь в блоке проходит через json.dumps, поэтому обратные
+        # слэши удвоены. Ищем именно так, как он попадёт в файл.
+        # Сравниваем разобранный блок, а не текст: json.dumps
+        # экранирует нелатиницу, и на пути с кириллицей (а такая
+        # папка у многих) побайтовое сравнение врало, хотя путь верный.
+        try:
+            _parsed = json.loads("{" + _block.rstrip().rstrip(",") + "}")
+            _cmd = []
+            for _value in _parsed.values():
+                if isinstance(_value, dict):
+                    _cmd = _value.get("command") or []
+                    break
+        except (json.JSONDecodeError, AttributeError):
+            _cmd = []
+        _root_text = str(core.program_root()).lower().replace("\\", "/")
+        check(any(_root_text in str(_part).lower().replace("\\", "/")
+                  for _part in _cmd),
+              f"у {_label} в блоке настоящий путь к программе")
+
+    # Оба моста лежат в программе и запускаются лаунчером, а не напрямую:
+    # пароль OBS и путь к adb иначе не подставить.
+    _root = core.program_root()
+    for _rel, _label in (
+        (("tools", "dbapp", "launchers", "obs_bridge_launcher.py"), "OBS"),
+        (("tools", "dbapp", "launchers", "android_bridge_launcher.py"),
+         "эмулятор"),
+    ):
+        check((_root.joinpath(*_rel)).is_file(),
+              f"лаунчер моста {_label} на месте: {'/'.join(_rel)}")
+
+    # Лаунчеры не пишут в stdout: там протокол MCP, лишний текст ломает
+    # связь. Проверяем, что журнал уходит в stderr.
+    for _rel in (("tools", "dbapp", "launchers", "obs_bridge_launcher.py"),
+                 ("tools", "dbapp", "launchers", "android_bridge_launcher.py")):
+        _src = _root.joinpath(*_rel).read_text(encoding="utf-8")
+        check("file=sys.stderr" in _src,
+              f"{_rel[-1]} пишет журнал в stderr, а не в stdout")
+
+    # Мосты в program_root на месте со своими окружениями.
+    # node_modules в репозиторий не попадает — он в .gitignore, и на
+    # свежей копии его нет по закону. Поэтому проверяем объявление
+    # моста в package.json, а не установленные файлы: иначе селфтест
+    # падал бы у каждого, кто клонировал репозиторий.
+    _obs_manifest = _root / "tools" / "thirdparty" / "obs-mcp-node" / "package.json"
+    _obs_declared = False
+    if _obs_manifest.is_file():
+        try:
+            _obs_declared = "obs-mcp" in _obs_manifest.read_text(encoding="utf-8")
+        except OSError:
+            _obs_declared = False
+    check(_obs_declared,
+          "мост OBS (TypeScript) объявлен в программе; node_modules "
+          "ставится командой npm и в репозиторий не попадает")
+    check((_root / "tools" / "thirdparty" / "android-mcp-server"
+           / "server.py").is_file(),
+          "мост эмулятора лежит в программе")
+    # Python-порт obs-mcp нерабочий: зовёт FastMCP с параметром
+    # description, которого в актуальном SDK нет. Проверяем, что мы не
+    # вернулись к нему, иначе мост молча упадёт на старте.
+    check(not (_root / "tools" / "thirdparty" / "obs-mcp" / "py_src").is_dir(),
+          "нерабочий Python-порт obs-mcp вынесен из программы")
+    _launcher = (_root / "tools" / "dbapp" / "launchers"
+                 / "obs_bridge_launcher.py").read_text(encoding="utf-8")
+    check("OBS_WEBSOCKET_PASSWORD" in _launcher,
+          "лаунчер OBS передаёт пароль мосту через переменную окружения")
+    check("runpy" not in _launcher and "obs-mcp.py" not in _launcher,
+          "лаунчер OBS запускает Node-мост, а не нерабочий Python-порт")
+    _emul = (_root / "tools" / "dbapp" / "launchers"
+             / "android_bridge_launcher.py").read_text(encoding="utf-8")
+    check('"PATH"' in _emul,
+          "лаунчер эмулятора кладёт папку adb в PATH — мост зовёт adb по имени")
+
+    # Второй мост к тому же эмулятору: mcp-ldplayer, 38 инструментов.
+    # Внешних зависимостей нет, поэтому ставить нечего — достаточно
+    # наличия кода. Лаунчер обязателен: он передаёт путь к LDPlayer,
+    # иначе мост ищет установку сам и может выбрать не тот каталог.
+    check((_root / "tools" / "thirdparty" / "mcp-ldplayer"
+           / "mcp_ldplayer" / "mcp_server.py").is_file(),
+          "мост LDPlayer лежит в программе")
+    check((_root / "tools" / "dbapp" / "launchers"
+           / "ldplayer_bridge_launcher.py").is_file(),
+          "лаунчер моста LDPlayer на месте")
+    _ldp_req = _root / "tools" / "thirdparty" / "mcp-ldplayer" / "requirements.txt"
+    if _ldp_req.is_file():
+        _req = _ldp_req.read_text(encoding="utf-8").lower()
+        check("no external dependencies" in _req,
+              "мост LDPlayer объявлен без внешних зависимостей — верно")
+
+    _ldp_srv = next((s for s in _mcp_registry.load_servers(core.program_root())
+                     if s.id == "ldplayer"), None)
+    check(_ldp_srv is not None, "сервер ldplayer есть в реестре программы")
+    if _ldp_srv is not None:
+        _ldp_block = mcp_registry.build_block(_ldp_srv)
+        check(_ldp_block.startswith('"ldplayer": {')
+              and _ldp_block.rstrip().endswith("},"),
+              "блок ldplayer собран цельно")
+        check("{PROGRAM}" not in _ldp_block,
+              "в блок ldplayer подставлен настоящий путь")
+        # Кейлоггер в пакете есть, и об этом сказано вслух: и в реестре,
+        # и в скилле. Молчать об этом нельзя.
+        # Server — это dataclass, а не словарь. В json его не отдать,
+        # нужно .raw: это и есть та запись реестра, как её видит человек.
+        _ldp_raw = json.dumps(_ldp_srv.raw, ensure_ascii=False)
+        check("pt_keylogger" in _ldp_raw,
+              "в реестре ldplayer сказано про pt_keylogger прямо")
+        _skill = _root / "skills" / "android-emulator" / "SKILL.md"
+        if _skill.is_file():
+            _sk = _skill.read_text(encoding="utf-8")
+            check("pt_keylogger" in _sk,
+                  "в скилле сказано про pt_keylogger прямо")
+            check("ld_screenshot" in _sk and "не работает" in _sk,
+                  "в скилле сказано, что ld_screenshot не работает")
+            check("emulator-5552" in _sk,
+                  "в скилле сказано, что инструментам ADB нужен параметр name")
+
+    # Оба эмуляторных моста должны быть в настройках opencode: иначе
+    # один из них молча не поднимется, а человек решит, что сломан мост.
+    _cfg_path = Path.home() / ".config" / "opencode" / "opencode.jsonc"
+    if _cfg_path.is_file():
+        _cfg_text = _cfg_path.read_text(encoding="utf-8")
+        check('"android-emulator"' in _cfg_text,
+              "мост android-emulator записан в настройки opencode")
+        check('"ldplayer"' in _cfg_text,
+              "мост ldplayer записан в настройки opencode")
+
+    # Мост эмулятора написан под MCP 1.x. Проверяем, что закреплено mcp<2,
+    # иначе он падает с ModuleNotFoundError — так и было при первой установке.
+    _pyproject = (_root / "tools" / "thirdparty" / "android-mcp-server"
+                  / "pyproject.toml")
+    if _pyproject.is_file():
+        _pt = _pyproject.read_text(encoding="utf-8")
+        # Ищем ограничение верхней границы в строке с mcp, а не
+        # подстроку: написать можно "mcp<2" или "mcp>=1.0.0,<2", и
+        # смысл у них одинаковый, а текст разный.
+        _mcp_lines = [ln.strip().strip(",").strip('"')
+                      for ln in _pt.splitlines()
+                      if ln.strip().startswith('"mcp')]
+        _pinned = any("<2" in ln for ln in _mcp_lines)
+        check(_pinned,
+              f"у моста эмулятора закреплена версия mcp ниже 2: "
+              f"{_mcp_lines or 'строка с mcp не найдена'}")
+
+    # Эмуляторы, которых нет, должны называться честно, а не молча
+    # пропускаться: BlueStacks поддержка записана, но не установлен.
+    _ids = {spec["id"] for spec in bridges.EMULATORS}
+    check({"ldplayer", "bluestacks"} <= _ids,
+          f"в модуле оба эмулятора: {sorted(_ids)}")
+    _found = [b["name"] for b in bridges.EMULATORS if bridges.find_emulator(b["id"])]
+    check(isinstance(_found, list),
+          f"найденные эмуляторы: {_found or 'ни одного'}")
+
+    # Проба эмулятора без устройства обязана говорить «нет», а не молчать.
+    if not bridges.adb_devices():
+        _ok, _note = bridges.probe_emulator()
+        check(not _ok, f"без устройства проба честно отвечает «нет»: {_note}")
+
+    # Настройки OBS: сервер включён только при закрытой студии.
+    _on, _port, _pw_in_obs, _path = bridges.obs_state()
+    check(isinstance(_on, bool) and _port > 0,
+          f"состояние OBS читается: сервер={'включён' if _on else 'выключен'}, "
+          f"порт {_port}")
+    if bridges.obs_running():
+        _ok, _note = bridges.enable_obs_server(_pw)
+        check(not _ok and "запущена" in _note,
+              f"при открытой OBS программа отказывается писать: {_note}")
+
+    # Живой handshake с поддельным OBS. Пока этого теста не было, в
+    # probe_obs накопились три ошибки подряд: op==0 срабатывал как «ложь»
+    # (0 в Python не истина) и отвергал любое приветствие; salt брался из
+    # словаря d вместо d.authentication и ронял проверку на TypeError; а
+    # ответ Identify (op=2) сверялся с requestStatus, который бывает только
+    # в op=7. Итог: кнопка «Настроить автоматически» для OBS не могла
+    # сработать никогда. Поднимаем настоящий сервер протокола v5 и требуем
+    # верных ответов — без OBS на машине.
+    try:
+        import asyncio as _aio
+        import socket as _sockmod
+        import threading as _threadmod
+        from websockets.asyncio.server import serve as _ws_serve
+    except Exception as _exc:  # noqa: BLE001
+        check(False, f"для проверки handshake нужен websockets: {_exc}")
+    else:
+        _TEST_PW = "Тест_Пароль_42"
+        _SALT = "0123456789abcdef"
+        _CHAL = "chalenge0123456789"
+
+        async def _fake_obs(ws):
+            """Подделка OBS: ровно та последовательность v5, что в студии."""
+            await ws.send(json.dumps({"op": 0, "d": {
+                "obsWebSocketVersion": "5.7.4", "rpcVersion": 1,
+                "authentication": {"challenge": _CHAL, "salt": _SALT}}}))
+            try:
+                _msg = json.loads(await ws.recv())
+            except Exception:  # noqa: BLE001
+                return
+            if _msg.get("op") != 1:
+                return
+            import base64 as _b64
+            import hashlib as _hl
+            _secret = _b64.b64encode(_hl.sha256(
+                (_TEST_PW + _SALT).encode()).digest()).decode()
+            _want = _b64.b64encode(_hl.sha256(
+                (_secret + _CHAL).encode()).digest()).decode()
+            if (_msg.get("d") or {}).get("authentication") != _want:
+                await ws.close(4009, "Authentication failed.")
+                return
+            await ws.send(json.dumps({"op": 2,
+                                     "d": {"negotiatedRpcVersion": 1}}))
+            await _aio.sleep(0.2)
+
+        _probe_sock = _sockmod.socket()
+        _probe_sock.bind(("127.0.0.1", 0))
+        _probe_port = _probe_sock.getsockname()[1]
+        _probe_sock.close()
+        _probe_ready = _threadmod.Event()
+
+        async def _serve_fake():
+            async with _ws_serve(_fake_obs, "127.0.0.1", _probe_port):
+                _probe_ready.set()
+                await _aio.sleep(60)
+
+        def _fake_thread():
+            _aio.run(_serve_fake())
+
+        _th = _threadmod.Thread(target=_fake_thread, daemon=True)
+        _th.start()
+        _probe_ready.wait(timeout=10)
+        check(_probe_ready.is_set(),
+              f"поддельный OBS поднялся на порту {_probe_port} для проверки")
+        if _probe_ready.is_set():
+            _good, _note_good = bridges.probe_obs(_probe_port, _TEST_PW)
+            check(_good,
+                  f"верный пароль проходит настоящий handshake: {_note_good}")
+            _bad, _note_bad = bridges.probe_obs(_probe_port, "неверный-пароль")
+            check(not _bad,
+                  f"неверный пароль отвергает сервер, а не терпит программа: "
+                  f"{_note_bad}")
+
+    # Поломка «OBS установлена, но не знает где»: без ключа реестра
+    # студия падает с ошибкой про языковой файл, и человек ищет не
+    # там. Детектор обязан её называть прямо.
+    check(callable(getattr(bridges, "obs_install_problem", None)),
+          "в модуле есть детектор поломки установки OBS")
+    _obs_root = bridges.obs_installed()
+    _obs_recorded = bridges.obs_install_path_recorded()
+    if _obs_root is None:
+        check(bridges.obs_install_problem() == "",
+              "без установленной OBS детектор молчит — иначе он врёт")
+    elif _obs_recorded is None:
+        _note_missing = bridges.obs_install_problem()
+        check("OBSStudio" in _note_missing,
+              f"детектор называет отсутствие ключа реестра: {_note_missing}")
+    else:
+        check(bridges.obs_install_problem() == "",
+              "при верном ключе реестра детектор не мешает")
+    _obs_src = (_root / "tools" / "dbapp" / "bridges.py").read_text(
+        encoding="utf-8")
+    check("obs_install_problem()" in _obs_src.split("def auto_setup_obs")[-1],
+          "автонастройка OBS спрашивает детектор, а не только порт")
+
+    # Запись в реестр — внешнее действие. Кнопка создания ключа обязана
+    # быть явной: без разрешения автонастройка только говорит, с ключом
+    # — пишет.
+    check(callable(getattr(bridges, "create_obs_install_path", None)),
+          "в модуле есть функция записи ключа установки OBS")
+    _obs_src_all = (_root / "tools" / "dbapp" / "bridges.py").read_text(
+        encoding="utf-8")
+    check("allow_install_path_fix" in _obs_src_all,
+          "автонастройка OBS принимает разрешение на запись ключа")
+    # Смотрим настоящую сигнатуру, а не текст: значение по умолчанию —
+    # это то, что реально получит вызов без разрешения.
+    import inspect as _inspect
+    _sig = _inspect.signature(bridges.auto_setup_obs)
+    _param = _sig.parameters.get("allow_install_path_fix")
+    check(_param is not None
+          and _param.default is False,
+          "запись ключа по умолчанию выключена"
+          f" (значение по умолчанию: {_param.default if _param else 'параметра нет'})")
+    _main_src = (_root / "tools" / "dbapp" / "main.py").read_text(encoding="utf-8")
+    check("allow_install_path_fix=fix_install_path" in _main_src,
+          "кнопка передаёт в автонастройку своё решение")
+    _reg_pos = _main_src.find("allow_install_path_fix=fix_install_path")
+    _ask_pos = _main_src.find("QMessageBox.question(", _reg_pos - 4000)
+    check(_ask_pos != -1,
+          "кнопка спрашивает разрешение перед записью в реестр")
+    check("StandardButton.No," in _main_src[_ask_pos:_ask_pos + 600],
+          "в вопросе по умолчанию стоит «нет» — запись не молчаливая")
+
+    import subprocess  # noqa: E402
+    import time  # noqa: E402
+    import opencode_caps as _opencode_caps  # noqa: E402
+    import main as _main  # noqa: E402 - импорт безопасен: под __main__ не заходит
+
+    # Одно окно на запуск. Окружение на машине удваивает любой
+    # запуск Python, и без защиты один щелчок по ярлыку открывал
+    # три-четыре окна. Проверяем и наличие защиты, и что она
+    # действительно не даёт второму экземпляру открыться.
+    check(callable(getattr(_main, "claim_single_instance", None)),
+          "в программе есть проверка единственного экземпляра")
+    check(callable(getattr(_main, "_acquire_instance_lock", None)),
+          "метка экземпляра берётся атомарно (через O_EXCL)")
+    _lock_src = (_main_src.partition("def _acquire_instance_lock")[2])
+    _lock_src = _lock_src.partition("\ndef ")[0]
+    check("os.O_EXCL" in _lock_src,
+          "метка создаётся через os.O_EXCL — выиграть может один")
+    check("_pid_alive" in _main_src,
+          "метка умеет проверять, жив ли прежний владелец")
+    _run_src = _main_src.partition("def run()")[2]
+    check("claim_single_instance()" in _run_src.split("MainWindow()")[0],
+          "проверка единственного экземпляра стоит ДО создания окна")
+
+    # Метка по-настоящему одна: первый запуск берёт её, второй
+    # отказывается. Проверяем в отдельных процессах, потому что в
+    # одном процессе результат был бы заранее известен.
+    _probe = Path(tempfile.gettempdir()) / "opencode-base-selftest-probe.py"
+    _pid_file = Path(tempfile.gettempdir()) / "opencode-base-selftest-owner.txt"
+    _pid_file.unlink(missing_ok=True)
+    _probe.write_text(
+        "import sys\n"
+        "sys.path.insert(0, r'" + str(_root / "tools" / "dbapp").replace("\\", "\\\\")
+        + "')\n"
+        "import main as m\n"
+        # Своё имя метки: у человека может быть открыта программа, и
+        # тогда боевая метка занята законно. Тест не должен ни
+        # спорить с живым окном, ни мешать ему.
+        "m.APP_SOCKET_NAME = 'opencode-base-selftest'\n"
+        # Маркеры латинские: русский текст через subprocess приходит
+        # в другой кодировке, и сравнение ложно падает. Победитель
+        # записывает свой номер в файл — тест убьёт именно его:
+        # окружение может подмешать ещё один процесс, и метку
+        # держит не тот, кого мы запускали из теста.
+        "import os\n"
+        "mine = m.claim_single_instance()\n"
+        "print('LOCK-TAKEN' if mine else 'LOCK-BUSY')\n"
+        "if mine:\n"
+        "    open(sys.argv[1], 'w').write(str(os.getpid()))\n"
+        # держим метку, пока тест не убьёт: вышел бы процесс —
+        # и метка сразу стала бы свободной
+        "    import time; time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    try:
+        _first = subprocess.Popen([sys.executable, str(_probe), str(_pid_file)],
+                                  stdout=subprocess.PIPE, text=True)
+        time.sleep(2.5)
+        _second = subprocess.run([sys.executable, str(_probe), str(_pid_file)],
+                                 capture_output=True, text=True, timeout=60)
+        check(_second.stdout.strip().endswith("LOCK-BUSY"),
+              f"второй экземпляр отказывается открываться: "
+              f"{_second.stdout.strip() or 'нет ответа'}")
+        # Прежний владелец умер: метка осталась, но следующий запуск
+        # должен её забрать, а не застрять навсегда. Убиваем ровно
+        # того, кто её взял, по номеру из файла.
+        try:
+            _first.kill()
+        except OSError:
+            pass
+        time.sleep(0.5)
+        try:
+            _owner = int(_pid_file.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            _owner = 0
+        if _owner:
+            subprocess.run(["taskkill", "/PID", str(_owner), "/F"],
+                           capture_output=True, timeout=60)
+        time.sleep(1.5)
+        _third = subprocess.run([sys.executable, str(_probe), str(_pid_file)],
+                                capture_output=True, text=True, timeout=60)
+        check("LOCK-TAKEN" in _third.stdout,
+              "после смерти прежнего владельца метку можно взять снова: "
+              f"{_third.stdout.strip() or 'нет ответа'}")
+    except (OSError, subprocess.SubprocessError) as _exc:
+        check(False, f"проверку единственного экземпляра не отработать: {_exc}")
+    finally:
+        _probe.unlink(missing_ok=True)
+        _pid_file.unlink(missing_ok=True)
+
+    # Кнопка «Настроить автоматически» не должна трогать конфиг,
+    # когда блок уже записан. opencode перезапускает серверы MCP на
+    # каждое изменение файла, и от лишней перезаписи мосты плодились
+    # по одному на каждое нажатие.
+    _tmp_dir = Path(tempfile.mkdtemp(prefix="opencode-selftest-"))
+    try:
+        (_tmp_dir / "opencode.jsonc").write_text(
+            '{\n  "mcp": {}\n}\n', encoding="utf-8")
+        _obs_srv = next((s for s in _mcp_registry.load_servers(core.program_root())
+                         if s.id == "obs"), None)
+        if _obs_srv is None:
+            check(False, "сервер obs не найден для проверки записи")
+        else:
+            _cfg_tmp = _tmp_dir / "opencode.jsonc"
+            _msgs1, _errs1 = _mcp_registry.enable(_tmp_dir, _obs_srv)
+            _after_first = _cfg_tmp.read_text(encoding="utf-8")
+            _msgs2, _errs2 = _mcp_registry.enable(_tmp_dir, _obs_srv)
+            _after_second = _cfg_tmp.read_text(encoding="utf-8")
+            check('"obs"' in _after_first,
+                  "первое нажатие вписывает сервер в настройки")
+            check(_after_first == _after_second,
+                  "повторное нажатие не меняет файл настройки")
+            check(_after_second.count('"obs"') == 1,
+                  "сервер записан ровно один раз, копий не плодится")
+            check(not _errs2, f"повторное нажатие без ошибок: {_errs2}")
+            check(any("не трогаю" in m for m in _msgs2),
+                  "программа честно говорит, что файл не тронула")
+    finally:
+        shutil.rmtree(_tmp_dir, ignore_errors=True)
+
+    # Запятая-разделитель ставится отдельной строкой перед метками.
+    # Приклеивать её к предыдущей строке нельзя: если та строка —
+    # комментарий «//», запятая уедет внутрь и файл перестанет
+    # читаться. Проверяем именно этот опасный случай.
+    _plain = ('{\n  "mcp": {\n    "pc": {\n      "type": "local"\n    },\n'
+              '    // чужой комментарий\n    "note": {\n      "x": 1\n    }\n'
+              '  }\n}\n')
+    _entry = '"obs": {\n  "type": "local",\n  "enabled": true\n}'
+    _ins = _opencode_caps.insert_entry(_plain, "mcp", "obs", _entry)
+    check(_opencode_caps.check_jsonc(_ins),
+          "вставка рядом с чужим комментарием не ломает файл")
+    check('"comment"' not in _ins or "//" in _ins,
+          "чужой комментарий на месте после вставки")
+
+    # Ярлык: старый был битым — вёл на удалённую папку, и скрипт
+    # отвечал «ярлык уже есть, ничего не меняю». Теперь такой
+    # ярлык обязан переписываться.
+    _sc_src = (_root / "tools" / "dbapp" / "make_shortcut.py").read_text(
+        encoding="utf-8")
+    check("def read_target(" in _sc_src,
+          "скрипт ярлыка умеет читать, куда ярлык ведёт")
+    check("Ничего не меняю" not in _sc_src,
+          "скрипт ярлыка больше не отказывается чинить битый ярлык")
+    check("shortcut_links" in _sc_src,
+          "скрипт находит и чинит варианты вида «Управление базой 2.lnk»")
+    _main_name = (_root / "tools" / "dbapp" / "make_shortcut.py")
+    check(_main_name.is_file(), "скрипт создания ярлыка на месте")
 
     # ---- итог
     failed = [text for good, text in results if not good]

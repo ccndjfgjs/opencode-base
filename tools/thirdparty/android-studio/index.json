@@ -1,0 +1,88 @@
+{
+  "plugin_id": 26071,
+  "source": "https://plugins.jetbrains.com/plugin/26071-mcp-server",
+  "note": "Архивы официального плагина JetBrains MCP Server, скачанные вручную и положенные сюда, потому что маркетплейс недоступен из-за блокировок. Файлы не перепаковывались.",
+  "builds": [
+    {
+      "file": "mcpserver-261.25134.203.zip",
+      "version": "261.25134.203",
+      "since": "261.25134",
+      "until": "261.*",
+      "sha256": "b981ec0eeeb1447d327a818b078e1623f2201d5947ea57c0ee5849a23f52e1a3",
+      "size": 1729752,
+      "folder": "mcpserver"
+    },
+    {
+      "file": "mcpserver-262.10315.23.zip",
+      "version": "262.10315.23",
+      "since": "262.10315",
+      "until": "262.*",
+      "sha256": "08c7eddf2315f3e02c4772ca9e499308b3846f928c56543bf71c24aea4e808a1",
+      "size": 2662013,
+      "folder": "mcpserver"
+    },
+    {
+      "file": "mcpserver-262.10315.174.zip",
+      "version": "262.10315.174",
+      "since": "262.10315",
+      "until": "262.*",
+      "sha256": "3eed9462bf3367c2d7c3ae8fcf269547f0c3cb28f1365436ddc5ee83841cc55e",
+      "size": 2670727,
+      "folder": "mcpserver"
+    },
+    {
+      "file": "mcpserver-262.10968.92.zip",
+      "version": "262.10968.92",
+      "since": "262.10968",
+      "until": "262.*",
+      "sha256": "99c4b8e202083bc90d2f64e914da072b7e78effcf1d376c459a44be11e796697",
+      "size": 2671055,
+      "folder": "mcpserver"
+    },
+    {
+      "file": "mcpserver-263.3889.77.zip",
+      "version": "263.3889.77",
+      "since": "263.3889",
+      "until": "263.3889.*",
+      "sha256": "7142a6bc17cd4e1ca085f52d9b1b34e3bab68e825c16e333a03a67e63d5977aa",
+      "size": 2857243,
+      "folder": "mcpserver-plugin"
+    },
+    {
+      "file": "mcpserver-263.4732.31.zip",
+      "version": "263.4732.31",
+      "since": "263.4732",
+      "until": "263.4732.*",
+      "sha256": "299b41897934ba79cb77c4e95232b2fb025d5b65def20618f1ffb379916cf336",
+      "size": 2910573,
+      "folder": "mcpserver-plugin"
+    },
+    {
+      "file": "mcpserver-263.5153.49.zip",
+      "version": "263.5153.49",
+      "since": "263.5153",
+      "until": "263.5153.*",
+      "sha256": "a62f62b442a22fb3d5bef6ed4d4b8120706e1f03bfd998f9ae89a3d9d4c8d7bb",
+      "size": 2923607,
+      "folder": "mcpserver-plugin"
+    },
+    {
+      "file": "mcpserver-263.5701.41.zip",
+      "version": "263.5701.41",
+      "since": "263.5701",
+      "until": "263.5701.*",
+      "sha256": "0aaa8d4a3a85d71068deb6fd54f6ec3d0654c077d382bf5d578f05192356596b",
+      "size": 2959309,
+      "folder": "mcpserver-plugin"
+    },
+    {
+      "file": "mcpserver-263.6259.38.zip",
+      "version": "263.6259.38",
+      "since": "263.6259",
+      "until": "263.6259.*",
+      "sha256": "fc956d8c38bd70e83cf8ca886edd8669b5db291f4aba1e6ec32260f5f5655b36",
+      "size": 3208120,
+      "folder": "mcpserver-plugin"
+    }
+  ]
+}

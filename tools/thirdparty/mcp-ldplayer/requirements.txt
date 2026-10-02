@@ -1,0 +1,7 @@
+# No external dependencies required for core functionality.
+# All features use Python standard library only.
+#
+# Optional dependencies for enhanced features:
+# frida-tools        # For Frida script injection (runtime)
+# mitmproxy          # For traffic interception
+# objection          # For runtime mobile exploration
