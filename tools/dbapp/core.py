@@ -1309,10 +1309,11 @@ def _read_manifest(dst_skills: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _write_manifest(dst_skills: Path, skills: dict, index_hash: str) -> None:
+def _write_manifest(dst_skills: Path, skills: dict, index_hash: str,
+                    files: dict | None = None) -> None:
     """Запоминаем, что было поставлено в эту базу."""
     dst_skills.mkdir(parents=True, exist_ok=True)
-    payload = {"skills": skills, "index": index_hash}
+    payload = {"skills": skills, "index": index_hash, "files": files or {}}
     (dst_skills / SKILL_MANIFEST).write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -1341,11 +1342,17 @@ def _skill_folders(folder: Path) -> set[str]:
 
 
 def _loose_files(folder: Path) -> set[str]:
-    """Файлы рядом с папками навыков: описания, указатели."""
+    """Файлы рядом с папками навыков: описания и указатели.
+
+    Только имена, начинающиеся с «_»: таким признаком помечены служебные
+    файлы папок, свои записи пользователь так не называет. Всё прочее —
+    мусор, который в базу не едет.
+    """
     if not folder.is_dir():
         return set()
     return {p.name for p in folder.iterdir()
-            if p.is_file() and p.name != SKILL_MANIFEST}
+            if p.is_file() and p.name.startswith("_")
+            and p.name.endswith(".md") and p.name != SKILL_MANIFEST}
 
 
 def compare_skills(master: Path, other: Path, expect: str = "full") -> dict:
@@ -1394,6 +1401,9 @@ def compare_skills(master: Path, other: Path, expect: str = "full") -> dict:
         "stale": stale,
         "manual": manual,
         "loose_missing": [] if only_skills else sorted(_loose_files(m_sk) - _loose_files(o_sk)),
+        "loose_changed": [] if only_skills else sorted(
+            n for n in _loose_files(m_sk) & _loose_files(o_sk)
+            if _file_hash(m_sk / n) != _file_hash(o_sk / n)),
         "loose_extra": [] if only_skills else sorted(_loose_files(o_sk) - _loose_files(m_sk)),
         "index_absent": (not o_idx_file.is_file()) and not only_skills,
         "index_missing": [] if only_skills else sorted(set(m_idx) - set(o_idx)),
@@ -1420,6 +1430,10 @@ def skills_findings(result: dict) -> list[str]:
         out.append(f"навыки изменены руками: {', '.join(result['manual'])}")
     if result["loose_missing"]:
         out.append(f"нет файлов рядом с навыками: {', '.join(result['loose_missing'])}")
+    _loose_diff = result.get("loose_changed") or []
+    if _loose_diff:
+        out.append("файлы рядом с навыками расходятся содержимым: "
+                   + ", ".join(_loose_diff))
     if result["loose_extra"]:
         out.append(f"лишние файлы рядом с навыками: {', '.join(result['loose_extra'])}")
     if result["index_absent"]:
@@ -1476,6 +1490,27 @@ def _copy_skills(source: Path, target: Path) -> list[str]:
                 continue
         shipped[sub] = want
 
+    # Файлы рядом с навыками — часть пакета навыков. У новых баз они есть,
+    # а в существующих остались недоделанными: на 16 описанных навыков
+    # при 32 навыках. Правило то же, что у самих навыков.
+    shipped_files = manifest.get("files")
+    shipped_files = shipped_files if isinstance(shipped_files, dict) else {}
+    for name in sorted(_loose_files(src_skills)):
+        src_f = src_skills / name
+        dst_f = dst_skills / name
+        want_f = _file_hash(src_f)
+        if not dst_f.is_file():
+            shutil.copy2(src_f, dst_f)
+            copied.append(f"файл {name}")
+        elif _file_hash(dst_f) != want_f:
+            if shipped_files.get(name) == _file_hash(dst_f):
+                shutil.copy2(src_f, dst_f)
+                copied.append(f"файл {name} обновлён")
+            else:
+                copied.append(f"файл {name} изменён в базе — не тронут")
+                continue
+        shipped_files[name] = want_f
+
     index_src = source / "skills-index.json"
     index_dst = target / "skills-index.json"
     want_index = ""
@@ -1494,7 +1529,7 @@ def _copy_skills(source: Path, target: Path) -> list[str]:
                 elif manifest:
                     copied.append("skills-index.json изменён в базе — не тронут")
 
-    _write_manifest(dst_skills, shipped, want_index)
+    _write_manifest(dst_skills, shipped, want_index, shipped_files)
     return copied
     dst_skills = target / "skills"
     for item in sorted(src_skills.iterdir()):
@@ -1968,6 +2003,17 @@ def refresh_skills(base: Path) -> list[str]:
         changed = _sync_dir(item, dst)
         if changed:
             messages.append(f"Скилл обновлён: {item.name} ({len(changed)} файл)")
+
+    # Файлы рядом с навыками — часть пакета навыков. Найдено живьём:
+    # в уже созданной базе описание навыков осталось на 16 навыках, пока
+    # их было 32, и никто этого не замечал.
+    for _loose in sorted(_loose_files(src_root)):
+        _src_f = src_root / _loose
+        _dst_f = dst_root / _loose
+        if _dst_f.is_file() and _dst_f.read_bytes() == _src_f.read_bytes():
+            continue
+        shutil.copy2(_src_f, _dst_f)
+        messages.append(f"Описание навыков обновлено: {_loose}")
 
     # Индекс — часть программы, обновляется всегда: из него нейросеть
     # узнаёт, когда какой скилл применять.

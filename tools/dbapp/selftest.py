@@ -3398,6 +3398,76 @@ def main() -> int:
         _extra = sorted(_rows - set(_real))
         check(not _extra,
               f"в таблице нет навыков, которых нет в папке: {_extra}")
+# ---- 8и. Файлы рядом с навыками: едут, обновляются и проверяются
+    echo("\n--- 8и. Файлы рядом с навыками ---")
+    _bi = tempfile.mkdtemp(prefix="selftest-loose-")
+    try:
+        _mi = Path(_bi) / "мастер"
+        (_mi / "skills").mkdir(parents=True)
+        _d = _mi / "skills" / "первый"
+        _d.mkdir()
+        (_d / "SKILL.md").write_text("# первый\n", encoding="utf-8")
+        (_mi / "skills" / "_ОПИСАНИЕ.md").write_text("описание на 1 навык\n",
+                                                    encoding="utf-8")
+        (_mi / "skills-index.json").write_text(
+            json.dumps({"skills": [{"name": "первый", "when": "а", "trigger": "б",
+                                    "result": "в"}]}, ensure_ascii=False, indent=2),
+            encoding="utf-8")
+
+        # Посторонний файл без подчёркивания в базу не едет.
+        (_mi / "skills" / "THIRD-PARTY.md").write_text("чужое\n", encoding="utf-8")
+        check(core._loose_files(_mi / "skills") == {"_ОПИСАНИЕ.md"},
+              f"служебными считаются только файлы с подчёркиванием: "
+              f"{sorted(core._loose_files(_mi / 'skills'))}")
+
+        _ti = Path(_bi) / "база"
+        _ti.mkdir()
+        core._copy_skills(_mi, _ti)
+        check((_ti / "skills" / "_ОПИСАНИЕ.md").is_file(),
+              "описание доехало до новой базы")
+        check(not (_ti / "skills" / "THIRD-PARTY.md").is_file(),
+              "посторонний файл в базу не попал")
+
+        # Описание в базе устарело — сверка это видит.
+        (_ti / "skills" / "_ОПИСАНИЕ.md").write_text("описание на 0 навыков\n",
+                                                     encoding="utf-8")
+        _r = core.compare_skills(_mi, _ti)
+        check(_r["loose_changed"] == ["_ОПИСАНИЕ.md"],
+              f"устаревшее содержание описания замечено: {_r['loose_changed']}")
+        check(any("содержимым" in f for f in core.skills_findings(_r)),
+              "об этом сказано по-человечески")
+
+        # Манифест помнит, что ставили мы: значит, обновить можно.
+        _md = core._read_manifest(_ti / "skills")
+        check("files" in _md and "_ОПИСАНИЕ.md" in _md["files"],
+              f"манифест помнит и файлы: {sorted(_md.get('files') or {})}")
+        # Возвращаем базу к тому, что ставили мы, и меняем мастер: база
+        # отстала, но её никто не трогал — обновление допустимо. Если же
+        # базу правили руками, обновления быть не должно, и это проверяется
+        # следующим шагом.
+        shutil.copy2(_mi / "skills" / "_ОПИСАНИЕ.md",
+                     _ti / "skills" / "_ОПИСАНИЕ.md")
+        (_mi / "skills" / "_ОПИСАНИЕ.md").write_text("описание на 2 навыка\n",
+                                                    encoding="utf-8")
+        _msgs = core._copy_skills(_mi, _ti)
+        check(any("ОПИСАНИЕ" in x and "обновлён" in x for x in _msgs),
+              f"устаревшее описание обновилось: {_msgs}")
+        _txt = (_ti / "skills" / "_ОПИСАНИЕ.md").read_text(encoding="utf-8")
+        check("на 2 навыка" in _txt, "новое содержание на месте")
+
+        # Правка руками — не трогаем.
+        (_ti / "skills" / "_ОПИСАНИЕ.md").write_text("моё\n", encoding="utf-8")
+        _msgs = core._copy_skills(_mi, _ti)
+        check(any("ОПИСАНИЕ" in x and "не тронут" in x for x in _msgs),
+              f"правка руками не тронута: {_msgs}")
+        check((_ti / "skills" / "_ОПИСАНИЕ.md").read_text(encoding="utf-8") == "моё\n",
+              "правка руками цела")
+
+        _r = core.compare_skills(_mi, _ti)
+        check(_r["loose_changed"] == ["_ОПИСАНИЕ.md"],
+              "и сверка говорит, что файлы разошлись")
+    finally:
+        shutil.rmtree(_bi, ignore_errors=True)
     # ---- итог
     failed = [text for good, text in results if not good]
     echo("\n" + "=" * 62)
