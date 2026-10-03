@@ -1891,6 +1891,27 @@ def main() -> int:
           "при первом показе отмечены все навыки")
     check(ctab.btn_skills_put.isEnabled() and ctab.btn_skills_drop.isEnabled(),
           "кнопки поставить/убрать навыки доступны")
+    # Список должен показывать навыки, а не три строки из тридцати двух.
+    # Дефект был в том, что описание шло в одну строку: появлялась
+    # горизонтальная прокрутка, а из-за неё навыки не помещались по высоте.
+    # Проверяем все три свойства, а не одно: перенос без запрета полосы,
+    # или перенос при одинаковой высоте строк — это снова молчаливое враньё.
+    _sl = ctab.caps_skills_list
+    check(_sl.wordWrap() is True, "в списке навыков включён перенос по словам")
+    check(_sl.uniformItemSizes() is False,
+          "и высота строк не выровнена — иначе перенос теряется молча")
+    check(_sl.horizontalScrollBarPolicy()
+          == app_main.Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
+          "горизонтальной прокрутки нет — список не вылезает по ширине")
+    check(_sl.minimumHeight() >= 300,
+          f"высота списка вмещает больше трёх навыков: {_sl.minimumHeight()} px")
+    _create_sl = getattr(ctab, "skills_list", None)
+    if _create_sl is not None:
+        check(_create_sl.wordWrap() is True,
+              "в списке навыков при создании базы перенос тоже включён")
+        check(_create_sl.horizontalScrollBarPolicy()
+              == app_main.Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
+              "и горизонтальной прокрутки там тоже нет")
     nagents = len(list((core.program_root() / 'tools' / 'agents').glob('*.md')))
     check(str(nagents) in ctab.checks['agents'].text(),
           f"агентов названо честно: {ctab.checks['agents'].text()[:40]}")
