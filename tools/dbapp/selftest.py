@@ -3037,12 +3037,20 @@ def main() -> int:
     try:
         _first = subprocess.Popen([sys.executable, str(_probe), str(_pid_file)],
                                   stdout=subprocess.PIPE, text=True)
-        time.sleep(2.5)
+        # Ждём не фиксированное время, а сам факт: первый процесс пишет
+        # файл в тот момент, когда метка уже у него. На нагруженной
+        # машине 2.5 секунды не хватало — Python стартует в несколько
+        # процессов, и второй успевал забрать метку раньше первого.
+        _waited = 0.0
+        while not _pid_file.exists() and _waited < 30.0:
+            time.sleep(0.2)
+            _waited += 0.2
         _second = subprocess.run([sys.executable, str(_probe), str(_pid_file)],
                                  capture_output=True, text=True, timeout=60)
         check(_second.stdout.strip().endswith("LOCK-BUSY"),
               f"второй экземпляр отказывается открываться: "
-              f"{_second.stdout.strip() or 'нет ответа'}")
+              f"{_second.stdout.strip() or 'нет ответа'}"
+              f" (метку ждали {_waited:.1f} с)")
         # Прежний владелец умер: метка осталась, но следующий запуск
         # должен её забрать, а не застрять навсегда. Убиваем ровно
         # того, кто её взял, по номеру из файла.
@@ -3366,6 +3374,30 @@ def main() -> int:
     finally:
         shutil.rmtree(_be, ignore_errors=True)
 
+# ---- 8з. Описание навыков не должно отставать от папки
+    echo("\n--- 8з. Описание навыков не отстаёт от папки ---")
+    _sk_root = core.program_root() / "skills"
+    _desc_file = _sk_root / "_ОПИСАНИЕ-НАВЫКОВ.md"
+    _real = sorted(d.name for d in _sk_root.iterdir()
+                   if d.is_dir() and (d / "SKILL.md").is_file()) \
+        if _sk_root.is_dir() else []
+    check(_desc_file.is_file(), "файл описаний навыков на месте")
+    check(len(_real) >= 1, f"навыки в папке перечислены: {len(_real)}")
+    if _desc_file.is_file() and _real:
+        _txt = _desc_file.read_text(encoding="utf-8")
+        _miss = [n for n in _real if n not in _txt]
+        check(not _miss,
+              f"каждый навык описан: не описано {len(_miss)} {_miss}")
+        _rows = set()
+        for _line in _txt.splitlines():
+            if _line.startswith("| `") and "`" in _line[3:]:
+                _rows.add(_line.split("`")[1])
+        _gap = sorted(set(_real) - _rows)
+        check(not _gap,
+              f"каждый навык есть в сводной таблице: без строки {len(_gap)} {_gap}")
+        _extra = sorted(_rows - set(_real))
+        check(not _extra,
+              f"в таблице нет навыков, которых нет в папке: {_extra}")
     # ---- итог
     failed = [text for good, text in results if not good]
     echo("\n" + "=" * 62)
