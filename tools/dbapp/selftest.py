@@ -3638,8 +3638,10 @@ def main() -> int:
               "Blender: идентификатор и издатель из реестра")
         check(_by_id["ldplayer"].method == "manual" and not _by_id["ldplayer"].can_install,
               "LDPlayer: вручную, кнопки нет")
-        check(_by_id["excel"].hand_over and _by_id["excel"].winget_id == "",
-              "Excel: передаём человеку, идентификатора нет")
+        check(_by_id["excel"].method == "none" and not _by_id["excel"].stops_for_human,
+              "Excel: предлагать нечего — решение человека по офису от 03.10.2026")
+        check(_by_id["excel"].winget_id == "" and not _by_id["excel"].can_install,
+              "Excel: идентификатора в winget нет, кнопки нет")
         check(_by_id["windows-admin"].method == "none",
               "windows-admin: программа не нужна")
         check(_by_id["obs"].bridge == "bundled" and _by_id["android-studio"].bridge == "bundled",
