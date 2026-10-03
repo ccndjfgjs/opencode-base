@@ -1316,11 +1316,15 @@ def main() -> int:
 
         # ---- 12. переносимость: базу можно отдать другому человеку
         echo("\n--- 12. Переносимость на другой компьютер ---")
-        # Ни в одном рабочем файле не должно быть имени пользователя
-        # и папки установки: иначе базу нельзя передать другому человеку —
-        # у него пути не совпадут, и ничего не заработает.
-        root = core.app_root()
         user = Path.home().name
+        # ---- 12а. Шаблоны базы: личных файлов здесь быть не должно
+        #
+        # Проверка узкая и это НЕ oversight: в живой базе файлы profile.md,
+        # facts.md, projects.md и созданные-базы.json по замыслу содержат
+        # имя пользователя, и проверять их на отсутствие имени бессмысленно —
+        # они и должны его содержать. Поэтому в перечень попадают только
+        # шаблоны, которые копируются в новую базу и остаются чистыми.
+        root = core.app_root()
         watch = [
             root / "Управление-базой.cmd",
             root / "config" / "plugins" / "memory-base.js",
@@ -1342,9 +1346,76 @@ def main() -> int:
             and user in path.read_text(encoding="utf-8", errors="replace")
         ]
         check(not dirty,
-              f"имя пользователя не вписано в файлы: проверено {len(watch)}")
+              f"имя пользователя не вписано в шаблоны: проверено {len(watch)}")
         for item in dirty:
             echo(f"      имя пользователя найдено в: {item}")
+
+        # ---- 12б. Папка программы: здесь имя пользователя не законно нигде
+        #
+        # Отдельная проверка, потому что папка программы — не база. Личных
+        # файлов здесь нет, и появление имени пользователя означает утечку:
+        # программу увозят на другую машину, и путь там не сойдётся.
+        #
+        # **Перечисляются места, а не файлы.** Раньше утечка прошла потому,
+        # что перечень был из семи файлов, и новый документ в новой папке
+        # просто в него не попал. Здесь перечислены папки, которые мы пишем,
+        # поэтому любой новый файл внутри них проверяется сам.
+        #
+        # Исключено: tools/thirdparty — чужой код извне, его пути внутри
+        # виртуальных окружений указывают на машину сборщика; .venv и
+        # site-packages — то же самое; logs и отчёты — машинный вывод.
+        _prog = core.program_root()
+        _own_places = [
+            "",                        # файлы в корне программы
+            "config",                  # настройки opencode
+            "tools/dbapp",             # код программы
+            "tools/antiblock",
+            "tools/ncp-bridge",
+            "tools/pc-bridge",
+            "tools/agents",
+            "skills",
+            "инструкции",
+            "знания",
+            "документы",               # планы и проектные записи
+            "библиотека/Шаблоны",
+        ]
+        _not_ours = {
+            "__pycache__", "node_modules", ".git", ".venv", "venv",
+            "site-packages", "cache", "data", "shots", "модули", "models",
+            "записи", "архив", "входящие", "журнал", "личное",
+        }
+        _text_ext = {".md", ".json", ".py", ".js", ".jsonc", ".cmd", ".ps1",
+                     ".txt", ".html", ".yaml", ".yml", ".bat"}
+        _prog_files: set[Path] = set()
+        for _place in _own_places:
+            _base = _prog / _place if _place else _prog
+            if not _base.exists():
+                continue
+            for _path in (_base.glob("*") if not _place else _base.rglob("*")):
+                if not _path.is_file() or _path.suffix.lower() not in _text_ext:
+                    continue
+                if any(part in _not_ours for part in _path.parts):
+                    continue
+                if _path.name == "selftest-report.txt" or _path.suffix == ".log":
+                    continue
+                if _path.stat().st_size > 3_000_000:
+                    continue
+                _prog_files.add(_path)
+        _prog_dirty = sorted(
+            str(p.relative_to(_prog)) for p in _prog_files
+            if user and user in p.read_text(encoding="utf-8", errors="replace")
+        )
+        check(not _prog_dirty,
+              f"в папке программы имени пользователя нет: проверено {len(_prog_files)}")
+        for item in _prog_dirty:
+            echo(f"      утечка в папке программы: {item}")
+        # Перечень не должен выродиться в ноль: пустой проверяет ничто и
+        # при этом выглядит как успех. На пустой машине с одной папкой честно.
+        check(len(_prog_files) > 50,
+              f"перечень программы не выродился: {len(_prog_files)} файлов")
+        check((not (_prog / "документы").is_dir())
+              or any("документы" in p.parts for p in _prog_files),
+              "папка документы под проверкой, если она есть")
 
         marks = sum(
             1
