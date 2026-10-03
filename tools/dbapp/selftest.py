@@ -3642,23 +3642,50 @@ def main() -> int:
               "Excel: предлагать нечего — решение человека по офису от 03.10.2026")
         check(_by_id["excel"].winget_id == "" and not _by_id["excel"].can_install,
               "Excel: идентификатора в winget нет, кнопки нет")
-        check(_by_id["windows-admin"].method == "none",
-              "windows-admin: программа не нужна")
+        check(_by_id["windows-admin"].method == "winget"
+              and _by_id["windows-admin"].winget_id == "OpenJS.NodeJS.LTS",
+              "windows-admin: Node.js ставится через winget, а не «не требуется»")
+        check("не требуется" not in _by_id["windows-admin"].program,
+              f"windows-admin больше не говорит «не требуется»: "
+              f"{_by_id['windows-admin'].program!r}")
+        _wa_req = next((r for r in
+                     next(s for s in _servers if s.id == "windows-admin").requirements
+                     if r.what.startswith("Node.js")), None)
+        check(_wa_req is not None and _wa_req.kind == "command",
+              "Node.js в требованиях windows-admin — проверяемая команда, а не ручное")
+        _emu = _by_id["android-emulator"]
+        check(_emu.method == "none" and _emu.winget_id == "",
+              "Android-эмулятор: главным не стоит BlueStacks, его тут нет")
+        check(len(_emu.alternatives) == 4,
+              f"у Android-эмулятора четыре варианта: {len(_emu.alternatives)}")
+        check(_emu.alternatives and _emu.alternatives[0].get("program") == "LDPlayer",
+              "первым идёт LDPlayer — он стоит на этой машине")
+        _bs = next((a for a in _emu.alternatives if a.get("program") == "BlueStacks"), None)
+        check(_bs is not None and _bs.get("publisher_trusted") is False,
+              "BlueStacks внутри вариантов, и издатель не подтверждён")
+        check(_bs is not None and _bs.get("winget_id") == "BlueStack.BlueStacks",
+              "у BlueStacks свой идентификатор и метод winget")
         check(_by_id["obs"].bridge == "bundled" and _by_id["android-studio"].bridge == "bundled",
               "мосты OBS и Android Studio лежат внутри программы")
-        check(_by_id["android-emulator"].publisher_trusted is False,
-              "издатель BlueStacks не подтверждён — кнопка обязана предупреждать")
-        check(len(_by_id["android-emulator"].alternatives) == 1,
-              "у Android-эмулятора есть альтернатива LDPlayer")
-    # Идентификаторы winget из реестра обязаны быть настоящими. Порядок не
-    # важен — сравниваем множества, иначе проверка ловится на том, что
-    # «BlenderFoundation» по алфавиту раньше «BlueStack», а не на данных.
-    _winget_ids = {p.winget_id for p in _by_id.values() if p and p.winget_id}
+    # Идентификаторы winget обязаны быть настоящими. Обходим и главный блок, и
+    # варианты: BlueStacks после правки 03.10.2026 живёт в alternatives, и
+    # проверка только главного блока его бы не увидела. Порядок не важен —
+    # сравниваем множества, иначе ловимся на том, что «BlenderFoundation» по
+    # алфавиту раньше «BlueStack», а не на самих данных.
+    _winget_ids = set()
+    for _p in _by_id.values():
+        if not _p:
+            continue
+        if _p.winget_id:
+            _winget_ids.add(_p.winget_id)
+        for _a in _p.alternatives:
+            if isinstance(_a, dict) and _a.get("winget_id"):
+                _winget_ids.add(str(_a["winget_id"]))
     _want_ids = {"Adobe.CreativeCloud", "BlueStack.BlueStacks",
                  "BlenderFoundation.Blender", "Google.AndroidStudio",
-                 "OBSProject.OBSStudio"}
+                 "OBSProject.OBSStudio", "OpenJS.NodeJS.LTS"}
     check(_winget_ids == _want_ids,
-          f"идентификаторы в реестре — те самые: {sorted(_winget_ids)}")
+          f"идентификаторы в реестре — те самые, включая варианты: {sorted(_winget_ids)}")
     # ---- итог
     failed = [text for good, text in results if not good]
     echo("\n" + "=" * 62)
