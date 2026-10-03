@@ -12,6 +12,21 @@
       "name": "Windows-администрирование",
       "source": "https://github.com/devladpopov/windows-admin-mcp",
       "install": "npm-глобально, затем npx windows-admin-mcp",
+      "program_install": {
+        "program": "не требуется",
+        "method": "none",
+        "winget_id": "",
+        "catalog_version": "",
+        "expected_signer": "",
+        "needs_admin": false,
+        "needs_admin_verified": true,
+        "official_url": "",
+        "hand_over": false,
+        "publisher_trusted": true,
+        "bridge": "",
+        "instructions": "Отдельная программа из списка вкладки «Программы» серверу не нужна: он работает на Node.js, который ставится сам по себе и в этот список не входит. Права администратора — ручное требование, программа проверяет их сама и отдельно предупреждает.",
+        "checked": "2026-10-03"
+      },
       "connection": {
         "kind": "local",
         "command": [
@@ -78,6 +93,21 @@
       "name": "Excel",
       "source": "https://github.com/sbroenne/mcp-server-excel",
       "install": "расширение для VS Code (sbroenne.excel-mcp) либо запуск сервера отдельно",
+      "program_install": {
+        "program": "Microsoft 365 (Excel)",
+        "method": "manual",
+        "winget_id": "",
+        "catalog_version": "",
+        "expected_signer": "Microsoft Corporation",
+        "needs_admin": true,
+        "needs_admin_verified": false,
+        "official_url": "https://www.microsoft.com/microsoft-365/",
+        "hand_over": true,
+        "publisher_trusted": true,
+        "bridge": "",
+        "instructions": "Кнопки «установить» не будет: Microsoft 365 в winget отсутствует (проверено 03.10.2026 — winget отвечает «Не найдены пакеты»). Ставится официальным Office Deployment Tool, и внутри есть вход в аккаунт — до него программа доводит и передаёт тебе. После установки в Excel ещё нужно включить «Доверять доступ к проектам VBA», иначе сервер откажет: см. поле requires.",
+        "checked": "2026-10-03"
+      },
       "connection": {
         "kind": "local",
         "command": [
@@ -138,6 +168,21 @@
       "name": "Blender (3D)",
       "source": "https://github.com/ahujasid/mcp-for-blender",
       "install": "uvx mcp-for-blender + аддон в Blender",
+      "program_install": {
+        "program": "Blender",
+        "method": "winget",
+        "winget_id": "BlenderFoundation.Blender",
+        "catalog_version": "5.2.2",
+        "expected_signer": "Blender Foundation",
+        "needs_admin": true,
+        "needs_admin_verified": false,
+        "official_url": "https://www.blender.org/download/",
+        "hand_over": false,
+        "publisher_trusted": true,
+        "bridge": "",
+        "instructions": "Ставится одной кнопкой через winget, без входа и без подписки. После установки аддон ставится отдельно: uvx mcp-for-blender install-addon, затем включить его в настройках аддонов Blender. Пока аддон не включён, сервер формально подключается, но не отвечает.",
+        "checked": "2026-10-03"
+      },
       "connection": {
         "kind": "local",
         "command": [
@@ -182,6 +227,21 @@
       "name": "Adobe Creative Cloud",
       "source": "https://claude.com/connectors/adobe-creativity",
       "install": "удалённый MCP-сервер Adobe",
+      "program_install": {
+        "program": "Adobe Creative Cloud",
+        "method": "winget",
+        "winget_id": "Adobe.CreativeCloud",
+        "catalog_version": "6.10.0.252.41",
+        "expected_signer": "Adobe Inc.",
+        "needs_admin": true,
+        "needs_admin_verified": false,
+        "official_url": "https://www.adobe.com/creativecloud/desktop-app.html",
+        "hand_over": true,
+        "publisher_trusted": true,
+        "bridge": "",
+        "instructions": "Клиент Creative Cloud ставится одной кнопкой через winget, вход ему не нужен. Photoshop, Premiere и Illustrator ставятся уже из клиента — после входа в аккаунт и оплаты подписки. До этого места программа доводит и передаёт тебе, потому что дальше нужны твой пароль и платёжные данные, а их у неё нет и быть не должно.",
+        "checked": "2026-10-03"
+      },
       "connection": {
         "kind": "remote",
         "url": "https://adobe-creativity.adobe.io/mcp",
@@ -215,6 +275,21 @@
       "name": "Android Studio",
       "source": "https://plugins.jetbrains.com/plugin/26071-mcp-server",
       "install": "Плагин JetBrains «MCP Server» лежит в самой программе: сборки разложены по папке tools/thirdparty/android-studio, указатель index.json. Отдельная установка не нужна и сеть не нужна — маркетплейс JetBrains из-за блокировок часто недоступен. Программа определяет версию студии и ставит подходящую сборку сама. Вручную: распаковать zip в %APPDATA%\\Google\\AndroidStudio<версия>\\plugins\\ — имя папки внутри архива своё у каждой сборки, правки в plugin.xml не нужны",
+      "program_install": {
+        "program": "Android Studio",
+        "method": "winget",
+        "winget_id": "Google.AndroidStudio",
+        "catalog_version": "2026.2.1.8",
+        "expected_signer": "Google LLC",
+        "needs_admin": false,
+        "needs_admin_verified": false,
+        "official_url": "https://developer.android.com/studio",
+        "hand_over": false,
+        "publisher_trusted": true,
+        "bridge": "bundled",
+        "instructions": "Студия ставится одной кнопкой через winget. Мост уже лежит в программе: сборки разложены по tools/thirdparty/android-studio, указатель index.json. Устанавливать и качать ничего не нужно, сеть не требуется — маркетплейс JetBrains из-за блокировок часто недоступен. Настройки студии правятся только при закрытой студии.",
+        "checked": "2026-10-03"
+      },
       "connection": {
         "kind": "remote",
         "manual_config": true,
@@ -275,6 +350,21 @@
       "name": "OBS Studio",
       "source": "https://github.com/royshil/obs-mcp",
       "install": "Мост obs-mcp лежит в самой программе: tools/thirdparty/obs-mcp-node, установлен через npm и работает без сети. Взят TypeScript-вариант, а не Python-порт из того же репозитория: порт зовёт FastMCP с параметром description, которого в актуальном SDK нет, и падает на старте. Проверено 02.10.2026",
+      "program_install": {
+        "program": "OBS Studio",
+        "method": "winget",
+        "winget_id": "OBSProject.OBSStudio",
+        "catalog_version": "32.2.2",
+        "expected_signer": "OBS Project",
+        "needs_admin": false,
+        "needs_admin_verified": false,
+        "official_url": "https://obsproject.com/download",
+        "hand_over": false,
+        "publisher_trusted": true,
+        "bridge": "bundled",
+        "instructions": "OBS ставится одной кнопкой через winget. Мост obs-mcp уже лежит в программе (tools/thirdparty/obs-mcp-node), ставить ничего не нужно. WebSocket-сервер встроен в OBS с версии 28 и включается руками: Настройки → Веб-сервер. Отдельный obs-websocket уже не нужен.",
+        "checked": "2026-10-03"
+      },
       "connection": {
         "kind": "local",
         "command": [
@@ -336,6 +426,35 @@
       "name": "Android-эмулятор (LDPlayer, BlueStacks)",
       "source": "https://github.com/minhalvp/android-mcp-server",
       "install": "Мост лежит в программе: tools/thirdparty/android-mcp-server, своё окружение .venv. Универсальный: работает с любым эмулятором, который виден через adb — LDPlayer, BlueStacks, MEmu, MuMu. Ничего доустанавливать не нужно, adb берётся либо у эмулятора, либо из Android SDK",
+      "program_install": {
+        "program": "Android-эмулятор",
+        "method": "winget",
+        "winget_id": "BlueStack.BlueStacks",
+        "catalog_version": "5.22.166.1003",
+        "expected_signer": "now.gg, Inc.",
+        "needs_admin": true,
+        "needs_admin_verified": false,
+        "official_url": "https://www.bluestacks.com/",
+        "hand_over": false,
+        "publisher_trusted": false,
+        "bridge": "bundled",
+        "instructions": "Мост общий: работает с любым эмулятором, который виден через adb — BlueStacks, LDPlayer, MEmu, MuMu. Ставить эмулятор не обязательно: adb берётся либо у уже установленного эмулятора, либо из Android SDK. Отдельно нужно включить отладку по ADB в настройках эмулятора. Издатель BlueStacks в каталоге — now.gg, Inc.; считать его официальным нельзя, поэтому кнопка обязана предупреждать.",
+        "checked": "2026-10-03",
+        "alternatives": [
+          {
+            "program": "LDPlayer",
+            "method": "manual",
+            "winget_id": "",
+            "catalog_version": "",
+            "expected_signer": "",
+            "needs_admin": true,
+            "needs_admin_verified": false,
+            "official_url": "https://www.ldplayer.net/",
+            "hand_over": false,
+            "note": "В winget нет (проверено 03.10.2026). Ставится установщиком с официального сайта."
+          }
+        ]
+      },
       "connection": {
         "kind": "local",
         "command": [
@@ -391,6 +510,21 @@
       "name": "LDPlayer (управление и пентест)",
       "source": "https://github.com/ThiagoFrag/mcp-ldplayer",
       "install": "Мост лежит в самой программе: tools/thirdparty/mcp-ldplayer. Внешних зависимостей нет — код на стандартной библиотеке Python, ставить ничего не нужно",
+      "program_install": {
+        "program": "LDPlayer",
+        "method": "manual",
+        "winget_id": "",
+        "catalog_version": "",
+        "expected_signer": "",
+        "needs_admin": true,
+        "needs_admin_verified": false,
+        "official_url": "https://www.ldplayer.net/",
+        "hand_over": false,
+        "publisher_trusted": true,
+        "bridge": "bundled",
+        "instructions": "В winget нет (проверено 03.10.2026), поэтому кнопки «установить» не будет: официальная страница и готовая команда в буфер обмена. На этой машине LDPlayer уже стоит, и стоит не через winget. Мост mcp-ldplayer лежит в программе, внешних зависимостей нет, ставить ничего не нужно.",
+        "checked": "2026-10-03"
+      },
       "connection": {
         "kind": "local",
         "command": [
@@ -455,5 +589,6 @@
       "source": "https://github.com/virgiliojr94/book-to-skill",
       "reason": "32,8 тыс. звёзд, MIT, но это Python-конвертер с зависимостями, а не готовый скилл. Просто скопировать нельзя: нужны Python и пакеты из pyproject.toml. Описан в инструкции как инструмент"
     }
-  ]
+  ],
+  "program_install_note": "Поле program_install отвечает на вопрос «как поставить программу, нужную серверу, и где программа обязана остановиться». Имя отдельное от install намеренно: install занято человеческим пояснением и остаётся текстом. Метод: winget — кнопка «установить» ставит через winget; official-download — кнопка качает с официального адреса и сверяет подпись; manual — кнопки нет: официальная страница и готовая команда в буфер; none — программа не нужна, ставить нечего. Поле catalog_version — это версия в каталоге winget, а не установленная: они различаются, и путать их нельзя. Поле checked — когда сверяли с каталогом. Поле needs_admin_verified говорит, подтверждены ли права администратора живой проверкой; где false, записано ожидание, а не факт."
 }

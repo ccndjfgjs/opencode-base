@@ -27,6 +27,13 @@ import winreg
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# Общие правила для версий. Импорт двойной: при плоском запуске папка лежит
+# в sys.path, при запуске как пакет нужен относительный.
+try:
+    import versions  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - запуск как пакет
+    from . import versions  # type: ignore[no-redef]
+
 #: Имя файла реестра. Лежит в корне базы и едет с ней.
 REGISTRY_NAME = "mcp-registry.json"
 
@@ -56,10 +63,64 @@ class Requirement:
     value: str = ""               # команда или имя программы
     args: list[str] = field(default_factory=list)
     min_version: int = 0
+    max_version: int = 0          # 0 — сверху ограничения нет
+    until: str = ""               # строковая граница «до этой включительно»
     note: str = ""
     blocks: bool = False         # ручное требование, без которого сервер бессмыслен
     ok: bool = False
     detail: str = ""              # что именно найдено, для показа
+
+
+@dataclass
+class ProgramInstall:
+    """Как поставить программу, нужную серверу, и где вкладка должна остановиться.
+
+    Живёт в реестре под именем `program_install`, а не `install`. Имя
+    выбрано не по вкусу: поле `install` в реестре уже занято человеческим
+    текстом («uvx mcp-for-blender + аддон в Blender») — это пояснение для
+    читателя, а не машиночитаемые данные. Переписать его в объект значило бы
+    выбросить то, что читают люди, и сломать старые копии реестра. Поэтому
+    структура лежит рядом, под своим именем, а `install` остаётся текстом.
+
+    Метод `method` — то, что вкладка умеет делать сама:
+
+    | method | что получится |
+    |---|---|
+    | `winget` | кнопка «установить» ставит через winget |
+    | `official-download` | кнопка качает с официального адреса и сверяет подпись |
+    | `manual` | кнопки нет: официальная страница и команда в буфер |
+    | `none` | программа не нужна, ставить нечего |
+
+    `expected_signer` — имя, которому обязана совпасть цифровая подпись
+    установщика, а для winget — издатель из каталога. Проверка подписи
+    появляется на этапе 8, до него это записанное намерение, а не
+    действующая проверка.
+    """
+
+    program: str = ""
+    method: str = "manual"        # winget | official-download | manual | none
+    winget_id: str = ""
+    catalog_version: str = ""     # версия в каталоге, не установленная
+    expected_signer: str = ""
+    needs_admin: bool = False
+    needs_admin_verified: bool = False
+    official_url: str = ""
+    hand_over: bool = False       # дальше нужен человек: вход, оплата, галочка
+    publisher_trusted: bool = True
+    bridge: str = ""              # bundled — мост уже лежит внутри программы
+    instructions: str = ""
+    checked: str = ""             # когда сверяли с winget, а не когда ставили
+    alternatives: list[dict] = field(default_factory=list)
+
+    @property
+    def can_install(self) -> bool:
+        """Есть ли кнопка, которая действительно поставит."""
+        return self.method in ("winget", "official-download")
+
+    @property
+    def stops_for_human(self) -> bool:
+        """Где кнопка обязана остановиться и позвать человека."""
+        return self.hand_over
 
 
 @dataclass
@@ -162,6 +223,35 @@ class Server:
         return str(self.raw.get("why") or "")
 
     @property
+    def program_install(self) -> ProgramInstall | None:
+        """Как поставить программу для этого сервера.
+
+        None в трёх случаях, и все три нормальны: блока нет вовсе (старый
+        реестр), блок не объект (человек дописал строку) или программа
+        серверу не нужна и метод равен `none`. Молча превращать это в
+        «поставить нечем» нельзя — тогда потерялось бы «программа не нужна».
+        """
+        raw = self.raw.get("program_install")
+        if not isinstance(raw, dict):
+            return None
+        return ProgramInstall(
+            program=str(raw.get("program") or ""),
+            method=str(raw.get("method") or "manual").strip().lower(),
+            winget_id=str(raw.get("winget_id") or ""),
+            catalog_version=str(raw.get("catalog_version") or ""),
+            expected_signer=str(raw.get("expected_signer") or ""),
+            needs_admin=bool(raw.get("needs_admin")),
+            needs_admin_verified=bool(raw.get("needs_admin_verified")),
+            official_url=str(raw.get("official_url") or ""),
+            hand_over=bool(raw.get("hand_over")),
+            publisher_trusted=bool(raw.get("publisher_trusted", True)),
+            bridge=str(raw.get("bridge") or ""),
+            instructions=str(raw.get("instructions") or ""),
+            checked=str(raw.get("checked") or ""),
+            alternatives=[a for a in (raw.get("alternatives") or []) if isinstance(a, dict)],
+        )
+
+    @property
     def verdict(self) -> str:
         return str(self.raw.get("verdict") or "")
 
@@ -247,6 +337,8 @@ def check_requirement(spec: dict) -> Requirement:
         value=str(spec.get("check") or ""),
         args=[str(a) for a in (spec.get("args") or [])],
         min_version=int(spec.get("min_version") or 0),
+        max_version=int(spec.get("max_version") or 0),
+        until=str(spec.get("until") or "").strip(),
         note=str(spec.get("note") or ""),
         blocks=bool(spec.get("blocks")),
     )
@@ -287,6 +379,16 @@ def check_requirement(spec: dict) -> Requirement:
     if req.min_version and version and version[0] < req.min_version:
         req.ok = False
         req.detail = f"нужно {req.min_version}+, найдено {version[0]}"
+        return req
+    if req.max_version and version and version[0] > req.max_version:
+        req.ok = False
+        req.detail = f"слишком новая: нужно не выше {req.max_version}, найдено {version[0]}"
+        return req
+    if req.until and version and not versions.until_ok(req.until, version):
+        # Строка та, что вернула программа, а не первый кусок: иначе про
+        # 2026.2.1.8 человек прочитал бы «слишком новая: 2026» и не понял бы.
+        req.ok = False
+        req.detail = f"слишком новая: работает до {req.until}, найдено {'.'.join(str(n) for n in version)}"
         return req
     req.ok = True
     req.detail = out.splitlines()[0][:40] if out else "есть"

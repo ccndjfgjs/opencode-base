@@ -3556,6 +3556,107 @@ def main() -> int:
               "android_studio отдаёт те же объекты, а не копии")
         check(android_studio.pick_build is not vmod.pick_build,
               "pick_build в android_studio остался обёрткой над списком сборок")
+    # ---- 8л. Границы версий сверху и блок установки программы
+    echo("\n--- 8л. Границы версий и блок program_install ---")
+    import versions as _v2
+
+    # Граница «18» — это ветка 18 целиком, а не только 18.0.0. На этом и
+    # сломалось первое сравнение: 18.2 выходило «новее 18».
+    check(_v2.until_ok("18", (18, 2, 0)), "18.2 попадает в границу «до 18 включительно»")
+    check(_v2.until_ok("18", (18, 0, 0)), "18.0 попадает в границу «18»")
+    check(not _v2.until_ok("18", (19, 0, 0)), "19.0 не попадает в границу «18»")
+    check(_v2.until_ok("18", (17, 9, 0)), "17.9 попадает в границу «18»")
+    # Граница короче найденной версии: 18 против 18.0.1 — иначе Python сравнил
+    # бы кортежи по длине и решил, что 18 новее 18.0.1.
+    check(_v2.until_ok("18", (18, 0, 1)), "короткая граница не ломает длинную версию")
+    check(_v2.until_ok("18.0", (18, 0, 1)), "точная граница 18.0 накрывает 18.0.1")
+    check(not _v2.until_ok("18.0", (18, 1, 0)), "18.1 не накрывается границей 18.0")
+    check(_v2.until_ok("2025.2", (2025, 1, 8)), "2025.1 попадает в «до 2025.2»")
+    check(not _v2.until_ok("2025.2", (2026, 2, 1, 8)), "2026 не попадает в «до 2025.2»")
+    check(_v2.until_ok("24", (24, 18, 0)), "24.18 попадает в «до 24»")
+    check(_v2.until_ok("261.*", (261, 5701)), "префикс 261.* накрывает ветку")
+    check(not _v2.until_ok("261.*", (262, 1)), "префикс 261.* не накрывает ветку 262")
+    check(_v2.until_ok("263.5701.*", (263, 5701, 7)), "точечная подплатформа накрыта")
+    check(_v2.until_ok("", (99,)), "пустая граница — ограничения нет")
+    check(_v2.until_ok("*", (99,)), "звёздочка — ограничения нет")
+    # Граница без цифр — опечатка, а не ограничение. Объявлять из-за неё
+    # версию слишком новой нельзя: получилась бы тихая ложь.
+    check(_v2.until_ok("abc", (99,)), "граница без цифр не объявляет версию новой")
+    # Старая функция на сборках Android Studio не должна пострадать.
+    check(_v2.until_matches("261.*", (261, 1)) and not _v2.until_matches("999.*", (261, 1)),
+          "старая until_matches на сборках не тронута")
+
+    # --- границы в требовании
+    _pi_def = mcp_registry.ProgramInstall()
+    check(_pi_def.method == "manual",
+          f"метод по умолчанию — ручной, а не winget: {_pi_def.method}")
+    check(_pi_def.can_install is False, "у пустого блока кнопки нет")
+    check(_pi_def.publisher_trusted is True, "у пустого блока издатель по умолчанию доверенный")
+
+    _spec = {"what": "X", "type": "command", "check": "x",
+             "max_version": 30, "until": "2025.2"}
+    _req = mcp_registry.Requirement(
+        what=str(_spec.get("what") or ""), kind="command",
+        max_version=int(_spec.get("max_version") or 0),
+        until=str(_spec.get("until") or ""))
+    check(_req.max_version == 30 and _req.until == "2025.2",
+          f"границы читаются из описания: max={_req.max_version}, until={_req.until}")
+    _req_old = mcp_registry.Requirement(what="X")
+    check(_req_old.max_version == 0 and _req_old.until == "",
+          "в старом описании без границ — пусто, а не ноль как исключение")
+
+    # --- сервер читает блок, и старый реестр не падает
+    _s = mcp_registry.Server(id="s", name="s", raw={"id": "s"})
+    check(_s.program_install is None, "сервер без блока — None, а не исключение")
+    _s2 = mcp_registry.Server(id="s", name="s", raw={"program_install": "просто текст"})
+    check(_s2.program_install is None, "строка вместо объекта — None, не падение")
+    _s3 = mcp_registry.Server(id="s", name="s",
+                              raw={"program_install": {"method": "  WINGET  "}})
+    check(_s3.program_install.method == "winget",
+          f"метод чистится от пробелов и регистра: {_s3.program_install.method}")
+    check(_s3.program_install.publisher_trusted is True,
+          "старый блок без publisher_trusted — доверяем, а не пугаем")
+    _s4 = mcp_registry.Server(id="s", name="s",
+                              raw={"program_install": {"method": "winget", "winget_id": "X.Y"}})
+    check(_s4.program_install.can_install is True, "метод winget даёт кнопку")
+    _s5 = mcp_registry.Server(id="s", name="s",
+                              raw={"program_install": {"method": "manual", "hand_over": True}})
+    check(_s5.program_install.can_install is False
+          and _s5.program_install.stops_for_human is True,
+          "ручной метод без кнопки, но с передачей человеку")
+
+    # --- настоящий реестр
+    _base = core.program_root()
+    _servers = mcp_registry.load_servers(_base)
+    check(len(_servers) == 8, f"реестр читается, 8 серверов: {len(_servers)}")
+    check(all(s.program_install is not None for s in _servers),
+          "у всех 8 серверов есть блок program_install")
+    _by_id = {s.id: s.program_install for s in _servers}
+    if all(_by_id.values()):
+        check(_by_id["blender"].winget_id == "BlenderFoundation.Blender"
+              and _by_id["blender"].expected_signer == "Blender Foundation",
+              "Blender: идентификатор и издатель из реестра")
+        check(_by_id["ldplayer"].method == "manual" and not _by_id["ldplayer"].can_install,
+              "LDPlayer: вручную, кнопки нет")
+        check(_by_id["excel"].hand_over and _by_id["excel"].winget_id == "",
+              "Excel: передаём человеку, идентификатора нет")
+        check(_by_id["windows-admin"].method == "none",
+              "windows-admin: программа не нужна")
+        check(_by_id["obs"].bridge == "bundled" and _by_id["android-studio"].bridge == "bundled",
+              "мосты OBS и Android Studio лежат внутри программы")
+        check(_by_id["android-emulator"].publisher_trusted is False,
+              "издатель BlueStacks не подтверждён — кнопка обязана предупреждать")
+        check(len(_by_id["android-emulator"].alternatives) == 1,
+              "у Android-эмулятора есть альтернатива LDPlayer")
+    # Идентификаторы winget из реестра обязаны быть настоящими. Порядок не
+    # важен — сравниваем множества, иначе проверка ловится на том, что
+    # «BlenderFoundation» по алфавиту раньше «BlueStack», а не на данных.
+    _winget_ids = {p.winget_id for p in _by_id.values() if p and p.winget_id}
+    _want_ids = {"Adobe.CreativeCloud", "BlueStack.BlueStacks",
+                 "BlenderFoundation.Blender", "Google.AndroidStudio",
+                 "OBSProject.OBSStudio"}
+    check(_winget_ids == _want_ids,
+          f"идентификаторы в реестре — те самые: {sorted(_winget_ids)}")
     # ---- итог
     failed = [text for good, text in results if not good]
     echo("\n" + "=" * 62)
