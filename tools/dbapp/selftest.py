@@ -3128,6 +3128,244 @@ def main() -> int:
     _main_name = (_root / "tools" / "dbapp" / "make_shortcut.py")
     check(_main_name.is_file(), "скрипт создания ярлыка на месте")
 
+    # ---- 8г. Обновление скилла в уже созданной базе
+    echo("\n--- 8г. Скилл, который в мастере, но только в старой базе ---")
+    _src_sk = core.program_root()
+    _bs = tempfile.mkdtemp(prefix="selftest-skills-")
+    try:
+        _t = Path(_bs) / "база"
+        _t.mkdir()
+        core._copy_skills(_src_sk, _t)
+        _sd = _t / "skills"
+
+        check((_sd / core.SKILL_MANIFEST).is_file(),
+              "запоминаем установлено, что было поставлено")
+        _md = core._read_manifest(_sd)
+        check(bool(_md.get("skills")),
+              f"в манифесте скиллы: {len(_md.get('skills') or {})}")
+        check(bool(_md.get("index")), "хэш индекса записан")
+
+        _again = core._copy_skills(_src_sk, _t)
+        check(not _again, f"повторное копирование молчит: {_again}")
+
+        _vic = next((d for d in sorted(_sd.iterdir())
+                     if d.is_dir() and (d / "SKILL.md").is_file()), None)
+        if _vic is not None:
+            _vf = _vic / "SKILL.md"
+            _vf.write_text(_vf.read_text(encoding="utf-8") + "\n<!-- правка руками -->\n", encoding="utf-8")
+            _m = core._copy_skills(_src_sk, _t)
+            check(any("не тронут" in x for x in _m),
+                  f"о навыке, изменённом руками, сказано в отчёте")
+            check("правка руками" in _vf.read_text(encoding="utf-8"),
+                  "правка, внесённая руками, цела")
+
+        # Навык, добавленный в мастер ПОСЛЕ создания базы, обязан в неё приехать.
+        _bm = tempfile.mkdtemp(prefix="selftest-master-")
+        try:
+            _ms = Path(_bm)
+            shutil.copytree(_src_sk / "skills", _ms / "skills",
+                            ignore=shutil.ignore_patterns("__pycache__"))
+            shutil.copy2(_src_sk / "skills-index.json", _ms / "skills-index.json")
+            _nw = _ms / "skills" / "новый-тестовый"
+            _nw.mkdir()
+            (_nw / "SKILL.md").write_text("# тест\n", encoding="utf-8")
+            _mi = _ms / "skills-index.json"
+            _dd = json.loads(_mi.read_text(encoding="utf-8"))
+            _items = _dd if isinstance(_dd, list) else _dd.setdefault("skills", [])
+            _items.append({"name": "новый-тестовый", "when": "всегда",
+                           "trigger": "проверка", "result": "тест"})
+            _mi.write_text(json.dumps(_dd, ensure_ascii=False, indent=2),
+                           encoding="utf-8")
+
+            _was = (_sd / "новый-тестовый").is_dir()
+            _m = core._copy_skills(_ms, _t)
+            check(not _was and (_sd / "новый-тестовый").is_dir(),
+                  f"навык, добавленный в мастер, приехал в старую базу: {_m}")
+
+            _found = False
+            _idst = _t / "skills-index.json"
+            if _idst.is_file():
+                _d2 = json.loads(_idst.read_text(encoding="utf-8"))
+                _it2 = _d2 if isinstance(_d2, list) else _d2.get("skills", [])
+                _found = "новый-тестовый" in {str(x.get("name")) for x in _it2}
+            check(_found, "индекс базы тоже узнал про новый навык")
+        finally:
+            shutil.rmtree(_bm, ignore_errors=True)
+
+        _so = _sd / "только-только"
+        _so.mkdir()
+        (_so / "SKILL.md").write_text("# мой\n", encoding="utf-8")
+        core._copy_skills(_src_sk, _t)
+        check(_so.is_dir(),
+              "навык, который есть только в старой базе, не стирается")
+    finally:
+        shutil.rmtree(_bs, ignore_errors=True)
+
+    # ---- 8д. Сверка копий навыков: чем они расходятся на самом деле
+    echo("\n--- 8д. Сверка копий навыков ---")
+    _bq = tempfile.mkdtemp(prefix="selftest-compare-")
+    try:
+        def _mk_master(root: Path) -> None:
+            (root / "skills").mkdir(parents=True, exist_ok=True)
+            for _n in ("первый", "второй"):
+                _d = root / "skills" / _n
+                _d.mkdir()
+                (_d / "SKILL.md").write_text(f"# {_n}\n", encoding="utf-8")
+            (root / "skills" / "_описание.md").write_text(
+                "описание\n", encoding="utf-8")
+            _idx = {"skills": [
+                {"name": "первый", "when": "а", "trigger": "б", "result": "в"},
+                {"name": "второй", "when": "а", "trigger": "б", "result": "в"},
+            ]}
+            (root / "skills-index.json").write_text(
+                json.dumps(_idx, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        _bm = Path(_bq) / "мастер"
+        _mk_master(_bm)
+
+        _r = core.compare_skills(_bm, _bm)
+        check(not core.skills_findings(_r),
+              f"копия сама с собой не спорит: {core.skills_findings(_r)}")
+
+        # Отстал, но человек его не трогал: обновлять можно.
+        # Мастер меняем ПОСЛЕ установки — иначе получится правка руками.
+        _bm_new = Path(_bq) / "мастер-новый"
+        shutil.copytree(_bm, _bm_new)
+        _stale = Path(_bq) / "отстал"
+        shutil.copytree(_bm, _stale)
+        core._copy_skills(_bm, _stale)
+        (_bm_new / "skills" / "первый" / "SKILL.md").write_text(
+            "# первый\nтеперь такой\n", encoding="utf-8")
+        _r = core.compare_skills(_bm_new, _stale)
+        check(_r["stale"] == ["первый"],
+              f"навык, отставший от мастера, опознан: {_r['stale']}")
+        check(not _r["manual"],
+              f"отставший не помечен как правленый руками: {_r['manual']}")
+        check(any("отстал" in f for f in core.skills_findings(_r)),
+              "об отставшем сказано по-человечески")
+
+        # Человек правил руками — такой трогать нельзя.
+        _man = Path(_bq) / "правленый"
+        shutil.copytree(_bm, _man)
+        core._copy_skills(_bm, _man)
+        (_man / "skills" / "первый" / "SKILL.md").write_text(
+            "# первый\nмоё\n", encoding="utf-8")
+        _r = core.compare_skills(_bm, _man)
+        check(_r["manual"] == ["первый"],
+              f"правка руками опознана: {_r['manual']}")
+        check(not _r["stale"],
+              f"правленый руками не попал в отставшие: {_r['stale']}")
+
+        _miss = Path(_bq) / "без-навыка"
+        shutil.copytree(_bm, _miss)
+        shutil.rmtree(_miss / "skills" / "второй")
+        _r = core.compare_skills(_bm, _miss)
+        check(_r["missing"] == ["второй"],
+              f"пропавший навык замечен: {_r['missing']}")
+
+        _extra = Path(_bq) / "с-лишним"
+        shutil.copytree(_bm, _extra)
+        _d = _extra / "skills" / "третий"
+        _d.mkdir()
+        (_d / "SKILL.md").write_text("# третий\n", encoding="utf-8")
+        _r = core.compare_skills(_bm, _extra)
+        check(_r["extra"] == ["третий"],
+              f"лишний навык замечен: {_r['extra']}")
+
+        _short = Path(_bq) / "короткий-индекс"
+        shutil.copytree(_bm, _short)
+        _p = _short / "skills-index.json"
+        _d = json.loads(_p.read_text(encoding="utf-8"))
+        _d["skills"] = _d["skills"][:1]
+        _p.write_text(json.dumps(_d, ensure_ascii=False, indent=2),
+                      encoding="utf-8")
+        _r = core.compare_skills(_bm, _short)
+        check(_r["index_missing"] == ["второй"],
+              f"в индексе не хватает записи: {_r['index_missing']}")
+
+        # Разрядка разная, а записи те же. Это не расхождение.
+        _fmt = Path(_bq) / "другая-разрядка"
+        shutil.copytree(_bm, _fmt)
+        _d = json.loads((_fmt / "skills-index.json").read_text(encoding="utf-8"))
+        (_fmt / "skills-index.json").write_text(
+            json.dumps(_d, ensure_ascii=False, indent=8), encoding="utf-8")
+        _r = core.compare_skills(_bm, _fmt)
+        check(not core.skills_findings(_r),
+              f"разрядка индекса расхождением не считается: {core.skills_findings(_r)}")
+        check(_r["index_bytes_differ"],
+              "а байты индекса при этом разошлись — и это замечено")
+
+        _fld = Path(_bq) / "поле-разошлось"
+        shutil.copytree(_bm, _fld)
+        _p = _fld / "skills-index.json"
+        _d = json.loads(_p.read_text(encoding="utf-8"))
+        _d["skills"][0]["trigger"] = "другое"
+        _p.write_text(json.dumps(_d, ensure_ascii=False, indent=2),
+                      encoding="utf-8")
+        _r = core.compare_skills(_bm, _fld)
+        check(_r["index_changed"] == ["первый"],
+              f"разошедшееся поле записи замечено: {_r['index_changed']}")
+
+        _noidx = Path(_bq) / "без-индекса"
+        shutil.copytree(_bm, _noidx)
+        (_noidx / "skills-index.json").unlink()
+        _r = core.compare_skills(_bm, _noidx)
+        check(_r["index_absent"], "отсутствие индекса замечено")
+
+        _noloose = Path(_bq) / "без-описания"
+        shutil.copytree(_bm, _noloose)
+        (_noloose / "skills" / "_описание.md").unlink()
+        _r = core.compare_skills(_bm, _noloose)
+        check(_r["loose_missing"] == ["_описание.md"],
+              f"пропавший файл рядом с навыками замечен: {_r['loose_missing']}")
+
+        # Копии нет вообще — проверка обязана молча разобраться, а не упасть.
+        _r = core.compare_skills(_bm, Path(_bq) / "нет-такой-папки")
+        check(_r["missing"] == ["второй", "первый"],
+              f"несуществующая копия: все навыки числятся нетыми: {_r['missing']}")
+    finally:
+        shutil.rmtree(_bq, ignore_errors=True)
+
+    # ---- 8е. Копия, где только навыки: так и должна быть копия opencode
+    echo("\n--- 8е. Копия, где только навыки ---")
+    _be = tempfile.mkdtemp(prefix="selftest-only-")
+    try:
+        _em = Path(_be) / "мастер"
+        (_em / "skills").mkdir(parents=True)
+        for _n in ("первый", "второй"):
+            _d = _em / "skills" / _n
+            _d.mkdir()
+            (_d / "SKILL.md").write_text(f"# {_n}\n", encoding="utf-8")
+        (_em / "skills" / "_описание.md").write_text(
+            "описание\n", encoding="utf-8")
+        (_em / "skills-index.json").write_text(
+            json.dumps({"skills": [
+                {"name": "первый", "when": "а", "trigger": "б", "result": "в"},
+                {"name": "второй", "when": "а", "trigger": "б", "result": "в"},
+            ]}, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        # Именно так выглядит копия, которую делает плагин opencode:
+        # папки навыков есть, а индекса и описания рядом нет.
+        _oc = Path(_be) / "настройки"
+        shutil.copytree(_em / "skills", _oc / "skills")
+        (_oc / "skills" / "_описание.md").unlink()
+
+        _r = core.compare_skills(_em, _oc, expect="skills-only")
+        check(not core.skills_findings(_r),
+              f"копия только с навыками — расхождений нет: {core.skills_findings(_r)}")
+
+        _r = core.compare_skills(_em, _oc)
+        check(_r["index_absent"] and _r["loose_missing"] == ["_описание.md"],
+              f"а от полной копии индекс и описание требуются: {core.skills_findings(_r)}")
+
+        # Навыки сверяются всегда, даже когда индекс не ждём.
+        shutil.rmtree(_oc / "skills" / "второй")
+        _r = core.compare_skills(_em, _oc, expect="skills-only")
+        check(_r["missing"] == ["второй"],
+              f"пропавший навык замечен даже там, где индекс не ждут: {_r['missing']}")
+    finally:
+        shutil.rmtree(_be, ignore_errors=True)
+
     # ---- итог
     failed = [text for good, text in results if not good]
     echo("\n" + "=" * 62)

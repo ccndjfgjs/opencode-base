@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -19,6 +20,11 @@ from pathlib import Path
 # ---------------------------------------------------------------- программы
 
 SKILL_MARKER = "SKILL.md"
+
+#: Файл в папке skills, где записано, что именно мы ставили и каким был
+#: каждый файл. По нему видно, менял ли человек навык руками: если файлы
+#: совпадают с записью, навык можно обновить, если нет — нельзя.
+SKILL_MANIFEST = ".installed.json"
 
 
 # Как программа относится к файлам базы. Состояний три, а не два, потому
@@ -1277,12 +1283,219 @@ def _copy_service_files(source: Path, target: Path) -> list[str]:
     return copied
 
 
+def _file_hash(path: Path) -> str:
+    """Хэш файла — короткий, хватает для сравнения."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _tree_hashes(folder: Path) -> dict[str, str]:
+    """Хэши всех файлов папки по относительному пути."""
+    out: dict[str, str] = {}
+    for item in sorted(folder.rglob("*")):
+        if item.is_file() and "__pycache__" not in item.parts:
+            out[str(item.relative_to(folder))] = _file_hash(item)
+    return out
+
+
+def _read_manifest(dst_skills: Path) -> dict:
+    """Что мы ставили раньше. Нет файла — значение неизвестно."""
+    path = dst_skills / SKILL_MANIFEST
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_manifest(dst_skills: Path, skills: dict, index_hash: str) -> None:
+    """Запоминаем, что было поставлено в эту базу."""
+    dst_skills.mkdir(parents=True, exist_ok=True)
+    payload = {"skills": skills, "index": index_hash}
+    (dst_skills / SKILL_MANIFEST).write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _index_records(path: Path) -> dict:
+    """Записи индекса навыков по имени. Нет файла — пусто."""
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    items = data if isinstance(data, list) else data.get("skills", [])
+    if not isinstance(items, list):
+        return {}
+    return {str(x.get("name")): x for x in items if isinstance(x, dict)}
+
+
+def _skill_folders(folder: Path) -> set[str]:
+    """Названия навыков — те папки, где есть SKILL.md."""
+    if not folder.is_dir():
+        return set()
+    return {p.name for p in folder.iterdir()
+            if p.is_dir() and (p / SKILL_MARKER).is_file()
+            and not p.name.startswith(".")}
+
+
+def _loose_files(folder: Path) -> set[str]:
+    """Файлы рядом с папками навыков: описания, указатели."""
+    if not folder.is_dir():
+        return set()
+    return {p.name for p in folder.iterdir()
+            if p.is_file() and p.name != SKILL_MANIFEST}
+
+
+def compare_skills(master: Path, other: Path, expect: str = "full") -> dict:
+    """Сравнивает две копии навыков и говорит, чем они расходятся.
+
+    Сравнение идёт по смыслу, а не по байтам: индекс в живой базе может отличаться
+    разрядкой, и это не беда. Беда — когда разошлись сами навыки или состав индекса.
+
+    Расхождение бьёт двумя: `stale` — навык отстал, его можно обновить;
+    `manual` — человек правил руками, трогать нельзя.
+
+    `expect` — чего ждём от копии. `"full"` — и навыки, и индекс, и файлы рядом.
+    `"skills-only"` — только папки навыков: столько копирует плагин opencode в папку настроек,
+    а индекс и описания туда не едут вовсе.
+    """
+    only_skills = expect == "skills-only"
+    m_sk, o_sk = master / "skills", other / "skills"
+    m_names, o_names = _skill_folders(m_sk), _skill_folders(o_sk)
+
+    shipped = _read_manifest(o_sk).get("skills")
+    shipped = shipped if isinstance(shipped, dict) else {}
+    stale: list[str] = []
+    manual: list[str] = []
+    for name in sorted(m_names & o_names):
+        want = _tree_hashes(m_sk / name)
+        have = _tree_hashes(o_sk / name)
+        if want == have:
+            continue
+        was = shipped.get(name)
+        if isinstance(was, dict) and have == was:
+            stale.append(name)
+        else:
+            manual.append(name)
+
+    m_idx = _index_records(master / "skills-index.json")
+    o_idx = _index_records(other / "skills-index.json")
+    m_idx_file = master / "skills-index.json"
+    o_idx_file = other / "skills-index.json"
+    both_idx = m_idx_file.is_file() and o_idx_file.is_file()
+
+    return {
+        "master": master,
+        "other": other,
+        "missing": sorted(m_names - o_names),
+        "extra": sorted(o_names - m_names),
+        "stale": stale,
+        "manual": manual,
+        "loose_missing": [] if only_skills else sorted(_loose_files(m_sk) - _loose_files(o_sk)),
+        "loose_extra": [] if only_skills else sorted(_loose_files(o_sk) - _loose_files(m_sk)),
+        "index_absent": (not o_idx_file.is_file()) and not only_skills,
+        "index_missing": [] if only_skills else sorted(set(m_idx) - set(o_idx)),
+        "index_extra": [] if only_skills else sorted(set(o_idx) - set(m_idx)),
+        "index_changed": [] if only_skills else sorted(
+            k for k in set(m_idx) & set(o_idx) if m_idx[k] != o_idx[k]),
+        "index_bytes_differ": (not only_skills) and both_idx
+        and _file_hash(m_idx_file) != _file_hash(o_idx_file),
+        "expect": expect,
+        "counts": (len(m_names), len(o_names)),
+    }
+
+
+def skills_findings(result: dict) -> list[str]:
+    """Расхождения по-человески, по одной строке на каждое. Пусто — копии совпадают."""
+    out: list[str] = []
+    if result["missing"]:
+        out.append(f"навыков нет: {', '.join(result['missing'])}")
+    if result["extra"]:
+        out.append(f"лишние навыки: {', '.join(result['extra'])}")
+    if result["stale"]:
+        out.append(f"навыки отстали от мастера: {', '.join(result['stale'])}")
+    if result["manual"]:
+        out.append(f"навыки изменены руками: {', '.join(result['manual'])}")
+    if result["loose_missing"]:
+        out.append(f"нет файлов рядом с навыками: {', '.join(result['loose_missing'])}")
+    if result["loose_extra"]:
+        out.append(f"лишние файлы рядом с навыками: {', '.join(result['loose_extra'])}")
+    if result["index_absent"]:
+        out.append("нет файла skills-index.json")
+    if result["index_missing"]:
+        out.append(f"в индексе нет: {', '.join(result['index_missing'])}")
+    if result["index_extra"]:
+        out.append(f"в индексе лишнее: {', '.join(result['index_extra'])}")
+    if result["index_changed"]:
+        out.append(f"в индексе разошлись записи: {', '.join(result['index_changed'])}")
+    return out
+
+
 def _copy_skills(source: Path, target: Path) -> list[str]:
-    """Скиллы: папки с SKILL.md + индекс сценариев, не задевая уже имеющиеся."""
+    """Скиллы: папки с SKILL.md плюс индекс сценариев.
+
+    Навык, который никто не трогал, — обновляется.
+    Навык, изменённый руками, — не трогаем, чтобы ничего не пропало.
+    """
     copied: list[str] = []
     src_skills = source / "skills"
     if not src_skills.is_dir():
         return copied
+    dst_skills = target / "skills"
+    manifest = _read_manifest(dst_skills)
+    shipped = manifest.get("skills")
+    if not isinstance(shipped, dict):
+        shipped = {}
+
+    for item in sorted(src_skills.iterdir()):
+        if not item.is_dir():
+            continue
+        if not (item / SKILL_MARKER).is_file():
+            continue
+        sub = item.name
+        if sub.startswith("."):
+            continue
+        dest = dst_skills / sub
+        want = _tree_hashes(item)
+        if not dest.exists():
+            shutil.copytree(item, dest, ignore=shutil.ignore_patterns("__pycache__"))
+            copied.append(f"скилл {sub}")
+        else:
+            have = _tree_hashes(dest)
+            old = shipped.get(sub)
+            if have == want:
+                pass
+            elif isinstance(old, dict) and have == old:
+                shutil.rmtree(dest)
+                shutil.copytree(item, dest, ignore=shutil.ignore_patterns("__pycache__"))
+                copied.append(f"скилл {sub} обновлён")
+            else:
+                copied.append(f"скилл {sub} изменён в базе — не тронут")
+                continue
+        shipped[sub] = want
+
+    index_src = source / "skills-index.json"
+    index_dst = target / "skills-index.json"
+    want_index = ""
+    if index_src.is_file():
+        want_index = _file_hash(index_src)
+        if not index_dst.exists():
+            shutil.copy2(index_src, index_dst)
+            copied.append("skills-index.json")
+        else:
+            have_index = _file_hash(index_dst)
+            old_index = manifest.get("index")
+            if have_index != want_index:
+                if old_index and have_index == old_index:
+                    shutil.copy2(index_src, index_dst)
+                    copied.append("skills-index.json обновлён")
+                elif manifest:
+                    copied.append("skills-index.json изменён в базе — не тронут")
+
+    _write_manifest(dst_skills, shipped, want_index)
+    return copied
     dst_skills = target / "skills"
     for item in sorted(src_skills.iterdir()):
         if not item.is_dir():
