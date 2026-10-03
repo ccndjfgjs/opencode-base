@@ -934,8 +934,6 @@ class ImportTab(ScrollPage):
             )
         )
         self.skills_list = QListWidget()
-        self.skills_list.setMinimumHeight(180)
-        self.skills_list.setMaximumHeight(230)
         # Тот же дефект, что и у списка навыков для opencode: описание в одну
         # строку вылезало по ширине, появлялась горизонтальная прокрутка, и
         # из-за неё навыки не помещались по высоте.
@@ -944,7 +942,7 @@ class ImportTab(ScrollPage):
         self.skills_list.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.skills_list.setMinimumHeight(300)
-        self.skills_list.setMaximumHeight(460)
+        self.skills_list.setMaximumHeight(600)
         skills_layout.addWidget(self.skills_list)
 
         row_skills = QHBoxLayout()
@@ -2389,8 +2387,6 @@ class CapsTab(ScrollPage):
             )
         )
         self.caps_skills_list = QListWidget()
-        self.caps_skills_list.setMinimumHeight(180)
-        self.caps_skills_list.setMaximumHeight(230)
         # Описание навыка не помещается в одну строку, а переноса не было:
         # список вылезал по ширине и появлялась горизонтальная прокрутка.
         # Из-за неё навыки не помещались и по высоте — из 32 видно было
@@ -2404,7 +2400,7 @@ class CapsTab(ScrollPage):
         self.caps_skills_list.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.caps_skills_list.setMinimumHeight(300)
-        self.caps_skills_list.setMaximumHeight(460)
+        self.caps_skills_list.setMaximumHeight(600)
         skills_layout.addWidget(self.caps_skills_list)
 
         row_skills = QHBoxLayout()
