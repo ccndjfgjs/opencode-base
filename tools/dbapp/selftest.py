@@ -3468,6 +3468,94 @@ def main() -> int:
               "и сверка говорит, что файлы разошлись")
     finally:
         shutil.rmtree(_bi, ignore_errors=True)
+# ---- 8к. Общий модуль версий: проверяем сам по себе
+    echo("\n--- 8к. Общий модуль версий ---")
+    try:
+        import versions as vmod
+    except ImportError:
+        vmod = None
+        check(False, "общий модуль версий импортируется")
+    if vmod is not None:
+        check(True, "общий модуль версий импортируется")
+
+        # Сравнение чисел, а не строк: иначе 263.9 окажется новее 263.10.
+        check(vmod.version_tuple("263.9") < vmod.version_tuple("263.10"),
+              "263.9 старее 263.10 — сравнение числовое")
+        check(vmod.version_tuple("") == (0,),
+              f"пустая строка не ломает разбор: {vmod.version_tuple('')}")
+        check(vmod.version_tuple("261.x.3") == (261, 0, 3),
+              f"нецифра в номере не ломает разбор: {vmod.version_tuple('261.x.3')}")
+
+        # Платформа из номера сборки: первые два числа.
+        check(vmod.platform_from_build("AI-261.25134.95.2612.15914620") == (261, 25134),
+              "платформа из полного buildNumber")
+        check(vmod.platform_from_build("") == (),
+              "пустой buildNumber не превращается в платформу")
+        check(vmod.platform_text((263, 5701)) == "263.5701",
+              f"платформа обратно в строку: {vmod.platform_text((263, 5701))}")
+
+        # Границы сборки — обе стороны.
+        check(vmod.since_matches("261.25134", (261, 25134)), "since равно платформе")
+        check(not vmod.since_matches("262.10968", (262, 10315)), "since новее платформы")
+        check(not vmod.since_matches("261", ()), "пустая платформа не проходит ни одну сборку")
+        check(vmod.until_matches("", (262, 1)), "пустой until означает «любая версия»")
+        check(vmod.until_matches("*", (262, 1)), "звёздочка означает «любая версия»")
+        check(vmod.until_matches("261.*", (261, 26000)), "261.* накрывает всю ветку")
+        check(not vmod.until_matches("261.*", (262, 10315)), "261.* не накрывает ветку 262")
+        check(vmod.until_matches("263.5701.*", (263, 5701)), "точечная подплатформа")
+        check(not vmod.until_matches("263.5701.*", (263, 6259)),
+              "точечная подплатформа не накрывает соседнюю")
+        check(vmod.until_matches("262.10315.174", (262, 10315, 174)),
+              "точный номер включительно")
+
+        _b = {"version": "1.0", "since": "1.0", "until": "*"}
+        check(vmod.build_matches(_b, (1, 0)), "сборка подходит по обеим границам")
+        check(not vmod.build_matches(dict(_b, since="9.0"), (1, 0)),
+              "сборка не подходит, если since новее платформы")
+
+        # Выбор самой свежей — на обычном списке словарей, без класса Bundle.
+        _builds = [
+            {"version": "1.2", "since": "1.0", "until": "*"},
+            {"version": "1.10", "since": "1.0", "until": "*"},
+            {"version": "2.0", "since": "9.0", "until": "*"},
+        ]
+        _got = vmod.pick_build(_builds, (1, 0))
+        check(_got is not None and _got["version"] == "1.10",
+              f"выбрана самая свежая по номеру, а не по записи: {_got and _got['version']}")
+        check(vmod.pick_build(_builds, (1, 0, 0)) is not None, "платформа длиннее версии не мешает")
+        # since — это «не ниже», поэтому платформа (9, 9) подходит всем трём
+        # сборкам, включая сборку с since 9.0, и берётся самая свежая.
+        _hi = vmod.pick_build(_builds, (9, 9))
+        check(_hi is not None and _hi["version"] == "2.0",
+              f"платформа выше всех since: взята самая свежая из подходящих: "
+              f"{_hi and _hi['version']}")
+        # А ниже всех начал — не подходит ни одна.
+        check(vmod.pick_build(_builds, (0, 0)) is None,
+              "платформа ниже всех since не подходит ни одной сборке")
+        check(vmod.pick_build([], (1, 0)) is None, "пустой список даёт None, а не исключение")
+
+        # Хеш потоком совпадает с обычным подсчётом.
+        _bd = tempfile.mkdtemp(prefix="selftest-hash-")
+        try:
+            _hf = Path(_bd) / "хеш-проверка.bin"
+            _hf.write_bytes(b"opencode" * 5000)
+            import hashlib as _hl
+            check(vmod.file_sha256(_hf) == _hl.sha256(_hf.read_bytes()).hexdigest(),
+                  "хеш потоком совпадает с хешем целиком")
+            check(android_studio.sha256(_hf) == vmod.file_sha256(_hf),
+                  "старое имя android_studio.sha256 даёт тот же хеш")
+        finally:
+            shutil.rmtree(_bd, ignore_errors=True)
+
+        # Старые имена на месте: ими пользуются окно и селфтест.
+        check(android_studio.version_tuple is vmod.version_tuple
+              and android_studio.since_matches is vmod.since_matches
+              and android_studio.until_matches is vmod.until_matches
+              and android_studio.build_matches is vmod.build_matches
+              and android_studio.sha256 is vmod.file_sha256,
+              "android_studio отдаёт те же объекты, а не копии")
+        check(android_studio.pick_build is not vmod.pick_build,
+              "pick_build в android_studio остался обёрткой над списком сборок")
     # ---- итог
     failed = [text for good, text in results if not good]
     echo("\n" + "=" * 62)

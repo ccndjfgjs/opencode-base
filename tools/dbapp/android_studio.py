@@ -23,7 +23,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import io
 import json
 import os
@@ -34,6 +33,13 @@ import urllib.request
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+
+# Общие правила для версий и сборок. Импорт двойной: при плоском запуске
+# папка лежит в sys.path, при запуске как пакет нужен относительный.
+try:
+    import versions  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - запуск как пакет
+    from . import versions  # type: ignore[no-redef]
 
 #: Порт и путь, на которых плагин поднимает свой сервер.
 SERVER_PORT = 64342
@@ -70,68 +76,16 @@ _PROBE_TIMEOUT = 6.0
 
 # --------------------------------------------------------------- разбор версий
 
-
-def version_tuple(text: str) -> tuple[int, ...]:
-    """«261.25134.203» -> (261, 25134, 203).
-
-    Именно числа, а не строки: строковое сравнение путает 263.9 и 263.10
-    и выбирает не ту сборку плагина.
-    """
-    parts: list[int] = []
-    for chunk in str(text or "").split("."):
-        digits = "".join(ch for ch in chunk if ch.isdigit())
-        parts.append(int(digits) if digits else 0)
-    return tuple(parts)
-
-
-def platform_from_build(build_number: str) -> tuple[int, ...]:
-    """Платформа студии из buildNumber.
-
-    «AI-261.25134.95.2612.15914620» -> (261, 25134). Берём первые два
-    числа: 261 — ветка платформы, 25134 — её номер внутри ветки. Именно
-    эту пару плагин объявляет в since-build.
-    """
-    numbers = re.findall(r"\d+", str(build_number or ""))
-    if not numbers:
-        return ()
-    return tuple(int(n) for n in numbers[:2])
-
-
-def platform_text(platform: tuple[int, ...]) -> str:
-    return ".".join(str(n) for n in platform)
-
-
-def since_matches(since: str, platform: tuple[int, ...]) -> bool:
-    """Не ниже ли объявленного начала сборки плагина."""
-    if not platform:
-        return False
-    return platform >= version_tuple(since)
-
-
-def until_matches(until: str, platform: tuple[int, ...]) -> bool:
-    """Попадает ли платформа в объявленный конец сборки плагина.
-
-    «261.*» — вся ветка 261. «263.5701.*» — только подплатформа 263.5701.
-    Без звёздочки — «до этой версии включительно».
-    """
-    raw = str(until or "").strip()
-    if not raw or raw == "*":
-        return True
-    if raw.endswith(".*"):
-        prefix = version_tuple(raw[:-2])
-        return platform[: len(prefix)] == prefix
-    return platform <= version_tuple(raw)
-
-
-def build_matches(build: dict, platform: tuple[int, ...]) -> bool:
-    """Подходит ли сборка плагина под эту платформу студии.
-
-    Оба края берутся из дескриптора самого плагина. Ничего не угадываем:
-    именно поэтому программа не может выбрать сборку, которая не загрузится.
-    """
-    return since_matches(str(build.get("since") or ""), platform) and until_matches(
-        str(build.get("until") or ""), platform
-    )
+# Сами правила живут в общем модуле `versions`: тем же правилом пользуются
+# мосты эмуляторов и вкладка «Программы». Здесь остались только имена,
+# чтобы старые вызовы android_studio.проверка(...) продолжали работать:
+# ими пользуются и окно, и селфтест.
+version_tuple = versions.version_tuple
+platform_from_build = versions.platform_from_build
+platform_text = versions.platform_text
+since_matches = versions.since_matches
+until_matches = versions.until_matches
+build_matches = versions.build_matches
 
 
 # ------------------------------------------------------------------ сама студия
@@ -260,19 +214,16 @@ def bundle_file(bundle: Bundle, build: dict) -> Path:
 
 
 def pick_build(bundle: Bundle, platform: tuple[int, ...]) -> dict | None:
-    """Самая свежая сборка, подходящая под платформу. None, если такой нет."""
-    fits = [b for b in bundle.builds if build_matches(b, platform)]
-    if not fits:
-        return None
-    return max(fits, key=lambda b: version_tuple(str(b.get("version") or "")))
+    """Самая свежая сборка, подходящая под платформу. None, если такой нет.
+
+    Правило выбора живёт в `versions`, здесь только подставляет список
+    сборок из набора: набор — это уже устройство студии, а не правило.
+    """
+    return versions.pick_build(bundle.builds, platform)
 
 
-def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+#: Хеш файла потоком. Имя оставлено прежним: им пользуются окно и селфтест.
+sha256 = versions.file_sha256
 
 
 # ------------------------------------------------------------------- плагин в студии
