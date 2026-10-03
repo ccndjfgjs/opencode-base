@@ -1,4 +1,45 @@
 {
+  "bridge_requirements": {
+    "note": "Раздел «нужно мостам» вкладки «Программы»: что требуется мостам и не входит в список программ, которые человек ставит для себя. Список программ отсюда не меняется. Каждый предмет провереняется как требование в поле requires у серверов из required_by — если сервер перестанет требовать предмет, тест упадёт. npx сюда не входит: он приезжает вместе с Node.js. PowerShell 5.1 тоже не входит: входит в состав Windows. adb не входит: его берёт мост либо у уже установленного эмулятора, либо из Android SDK.",
+    "items": [
+      {
+        "program": "Node.js",
+        "method": "winget",
+        "winget_id": "OpenJS.NodeJS.LTS",
+        "catalog_version": "24.19.0",
+        "expected_signer": "Node.js Foundation",
+        "needs_admin": false,
+        "needs_admin_verified": true,
+        "official_url": "https://nodejs.org/",
+        "hand_over": false,
+        "publisher_trusted": true,
+        "instructions": "Требуют трое серверов из восьми: windows-admin, excel и obs — все три моста написаны на JavaScript. Ставится одной кнопкой, бесплатно, без аккаунта. Берётся LTS, а не текущая ветка: в каталоге рядом лежит OpenJS.NodeJS версии 26.7.0, то есть скачок через два мажора, а мостам нужен рантайм. На этой машине стоит v24.18.0 в C:\\Program Files\\nodejs, каталог предлагает 24.19.0 — обычное обновление вперёд. Внимание на Windows: npx лежит как npx.ps1, а PowerShell может блокировать запуск .ps1 политикой выполнения; код это обходит, пробуя npx.cmd.",
+        "required_by": [
+          "windows-admin",
+          "excel",
+          "obs"
+        ],
+        "checked": "2026-10-03"
+      },
+      {
+        "program": "uv / uvx",
+        "method": "winget",
+        "winget_id": "astral-sh.uv",
+        "catalog_version": "0.12.22",
+        "expected_signer": "Astral Software Inc.",
+        "needs_admin": false,
+        "needs_admin_verified": false,
+        "official_url": "https://docs.astral.sh/uv/",
+        "hand_over": false,
+        "publisher_trusted": true,
+        "instructions": "Требует сервер blender: мост запускается командой uvx mcp-for-blender. Ставится одной кнопкой, бесплатно. На этой машине uv лежит в нестандартном месте — внутри папки hermes, то есть приехал с чужой инструментарией, а не поставлен нормально, и потому его может не быть ни на одной другой машине. Отдельно ставить uvx не нужно: он входит в тот же пакет.",
+        "required_by": [
+          "blender"
+        ],
+        "checked": "2026-10-03"
+      }
+    ]
+  },
   "schema": "opencode-base-mcp-registry-v1",
   "description": "Реестр MCP-серверов: что есть, что нужно поставить и готов ли сервер на этом компьютере. Программа ничего не устанавливает сама — только честно сообщает состояние. Подробное объяснение в инструкции/МCP-серверы.md.",
   "checked": "2026-09-28",

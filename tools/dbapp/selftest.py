@@ -3686,7 +3686,129 @@ def main() -> int:
                  "OBSProject.OBSStudio", "OpenJS.NodeJS.LTS"}
     check(_winget_ids == _want_ids,
           f"идентификаторы в реестре — те самые, включая варианты: {sorted(_winget_ids)}")
-    # ---- итог
+    # ---- 8м. Движок вкладки «Программы»
+    echo("\n--- 8м. Движок programs.py ---")
+    try:
+        import programs as pmod
+    except ImportError:
+        pmod = None
+        check(False, "движок programs.py импортируется")
+    if pmod is not None:
+        check(True, "движок programs.py импортируется")
+        _base = core.program_root()
+
+        # Главное свойство: движок не расходится с живым реестром.
+        _bad = pmod.agrees_with_registry(_base)
+        check(not _bad,
+              "движок выдаёт то же, что реестр, на всех серверах"
+              + ("" if not _bad else f": {_bad[:2]}"))
+
+        # Ловушка, на которую я сам наступил: неверный путь давал ноль серверов,
+        # а сравнение двух пустых списков рапортовало «расхождений нет».
+        _bad2 = pmod.agrees_with_registry(Path(tempfile.gettempdir()) / "папки-нет-такой")
+        check(bool(_bad2),
+              "на неверном пути движок честно говорит о расхождении, а не молчит")
+        check(any("серверов 0" in b for b in _bad2),
+              f"и называет причину — ноль серверов: {(_bad2 or [''])[0][:70]}")
+
+        # Все восемь на месте, и у каждого четыре ответа.
+        _views = pmod.server_views(_base)
+        check(len(_views) == 8, f"движок прочитал все восемь серверов: {len(_views)}")
+        _by = {v.id: v for v in _views}
+        for _sid in ("windows-admin", "excel", "blender", "adobe-creativity",
+                     "android-studio", "obs", "android-emulator", "ldplayer"):
+            check(_sid in _by, f"сервер {_sid} есть в движке")
+
+        # Кнопка там, где ставить реально можно.
+        check(_by["windows-admin"].install.has_button
+              and _by["windows-admin"].install.action == pmod.ACTION_WINGET,
+              "windows-admin: кнопка есть, Node.js ставится через winget")
+        check(_by["excel"].install.has_button is False
+              and _by["excel"].install.action == pmod.ACTION_NONE,
+              "Excel: кнопки нет — решение человека по офису")
+        check(_by["excel"].install.reason,
+              "Excel: без кнопки названа причина, а не тишина",
+              )
+        check(_by["ldplayer"].install.action == pmod.ACTION_MANUAL,
+              "LDPlayer: ручной метод — страница и команда в буфер")
+        check(_by["android-emulator"].install.action == pmod.ACTION_NONE
+              and len(_by["android-emulator"].install.alternatives) == 4,
+              "Android-эмулятор: «подойдёт любая», четыре варианта при себе")
+
+        # Подпись: сверки ещё нет, и движок не имеет права говорить иначе.
+        check(all(not v.verify.verified for v in _views),
+              "ни один сервер не говорит «подпись проверена» — сверки нет до этапа 4")
+        check(any(v.verify.expected_signer for v in _views),
+              "но имя ожидаемого подписанта показано — это намерение")
+        _vd = next(v.verify.detail for v in _views if v.verify.expected_signer)
+        # Ищем по смыслу, а не по точному куску: в тексте «на этапе 4» есть
+        # предлог, и поиск «этап 4» без хвостовой «е» не находит ничего.
+        check("этап" in _vd and "сверк" in _vd.lower(),
+              f"и сказано, что сверки ещё нет и появится она на этапе 4: {_vd[-40:]}")
+
+        # Мост внутри программы отличается от «мост ставится отдельно».
+        check(_by["obs"].bridge.bundled and _by["android-studio"].bridge.bundled,
+              "мосты OBS и Android Studio помечены как лежащие внутри")
+        check(_by["windows-admin"].bridge.bundled is False,
+              "у windows-admin мост не внутри программы")
+
+        # Требования: движок видит то же, что видит реестр.
+        check(_by["blender"].check.ok is False,
+              "blender без самой программы — не готов, как и в реестре")
+        check(_by["adobe-creativity"].check.ok is False,
+              "adobe-creativity без подписки — не готов")
+        check(_by["blender"].check.detail,
+              "и сказано, чего именно не хватает: " + _by["blender"].check.detail[:60])
+
+        # Третий раздел «нужно мостам».
+        _needs = pmod.bridge_needs(_base)
+        check(len(_needs) == 2, f"в разделе «нужно мостам» два предмета: {len(_needs)}")
+        _nn = {n.program: n for n in _needs}
+        check("Node.js" in _nn and _nn["Node.js"].wanted_by_count == 3,
+              "Node.js требуют трое серверов из восьми")
+        check(_nn.get("Node.js") is not None
+              and _nn["Node.js"].install.winget_id == "OpenJS.NodeJS.LTS",
+              "у Node.js настоящий идентификатор winget")
+        check("uv / uvx" in _nn and _nn["uv / uvx"].required_by == ["blender"],
+              "uv требует только blender — и его тоже не было в списке программ")
+
+        # Раздел не должен молчать, если его нет.
+        check(pmod.bridge_section_problem(_base) == "",
+              "раздел «нужно мостам» в порядке")
+        _fake = Path(tempfile.mkdtemp(prefix="programs-nobridge-"))
+        try:
+            _reg_src = _base / mcp_registry.REGISTRY_NAME
+            _raw = json.loads(_reg_src.read_text(encoding="utf-8"))
+            _raw.pop("bridge_requirements", None)
+            (_fake / mcp_registry.REGISTRY_NAME).write_text(
+                json.dumps(_raw, ensure_ascii=False, indent=2), encoding="utf-8")
+            _p3 = pmod.bridge_section_problem(_fake)
+            check(bool(_p3) and "bridge_requirements" in _p3,
+                  f"без раздела движок жалуется, а не показывает пустоту: {_p3[:60]}")
+            _raw2 = json.loads(_reg_src.read_text(encoding="utf-8"))
+            _raw2["bridge_requirements"] = {"note": "тест", "items": []}
+            (_fake / mcp_registry.REGISTRY_NAME).write_text(
+                json.dumps(_raw2, ensure_ascii=False, indent=2), encoding="utf-8")
+            check(pmod.bridge_section_problem(_fake) == "",
+                  "пустой раздел честен — это «ставить нечего», а не потеря данных")
+            check(pmod.bridge_needs(_fake) == [],
+                  "и предметов в пустом разделе ноль, без исключения")
+        finally:
+            shutil.rmtree(_fake, ignore_errors=True)
+
+        # Сверка раздела с требованиями серверов: разойтись не должны.
+        _live = {s.id: s for s in mcp_registry.load_servers(_base)}
+        for _n in _needs:
+            for _sid in _n.required_by:
+                _srv = _live.get(_sid)
+                check(_srv is not None, f"требующий сервер {_sid} есть в реестре")
+                if _srv is None:
+                    continue
+                _what = " ".join(r.what for r in _srv.requirements).lower()
+                _prog = _n.program.lower().split(" / ")[0]
+                check(_prog in _what,
+                      f"{_sid} действительно требует {_n.program} — раздел не выдуман")
+        # ---- итог
     failed = [text for good, text in results if not good]
     echo("\n" + "=" * 62)
     if failed:
