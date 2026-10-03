@@ -47,8 +47,10 @@ from pathlib import Path
 # как пакет нужен относительный.
 try:
     import mcp_registry  # type: ignore[import-not-found]
+    import signature  # type: ignore[import-not-found]
 except ImportError:  # pragma: no cover - запуск как пакет
     from . import mcp_registry  # type: ignore[no-redef]
+    from . import signature  # type: ignore[no-redef]
 
 
 #: Что вкладка умеет делать с программой. Смысл этих значений — из раздела
@@ -106,12 +108,33 @@ class InstallView:
 
 @dataclass
 class VerifyView:
-    """Кому обязана совпасть подпись и сделана ли сверка."""
+    """Кому обязана совпасть подпись, и что сказала сверка.
+
+    Различает три состояния, и смешивать их нельзя:
+
+    * сверки ещё не было — ждём файла;
+    * сверка прошла, но подписал не тот;
+    * сверка прошла и подписал тот, кого ждали.
+
+    Раньше здесь стояло одно поле verified с постоянным False и словами
+    «сверки ещё нет». Теперь сверка есть (модуль signature), но файла, который
+    она проверяет, ещё нет: скачивание появится на этапе 8. Поэтому состояние
+    «ждаем файл» отделено от состояния «отказали».
+    """
 
     expected_signer: str = ""
+    expected_publisher: str = ""
     winget_id: str = ""
-    verified: bool = False        # сверки ещё нет ни разу
+    signer_checked: str = ""      # когда CN подтверждён на настоящем файле
+    verified: bool = False        # проверено по-настоящему и подписант тот
+    checked: bool = False         # сверка вообще дала ответ
+    safe_to_run: bool = False     # запускать можно (неизвестность = отказ)
     detail: str = ""
+
+    @property
+    def can_check(self) -> bool:
+        """Есть ли смысл запускать сверку: файл появится, имя известно."""
+        return bool(self.expected_signer)
 
 
 @dataclass
@@ -201,24 +224,61 @@ def _check_from_server(server: mcp_registry.Server) -> CheckView:
 
 
 def _verify_from_block(block: mcp_registry.ProgramInstall | None) -> VerifyView:
-    """Честно сказать, что сверки подписи нет.
+    """Что известно о подписи, пока файла нет.
 
-    Проверка появляется только на этапе 4. До неё `verified` обязан быть
-    `False`, иначе вкладка напишет человеку «подпись проверена», не проверив
-    ничего. Имя подписавшего при этом показываем: это намерение, и человек
-    должен видеть, чего мы собираемся требовать.
+    Сверка живёт в модуле signature и требует файл. Пока файла нет, здесь
+    только то, что решено заранее: кого мы ждём и подтверждён ли этот подписант
+    на настоящем файле. Отвечать «сверки нет» больше нельзя — сверка есть,
+    нет файла, и разницу вкладке показывать надо.
     """
-    if block is None or not block.expected_signer:
+    if block is None:
         return VerifyView(
-            verified=False,
-            detail="подпись проверять нечего: подписант не записан в реестре",
+            detail="подпись проверять нечего: блока установки в реестре нет",
+        )
+    if not block.expected_signer:
+        # Издатель из каталога winget НЕ подписант: на Node.js это
+        # «Node.js Foundation» против настоящего «OpenJS Foundation». Подставлять
+        # издателя на место подписанта нельзя — сверка объявила бы настоящий
+        # файл поддельным. Поэтому здесь честно «проверять не с чем».
+        return VerifyView(
+            expected_publisher=block.expected_publisher,
+            winget_id=block.winget_id,
+            detail=(
+                f"имя подписанта неизвестно, сверять не с чем. Издатель из "
+                f"каталога winget — {block.expected_publisher or '—'} — это "
+                f"другое поле: он не подписант. Имя появится, когда "
+                f"установщик будет скачан (этап 8)"
+            ),
         )
     return VerifyView(
         expected_signer=block.expected_signer,
+        expected_publisher=block.expected_publisher,
         winget_id=block.winget_id,
-        verified=False,
-        detail=f"ожидаем подписанта {block.expected_signer}, но сверки ещё нет — "
-               f"она появится на этапе 4",
+        signer_checked=block.signer_checked,
+        detail=(f"ждём подписанта {block.expected_signer}; файл ещё не скачан, "
+                f"поэтому сверка не запускалась"),
+    )
+
+
+def verify_file(view: VerifyView, path: Path) -> VerifyView:
+    """Сверить подпись настоящего файла и вернуть то же представление.
+
+    Отдельная функция, а не поле, вычисляемое само: сверка стоит около
+    0,3–0,8 с на файл, и вызывать её из представления означало бы дёргать
+    PowerShell каждый раз, когда вкладка перерисовывает карточку.
+    """
+    if not view.can_check:
+        return view
+    result = signature.check_signature(path, view.expected_signer)
+    return VerifyView(
+        expected_signer=view.expected_signer,
+        expected_publisher=view.expected_publisher,
+        winget_id=view.winget_id,
+        signer_checked=view.signer_checked,
+        verified=result.verified,
+        checked=result.checked,
+        safe_to_run=result.safe_to_run,
+        detail=signature.describe(result),
     )
 
 

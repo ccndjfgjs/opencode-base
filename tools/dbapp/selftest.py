@@ -3705,8 +3705,10 @@ def main() -> int:
     _by_id = {s.id: s.program_install for s in _servers}
     if all(_by_id.values()):
         check(_by_id["blender"].winget_id == "BlenderFoundation.Blender"
-              and _by_id["blender"].expected_signer == "Blender Foundation",
-              "Blender: идентификатор и издатель из реестра")
+              and _by_id["blender"].expected_publisher == "Blender Foundation",
+              "Blender: идентификатор и издатель из каталога")
+        check(_by_id["blender"].expected_signer == "",
+              "Blender: подписант не выдуман — издатель из каталога им не является")
         check(_by_id["ldplayer"].method == "manual" and not _by_id["ldplayer"].can_install,
               "LDPlayer: вручную, кнопки нет")
         check(_by_id["excel"].method == "none" and not _by_id["excel"].stops_for_human,
@@ -3814,8 +3816,8 @@ def main() -> int:
         _vd = next(v.verify.detail for v in _views if v.verify.expected_signer)
         # Ищем по смыслу, а не по точному куску: в тексте «на этапе 4» есть
         # предлог, и поиск «этап 4» без хвостовой «е» не находит ничего.
-        check("этап" in _vd and "сверк" in _vd.lower(),
-              f"и сказано, что сверки ещё нет и появится она на этапе 4: {_vd[-40:]}")
+        check("сверк" in _vd.lower() and "файл ещё не скачан" in _vd,
+              f"и сказано, что сверка ждёт файла: {_vd[-52:]}")
 
         # Мост внутри программы отличается от «мост ставится отдельно».
         check(_by["obs"].bridge.bundled and _by["android-studio"].bridge.bundled,
@@ -3879,7 +3881,164 @@ def main() -> int:
                 _prog = _n.program.lower().split(" / ")[0]
                 check(_prog in _what,
                       f"{_sid} действительно требует {_n.program} — раздел не выдуман")
-        # ---- итог
+    # ---- 8н. Проверка подписи установщика
+    echo("\n--- 8н. Проверка подписи установщика ---")
+    try:
+        import signature as sg
+    except ImportError:
+        sg = None
+        check(False, "модуль signature импортируется")
+    if sg is not None:
+        check(True, "модуль signature импортируется")
+
+        # Статусы зафиксированы числами: сверять строкой нельзя, локализация
+        # Windows в любой момент может изменить имя.
+        check(sg.STATUS_VALID == 0 and sg.STATUS_NOT_SIGNED == 2
+              and sg.STATUS_HASH_MISMATCH == 3 and sg.STATUS_NOT_TRUSTED == 4,
+              "значения статусов верны (сняты через [enum]::GetNames)")
+        check(len(sg.STATUS_NAMES) == 7,
+              f"описаны все семь статусов: {len(sg.STATUS_NAMES)}")
+
+        # Правило сверки: слова, а не куски строки.
+        for _subj, _exp, _want, _note in (
+            ("CN=OpenJS Foundation, O=OpenJS Foundation", "OpenJS Foundation", True,
+             "свой подписант"),
+            ("CN=OpenJS Foundation, O=OpenJS Foundation", "Node.js Foundation", False,
+             "издатель из winget подписантом не является"),
+            ("CN=Microsoft Windows, O=Microsoft Corporation", "Microsoft Corporation", True,
+             "имя лежит в O=, а не в CN="),
+            ("CN=Microsoft Windows, O=Microsoft Corporation", "Google LLC", False,
+             "чужой издатель"),
+            ("CN=Adobe Inc., O=Adobe Inc.", "Adobe Inc.", True, "полное совпадение"),
+            ("CN=Adobe Systems, O=Adobe Systems", "Adobe", True,
+             "старое название той же фирмы"),
+            ("CN=Epic Games, Inc., O=Epic Games", "Epic Games", True,
+             "ожидание короче подписанта"),
+            ("CN=Microsoft", "Microsoft Corporation", False,
+             "короткое фактическое имя не подтверждает длинное ожидание"),
+            ("CN=Любой Издатель, O=Никто", "Blender Foundation, Adobe Inc.", False,
+             "список ожиданий не подошёл"),
+            ("", "Blender Foundation", False, "пустой Subject"),
+            ("CN=Что Угодно", "", False, "нечего сверять"),
+        ):
+            check(sg.signer_matches(_subj, _exp) == _want, f"сверка: {_note}")
+        check(sg._tokens("CN=A B, O=C") == ["CN", "A", "B", "O", "C"],
+              f"разбор на слова: {sg._tokens('CN=A B, O=C')}")
+        check(sg._tokens("") == [] and sg._tokens(None) == [],
+              "пустая строка даёт пустой список, а не исключение")
+
+        # Два требования этапа: настоящее проходит, чужое отвергается.
+        # Файлы берутся те, что уже есть на машине, — интернет не нужен.
+        _node = Path(r"C:\Program Files\nodejs\node.exe")
+        _python = (Path.home() / ".workbuddy-ai" / "binaries" / "python"
+                   / "envs" / "dbapp" / "Scripts" / "python.exe")
+        _have_signed = _node.is_file()
+        check(_have_signed, "на машине есть настоящий подписанный файл")
+        _have_py = _python.is_file()
+        check(_have_py, "и второй, от другого издателя")
+
+        if _have_signed:
+            _good = sg.check_signature(_node, "OpenJS Foundation")
+            check(_good.checked and _good.status == sg.STATUS_VALID,
+                  f"настоящий файл: статус Valid ({_good.status})")
+            check(_good.verified is True,
+                  f"настоящий файл: подписант тот, кого ждали — {_good.signer}")
+            check(_good.safe_to_run is True, "настоящий файл: запускать можно")
+
+            # ГЛАВНЫЙ тест этапа: тот же файл, но ждём чужого подписанта.
+            _wrong = sg.check_signature(_node, "Google LLC")
+            check(_wrong.checked and _wrong.status == sg.STATUS_VALID,
+                  "чужое ожидание: подпись всё равно действительна")
+            check(_wrong.verified is False, "чужое ожидание: сверка отказала")
+            check("но подписал" in _wrong.detail,
+                  f"и сказала, кто подписал на самом деле: {_wrong.detail[:66]}")
+            check("подпись плохая" not in _wrong.detail,
+                  "при этом не назвала подпись плохой — она в порядке, не тот")
+
+        if _have_py:
+            _py = sg.check_signature(_python, "Python Software Foundation")
+            check(_py.verified is True, f"второй настоящий файл прошёл: {_py.signer}")
+            check(sg.check_signature(_python, "Adobe Inc.").verified is False,
+                  "и тот же файл под чужим ожиданием отвергнут")
+
+        if _have_signed:
+            # Файл с испорченной подписью: копия с изменённым байтом внутри.
+            _sdir = Path(tempfile.mkdtemp(prefix="signature-"))
+            try:
+                _broken = _sdir / "испорченный.exe"
+                _bytes = bytearray(_node.read_bytes())
+                _bytes[0x400] ^= 0xFF
+                _broken.write_bytes(bytes(_bytes))
+                _bad = sg.check_signature(_broken, "OpenJS Foundation")
+                check(_bad.checked is True, "испорченный файл: ответ получен")
+                check(_bad.verified is False, "испорченный файл: сверка отказала")
+                check(_bad.safe_to_run is False, "испорченный файл: запускать нельзя")
+                _st = _bad.status
+                check(_st in (sg.STATUS_HASH_MISMATCH, sg.STATUS_NOT_SIGNED),
+                      f"испорченный файл: неValid-статус "
+                      f"({sg.STATUS_NAMES.get(_st, _st)})")
+
+                _plain = _sdir / "без-подписи.exe"
+                _plain.write_bytes(b"MZ\x90\x00\x03\x00\x00\x00" + b"\x00" * 64)
+                _nop = sg.check_signature(_plain, "OpenJS Foundation")
+                check(_nop.verified is False, "файл без подписи: сверка отказала")
+                check(_nop.safe_to_run is False,
+                      "файл без подписи: запускать нельзя")
+            finally:
+                shutil.rmtree(_sdir, ignore_errors=True)
+
+        # Сбой команды — это «не знаю», а не «подпись плохая».
+        _stub = (Path.home() / "AppData" / "Local" / "Microsoft"
+                 / "WindowsApps" / "winget.exe")
+        if _stub.exists():
+            _crash = sg.check_signature(_stub, "Microsoft Corporation")
+            check(_crash.safe_to_run is False,
+                  "сбой команды не превращается в «подпись в порядке»")
+            check(_crash.verified is False, "и никогда не даёт verified=True")
+
+        # Файла нет и имени нет — оба случая говорят своё, а не молчат.
+        _nofile = sg.check_signature(
+            Path(tempfile.gettempdir()) / "нет-такого-файла.exe", "Microsoft Corporation")
+        check(_nofile.checked is False and _nofile.verified is False
+              and _nofile.safe_to_run is False,
+              "нет файла: не сказано «проверено» и не «запускать можно»")
+        if _have_signed:
+            _noexp = sg.check_signature(_node, "")
+            check(_noexp.checked is False and _noexp.verified is False,
+                  "нет ожидаемого имени: сверять не с чем, и это не успех")
+            check("не с чем" in _noexp.detail,
+                  f"и сказано человеку почему: {_noexp.detail[:66]}")
+
+        # Неизвестность — отказ, а не согласие.
+        check(sg.STATUS_ALLows[sg.STATUS_UNKNOWN_ERROR] is False,
+              "неизвестный статус означает «не запускать»")
+        check(sg.STATUS_ALLows[sg.STATUS_NOT_TRUSTED] is False,
+              "недоверенный подписант — отказ")
+        check(sg.STATUS_ALLows[sg.STATUS_VALID] is True,
+              "только действительная подпись разрешает запуск")
+
+        # Движок вкладки связан со сверкой.
+        _base2 = core.program_root()
+        _views2 = pmod.server_views(_base2)
+        _wa2 = next(v for v in _views2 if v.id == "windows-admin")
+        check(_wa2.verify.expected_signer == "OpenJS Foundation",
+              f"windows-admin ждёт настоящего подписанта: "
+              f"{_wa2.verify.expected_signer}")
+        check(_wa2.verify.expected_publisher == "Node.js Foundation",
+              "и отдельно хранит издателя из каталога winget")
+        check(_wa2.verify.can_check is True, "сверка для Node.js возможна")
+        if _have_signed:
+            _done = pmod.verify_file(_wa2.verify, _node)
+            check(_done.verified is True and _done.safe_to_run is True,
+                  f"движок провёл сверку и подтвердил: {_done.detail[:58]}")
+        _others = [v for v in _views2 if v.id != "windows-admin"]
+        check(all(not v.verify.can_check for v in _others),
+              "у остальных семи имя подписанта неизвестно")
+        check(all("неизвестно" in v.verify.detail for v in _others),
+              "и никто из них не обещает подтверждённую подпись")
+        check(all(not v.verify.verified for v in _views2),
+              "до сверки по файлу ни одна карточка не говорит «проверено»")
+    # ---- итог
     failed = [text for good, text in results if not good]
     echo("\n" + "=" * 62)
     if failed:

@@ -101,7 +101,10 @@ class ProgramInstall:
     method: str = "manual"        # winget | official-download | manual | none
     winget_id: str = ""
     catalog_version: str = ""     # версия в каталоге, не установленная
-    expected_signer: str = ""
+    expected_publisher: str = ""  # издатель из МАНИФЕСТА winget
+    expected_signer: str = ""     # кто подписал сам файл; иное поле, см. ниже
+    signer_checked: str = ""      # когда CN подтверждён на настоящем файле
+    signer_proof: str = ""        # чем подтверждён: путь и что сказала Windows
     needs_admin: bool = False
     needs_admin_verified: bool = False
     official_url: str = ""
@@ -239,7 +242,10 @@ class Server:
             method=str(raw.get("method") or "manual").strip().lower(),
             winget_id=str(raw.get("winget_id") or ""),
             catalog_version=str(raw.get("catalog_version") or ""),
+            expected_publisher=str(raw.get("expected_publisher") or ""),
             expected_signer=str(raw.get("expected_signer") or ""),
+            signer_checked=str(raw.get("signer_checked") or ""),
+            signer_proof=str(raw.get("signer_proof") or ""),
             needs_admin=bool(raw.get("needs_admin")),
             needs_admin_verified=bool(raw.get("needs_admin_verified")),
             official_url=str(raw.get("official_url") or ""),
