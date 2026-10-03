@@ -1892,26 +1892,51 @@ def main() -> int:
     check(ctab.btn_skills_put.isEnabled() and ctab.btn_skills_drop.isEnabled(),
           "кнопки поставить/убрать навыки доступны")
     # Список должен показывать навыки, а не три строки из тридцати двух.
-    # Дефект был в том, что описание шло в одну строку: появлялась
-    # горизонтальная прокрутка, а из-за неё навыки не помещались по высоте.
-    # Проверяем все три свойства, а не одно: перенос без запрета полосы,
-    # или перенос при одинаковой высоте строк — это снова молчаливое враньё.
+    # Перенос делает core.skill_item_text, вставляя переносы в текст сам:
+    # Qt со своим переносом считал высоту строк неверно. Проверяем свойства
+    # виджета и то, до чего он доводит, а не только как он выглядит.
     _sl = ctab.caps_skills_list
-    check(_sl.wordWrap() is True, "в списке навыков включён перенос по словам")
-    check(_sl.uniformItemSizes() is False,
-          "и высота строк не выровнена — иначе перенос теряется молча")
     check(_sl.horizontalScrollBarPolicy()
           == app_main.Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
           "горизонтальной прокрутки нет — список не вылезает по ширине")
+    check(_sl.horizontalScrollBar().maximum() == 0,
+          "и по горизонтали прокручивать нечего — текст урезан по ширине")
     check(_sl.minimumHeight() >= 300,
           f"высота списка вмещает больше трёх навыков: {_sl.minimumHeight()} px")
+
+    # Строка навыка: название плюс одна короткая строка. Больше — значит
+    # навык растягивается на пол-экрана, и тридцать два не пролистать.
+    _rows = [_sl.item(i) for i in range(_sl.count())]
+    _line_counts = [t.text().count("\n") + 1 for t in _rows]
+    check(all(n <= 2 for n in _line_counts),
+          f"строка навыка не длиннее двух строк: максимум {max(_line_counts)}")
+    _widths = [len(line)
+               for t in _rows for line in t.text().splitlines()]
+    check(max(_widths) <= 95,
+          f"строка урезана по ширине: самая длинная {max(_widths)} знаков")
+    check(all(t.toolTip() for t in _rows),
+          "а полное описание осталось в подсказке по наведению")
+
+    # Главное: доезжает ли список до последнего навыка.
+    _vb = _sl.verticalScrollBar()
+    _vp = _sl.viewport().rect()
+    _vb.setValue(_vb.maximum())
+    _last = _sl.count() - 1
+    _on_screen = _sl.visualItemRect(_sl.item(_last)).intersects(_vp)
+    check(_on_screen,
+          f"прокруткой доезжаешь до последнего навыка: {_last + 1}-й")
+    check(_sl.visualItemRect(_sl.item(_last)).bottom() <= _vp.bottom(),
+          "и он виден целиком, а не обрезан краем")
+    _per_screen = sum(1 for i in range(_sl.count())
+                      if _sl.visualItemRect(_sl.item(i)).intersects(_vp))
+    check(_per_screen >= 8,
+          f"за один экран видно достаточно навыков: {_per_screen}")
+
     _create_sl = getattr(ctab, "skills_list", None)
     if _create_sl is not None:
-        check(_create_sl.wordWrap() is True,
-              "в списке навыков при создании базы перенос тоже включён")
         check(_create_sl.horizontalScrollBarPolicy()
               == app_main.Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
-              "и горизонтальной прокрутки там тоже нет")
+              "и горизонтальной прокрутки у списка при создании базы тоже нет")
     nagents = len(list((core.program_root() / 'tools' / 'agents').glob('*.md')))
     check(str(nagents) in ctab.checks['agents'].text(),
           f"агентов названо честно: {ctab.checks['agents'].text()[:40]}")

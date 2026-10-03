@@ -934,10 +934,9 @@ class ImportTab(ScrollPage):
             )
         )
         self.skills_list = QListWidget()
-        # Тот же дефект, что и у списка навыков для opencode: описание в одну
-        # строку вылезало по ширине, появлялась горизонтальная прокрутка, и
-        # из-за неё навыки не помещались по высоте.
-        self.skills_list.setWordWrap(True)
+        # Тот же дефект, что и у списка навыков для opencode: переносы
+        # вставляет core.skill_item_text, а не Qt.
+        self.skills_list.setWordWrap(False)
         self.skills_list.setUniformItemSizes(False)
         self.skills_list.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -1337,10 +1336,7 @@ class ImportTab(ScrollPage):
         for skill in entries:
             title = skill["title"]
             desc = skill["description"]
-            text = f"{title}"
-            if desc:
-                short = desc if len(desc) <= 120 else desc[:117].rstrip() + "…"
-                text += f"\n{short}"
+            text = core.skill_item_text(skill)
             row = QListWidgetItem(text)
             row.setData(1000, skill["name"])
             row.setToolTip(desc or title)
@@ -2387,15 +2383,12 @@ class CapsTab(ScrollPage):
             )
         )
         self.caps_skills_list = QListWidget()
-        # Описание навыка не помещается в одну строку, а переноса не было:
-        # список вылезал по ширине и появлялась горизонтальная прокрутка.
-        # Из-за неё навыки не помещались и по высоте — из 32 видно было
-        # три, а остальные терялись. Перенос по словам и запрет горизонтальной
-        # полосы решают обе стороны: строки занимают всю ширину окна.
-        self.caps_skills_list.setWordWrap(True)
-        # Перенос и одинаковая высота строк несовместимы: при включённой
-        # одинаковой высоте Qt рисует все строки по одной мерке и перенос
-        # молча теряется. Выключаем явно, иначе настройка выше — враньё.
+        # Перенос делает core.skill_item_text, вставляя переносы в текст
+        # явно. Собственный перенос Qt не нужен и даже вреден: Qt неверно
+        # считал высоту строки и сообщал, что прокрутка не требуется —
+        # максимум ползунка был 0, и до нижних навыков нельзя было
+        # добраться. С явными переносами высота считается правильно.
+        self.caps_skills_list.setWordWrap(False)
         self.caps_skills_list.setUniformItemSizes(False)
         self.caps_skills_list.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -3027,10 +3020,7 @@ class CapsTab(ScrollPage):
         self.caps_skills_list.clear()
         for skill in core.list_skills(self._base()):
             desc = skill["description"]
-            text = skill["title"]
-            if desc:
-                short = desc if len(desc) <= 120 else desc[:117].rstrip() + "…"
-                text += f"\n{short}"
+            text = core.skill_item_text(skill)
             row = QListWidgetItem(text)
             row.setData(1000, skill["name"])
             row.setToolTip(desc or skill["title"])
