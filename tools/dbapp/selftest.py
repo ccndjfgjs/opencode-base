@@ -4370,6 +4370,243 @@ def main() -> int:
               "сообщение переживает перерисовку карточек")
         _ptab._messages.clear()
         _ptab.reload()
+
+    # ---- 8п. Пояснения папок не врут
+    echo("\n--- 8п. Пояснения папок: числа, пути, чужие символы ---")
+    #
+    # Откуда эти проверки. Пояснения у разделов безопасности были
+    # построчной копией карты: «защита Linux: смотри при задачах про
+    # Linux». Файл есть, смысла нет. Когда пояснения переписали по
+    # существу, в первом же тексте оказалось девять неверных чисел —
+    # счётчик при импорте считал вместе с вложенными подпапками, а нужен
+    # был свой уровень, и в семи местах перепутались итоги соседних
+    # разделов: 289 файлов в «Сети» вместо 199, 119 в «Windows» вместо
+    # 108. Самое скверное — числа выглядели правдоподобно, и никто их не
+    # проверял: протухнут при обновлении HackTricks — и заметят только
+    # те, кто полезет читать.
+    #
+    # Чего эти проверки НЕ ловят:
+    #  - число, приписанное подпапке, если подпапка на этой строке не
+    #    названа в обратных кавычках: оно идёт в «не приписано», а не
+    #    в ошибку (проверка не имеет права угадывать);
+    #  - внятность и правдивость текста — только числа и пути;
+    #  - содержание самого HackTricks: он приходит извне и меняется сам.
+    import re as _re_hint  # noqa: PLC0415 - нужен здесь и только здесь
+    import unicodedata as _ud  # noqa: PLC0415 - нужен здесь и только здесь
+
+    _zone = core.program_root() / "знания"
+    _hint_names = ("_О-ПАПКЕ.md", "О-ПАПКЕ.md")
+    _hints = sorted(_zone.rglob("_О-ПАПКЕ.md"))
+    check(len(_hints) >= len(core.knowledge_folders()),
+          f"пояснение есть у каждой папки, которую создаёт конструктор: "
+          f"{len(_hints)} пояснений на {len(core.knowledge_folders())} папок")
+
+    def _is_content(_p: Path) -> bool:
+        return _p.is_file() and _p.suffix == ".md" and _p.name not in _hint_names
+
+    _num_re = _re_hint.compile(r"(\d{1,4})\s+файл\w*")
+    # Токены — только латиницей, и это не лень, а граница.
+    #
+    # Если разрешить кириллицу, под проверку попадёт 352 имени, и 37 из
+    # них — ложные тревоги: `платежи.md`, `Мама.md`, `Тётя-Лена.md`,
+    # `_ШАБЛОН-….md`. Это примеры имён, которые человек сам создаст
+    # внутри своей папки, а не обещания существующих файлов. Проверка,
+    # которая на них ругается, — это проверка, которую выключают.
+    #
+    # Обратная сторона границы, проверенная откатом: имя папки на
+    # русском подследить нельзя — 37 из 352 таких имён оказались бы
+    # ложными тревогами. Проверять кириллицу можно, если придумать, как
+    # отличить пример от обещания; сейчас отличить нечем, а угадывать в
+    # проверке нельзя.
+    #
+    # Слеш внутри токена обязателен: без него `blockchain/смарт-контракты/`
+    # обрезался до `blockchain/`, и число из строки приписывалось не той
+    # папке. Это четвёртая правка этой проверки, и три предыдущие нашлись
+    # не чтением кода, а прогоном: голые числа в столбце таблицы, слеш на
+    # конце, обрезанный путь. Правило простое: написанное проверкой надо на
+    # ней же и ловить, откатом.
+    _tok_re = _re_hint.compile(r"`([A-Za-z0-9_.+/-]+)`")
+    _bad_head: list[str] = []      # заголовок раздела не сходится
+    _bad_attr: list[str] = []      # число ни к чему не приписано
+    _sorted = sorted              # для читаемого списка чисел в сбое
+    _bad_tok: list[str] = []       # названа папка или файл, которых нет
+    _foreign: list[str] = []       # в русский текст просочились иероглифы
+    _allow = set("—–…«»→")
+    _md_ext = {"md"}
+    _prog_ext = {"py", "json", "jsonc", "js", "ts", "txt", "ps1", "cmd",
+                 "bat", "toml", "yaml", "yml", "exe", "dll", "cfg", "ini"}
+    _prog_files = {p.name for p in core.program_root().rglob("*") if p.is_file()}
+
+    for _hint in _hints:
+        _sec = _hint.parent
+        _root_md = sum(1 for _p in _sec.glob("*.md") if _is_content(_p))
+        _all_md = sum(1 for _p in _sec.rglob("*.md") if _is_content(_p))
+        _body = _hint.read_text(encoding="utf-8", errors="ignore")
+        _rel = _sec.relative_to(core.program_root()).as_posix()
+        _folders = {_p.name for _p in _sec.rglob("*") if _p.is_dir()}
+        _files = {_p.name for _p in _sec.rglob("*") if _p.is_file()}
+
+        # 1. Первое число в пояснении — заголовок про раздел, и оно
+        #    обязано сойтись с диском. Остальные числа относятся к
+        #    подпапкам и проверяются построчно, по строке.
+        _first = _num_re.search(_body)
+        if _first and int(_first.group(1)) not in (_root_md, _all_md):
+            _bad_head.append(f"{_rel}: «{_first.group(0)}», "
+                             f"а на диске {_all_md} всего, {_root_md} в корне")
+
+        # 2. Каждое число приписано либо подпапке, названной в этой же
+        #    строке, либо самому разделу. Иначе оно не проверяемо, и
+        #    сказать об этом надо, а не молчать.
+        for _line_no, _line in enumerate(_body.splitlines(), 1):
+            for _m in _num_re.finditer(_line):
+                _n = int(_m.group(1))
+                if _n in (_root_md, _all_md):
+                    continue
+                _here = set(_tok_re.findall(_line))
+                _cands: set[int] = set()
+                for _t in _here:
+                    _leaf = _t.rstrip("/").split("/")[-1]
+                    _folder = next((_p for _p in _sec.rglob(_leaf)
+                                    if _p.is_dir()), None)
+                    if _folder is not None:
+                        _cands.add(sum(1 for _p in _folder.glob("*.md")
+                                       if _is_content(_p)))
+                        _cands.add(sum(1 for _p in _folder.rglob("*.md")
+                                       if _is_content(_p)))
+                if _n not in _cands:
+                    _bad_attr.append(f"{_rel}:{_line_no} «{_m.group(0)}» "
+                                     f"ни к какой подпапке строки не приписано")
+
+        # 2б. Числа в столбце таблицы.
+        #
+        # Столбец называется в шапке («файлов», «подпапок»), а само число
+        # стоит голой цифрой в ячейке: `| 41 |`. Регулярка «N файл» такую
+        # строку не видит вообще, и все числа в таблицах остались без
+        # проверки — а это ровно те числа, где я уже путал итоги
+        # соседних разделов. Откат это показал: в таблице Windows стояло
+        # 41, подставили 47, прогон вышел с кодом 0, то есть проверка
+        # промолчала.
+        #
+        # Правило: если в строке таблицы есть столбец, названный в шапке
+        # «файлов» или «подпапок», число в нём сверяется с папкой, названной
+        # в этой же строке. Угадывать нечего: и папка, и счётчик в одной
+        # строке.
+        _count_cells = ("файлов", "файла", "файл", "подпапок", "подпапки")
+        _count_cols: set[int] = set()
+        for _line_no, _line in enumerate(_body.splitlines(), 1):
+            if not _line.strip().startswith("|"):
+                _count_cols.clear()
+                continue
+            _cells = [c.strip() for c in _line.strip().strip("|").split("|")]
+            if not _count_cols:
+                # Берём ВСЕ подходящие столбцы, а не первый попавшийся:
+                # в шапке «| подпапка | файлов | о чём |» первым подходит
+                # «подпапка» — это первый столбец, с путями. Поиск по
+                # первому совпадению сажал проверку на пустой столбец, и
+                # ни одна строка не проверялась: откат с 41 → 47 проходил
+                # с кодом выхода 0. Пятая правка этой проверки.
+                for _i, _c in enumerate(_cells):
+                    if _c.lower().strip("* ") in _count_cells:
+                        _count_cols.add(_i)
+                continue
+            for _ci in sorted(_count_cols):
+                if _ci >= len(_cells):
+                    continue
+                _cell_m = _re_hint.match(r"^(\d{1,4})\b", _cells[_ci])
+                if _cell_m is None:
+                    continue
+                _n = int(_cell_m.group(1))
+                if _n in (_root_md, _all_md):
+                    continue
+                _row_toks = set(_tok_re.findall(_line))
+                _cands = set()
+                for _t in _row_toks:
+                    _leaf = _t.rstrip("/").split("/")[-1]
+                    if _leaf.endswith(".md") and _leaf in _files:
+                        # строка может считать не папку, а файл:
+                        # `путь/README.md` | 1 | — и тогда верно ровно одно
+                        _cands.add(1)
+                    _folder = next((_p for _p in _sec.rglob(_leaf)
+                                    if _p.is_dir()), None)
+                    if _folder is None:
+                        continue
+                    _cands.add(sum(1 for _p in _folder.glob("*.md")
+                                   if _is_content(_p)))
+                    _cands.add(sum(1 for _p in _folder.rglob("*.md")
+                                   if _is_content(_p)))
+                    _cands.add(sum(1 for _p in _folder.iterdir()
+                                   if _p.is_dir()))
+                if _n not in _cands:
+                    _bad_attr.append(
+                        f"{_rel}:{_line_no} в таблице {_n} — у папок строки "
+                        f"{_sorted(_cands) or 'ни одной'}")
+
+        # 3. Названная папка или файл должны существовать. Разрешение
+        #    пути различается по трём случаям, и это не педантизм:
+        #    пояснение вправе сослаться и на файл внутри раздела, и на
+        #    файл самой программы (`core.py`), и на имя в коде
+        #    (`KNOWLEDGE_AREAS`) — последнее не путь вовсе.
+        _prog_root = core.program_root()
+        for _raw in _tok_re.findall(_body):
+            # Слеш на конце — это признак папки, и его нельзя терять
+            # ДО того, как разобрали вид токена: rstrip("/") делает вид,
+            # будто это имя в коде, и проверка молча пропускает папку.
+            # На откате так и вышло: подсунули `networking-nonexistent/`,
+            # проверка не сработала, 998 галочек стояли зелёные — потому
+            # что этот кусок кода просто ничего не делал.
+            _looks_dir = _raw.endswith("/") or "/" in _raw
+            _token = _raw.rstrip("/")
+            if (_sec / _token).exists():
+                continue
+            if _looks_dir:
+                _leaf = _token.split("/")[-1]
+                if _leaf not in _folders and _leaf not in _files:
+                    _bad_tok.append(f"{_rel}: названа папка `{_raw}`, нет такой")
+                continue
+            _dot = _token.rfind(".")
+            _ext = _token[_dot + 1:] if _dot > 0 else ""
+            if _ext in _md_ext:
+                if _token not in _files:
+                    _bad_tok.append(f"{_rel}: назван файл `{_token}`, нет такого")
+            elif _ext in _prog_ext:
+                # файл программы: он лежит не в корне, а глубоко
+                # (`tools/dbapp/core.py`), поэтому ищем по имени, а не
+                # по пути от корня
+                if _token not in _prog_files:
+                    _bad_tok.append(f"{_rel}: назван файл программы "
+                                    f"`{_token}`, нет такого")
+            elif _ext:
+                _bad_tok.append(f"{_rel}: неизвестное расширение `{_token}`")
+            # без расширения и без слеша — это имя в коде, не путь
+
+        # 4. Чужие символы. В русский текст один раз просочились
+        #    иероглифы — вместо слов про подделку билетов. На глаз
+        #    это не видно, а смысл предложения меняется на выдумку.
+        #
+        #    Рисование рамок (`├──`, `└──`) пропускаем: им пояснение
+        #    показывает устройство папок, и в этом они по делу.
+        for _ch in set(_body):
+            if _ch in _allow or _ch.isspace():
+                continue
+            _code = ord(_ch)
+            if 0x2500 <= _code <= 0x257F:      # рамки и стрелки псевдографики
+                continue
+            if _ud.category(_ch).startswith("P"):
+                continue
+            if _code < 0x0400 or 0x0400 <= _code <= 0x04FF:
+                continue
+            _foreign.append(f"{_rel}: U+{_code:04X} «{_ch}»")
+
+    check(not _bad_head,
+          f"число в заголовке каждого пояснения сходится с диском: "
+          f"{_bad_head[:6] or 'чисто'}")
+    check(not _bad_attr,
+          f"каждое число в пояснении приписано чему-то проверяемому: "
+          f"{_bad_attr[:6] or 'чисто'}")
+    check(not _bad_tok,
+          f"названные папки и файлы есть на диске: {_bad_tok[:6] or 'чисто'}")
+    check(not _foreign,
+          f"в русском тексте нет чужих символов: {_foreign[:6] or 'чисто'}")
     # ---- итог
     failed = [text for good, text in results if not good]
     echo("\n" + "=" * 62)
