@@ -1459,6 +1459,34 @@ def main() -> int:
               f"в папке программы имени пользователя нет: проверено {len(_prog_files)}")
         for item in _prog_dirty:
             echo(f"      утечка в папке программы: {item}")
+
+        # Иероглифы в русском тексте. Проверка сделана после того, как
+        # посторонний символ дважды проскочил в комментарий при правке
+        # текста, и оба раза это заметил человек, а не прогон. Диапазоны:
+        # кандзи, кана, корейские хангыль, полноширинные формы.
+        _cjk = re.compile(
+            "[\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf"
+            "\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]"
+        )
+        _cjk_dirty: list[str] = []
+        _cjk_scanned = 0
+        for _p in sorted(_prog_files):
+            try:
+                _rows = _p.read_text(encoding="utf-8",
+                                     errors="replace").splitlines()
+            except OSError:
+                continue
+            for _i, _row in enumerate(_rows, 1):
+                if _cjk.search(_row):
+                    _cjk_dirty.append(
+                        f"{_p.relative_to(_prog)}:{_i}")
+                    break
+            _cjk_scanned += 1
+        check(not _cjk_dirty,
+              f"в русских файлах нет иероглифов: {_cjk_dirty[:5]}")
+        # Пустой обход ничего не проверяет и при этом выглядит как успех.
+        check(_cjk_scanned > 100,
+              f"иероглифы проверяли не в пустом списке файлов: {_cjk_scanned}")
         # Перечень не должен выродиться в ноль: пустой проверяет ничто и
         # при этом выглядит как успех. На пустой машине с одной папкой честно.
         check(len(_prog_files) > 50,
