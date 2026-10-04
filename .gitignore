@@ -24,6 +24,18 @@ config/device_id
 config/hwid
 config/.*_migrated
 
+# Живое состояние программы обхода. Здесь настоящие секреты, поэтому
+# правила добавлены сразу после обнаружения, а не «когда понадобится».
+#   config/data/incy.db        — база SQLite, 12 625 строк серверов, а
+#     в полях есть uuid, password, publicKey, wgPresharedKey,
+#     hy2ObfsPassword; плюс 9 подписок с url и hwid. Это учётные данные
+#     и адреса подписок в открытом виде. Удалять нельзя: это работающая
+#     база человека, в ней его серверы и подписки.
+#   config/preferences.json    — 97 полей настроек, включая socks5Username
+#     и идентификаторы выбранного сервера.
+config/data/
+config/preferences.json
+
 # Ярлыки
 *.lnk
 
