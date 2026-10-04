@@ -1893,8 +1893,9 @@ def main() -> int:
           "кнопки поставить/убрать навыки доступны")
     # Список должен показывать навыки, а не три строки из тридцати двух.
     # Перенос делает core.skill_item_text, вставляя переносы в текст сам:
-    # Qt со своим переносом считал высоту строк неверно. Проверяем свойства
-    # виджета и то, до чего он доводит, а не только как он выглядит.
+    # Qt со своим сворачиванием высоту строк заранее не показывает.
+    # Проверяем свойства виджета и то, до чего он доводит, а не только как
+    # он выглядит.
     _sl = ctab.caps_skills_list
     check(_sl.horizontalScrollBarPolicy()
           == app_main.Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
@@ -1932,11 +1933,44 @@ def main() -> int:
     check(_per_screen >= 8,
           f"за один экран видно достаточно навыков: {_per_screen}")
 
-    _create_sl = getattr(ctab, "skills_list", None)
+    # Высота списка считается по числу навыков, и все они видны разом.
+    # Проверка ловит откат к потолку в 600 px: тогда подпись говорит
+    # «Отмечены все: 32», а в списке без прокрутки двадцать строк, и
+    # человек решает, что остальных навыков ему не дали.
+    _want_h = min(app_main.SKILL_ROW_PX * _sl.count()
+                  + app_main.SKILL_LIST_PAD_PX, 1000)
+    check(_sl.minimumHeight() == _want_h and _sl.maximumHeight() == _want_h,
+          f"высота списка посчитана по {_sl.count()} навыкам: {_want_h} px")
+
+    # Своей прокрутки у списка быть не должно. Проверять это здесь нельзя:
+    # окно в селфтесте не показывается, QTabWidget задаёт размер только
+    # текущей вкладке, и замеры видимости тут противоречат друг другу —
+    # полоса говорит «прокрутка не нужна», а visualItemRect показывает
+    # 19 строк из 32. Видимость проверена отдельно, на показанном окне с
+    # переключённой вкладкой: там видны все 32. Здесь ловим главное —
+    # откат высоты к потолку в 600 px, который и был причиной жалобы.
+    _prev_tab = window.tabs.currentIndex()
+    _caps_index = next((i for i in range(window.tabs.count())
+                        if window.tabs.widget(i) is ctab), 0)
+    window.tabs.setCurrentIndex(_caps_index)
+    try:
+        for _ in range(6):
+            app_main.QApplication.processEvents()
+        check(_sl.minimumHeight() <= _sl.height(),
+              f"высоты списка хватает на все строки: {_sl.height()} px "
+              f"при {_sl.count()} навыках")
+    finally:
+        window.tabs.setCurrentIndex(_prev_tab)
+
+    _create_sl = getattr(window.import_tab, "skills_list", None)
     if _create_sl is not None:
         check(_create_sl.horizontalScrollBarPolicy()
               == app_main.Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
               "и горизонтальной прокрутки у списка при создании базы тоже нет")
+        _want_c = min(app_main.SKILL_ROW_PX * _create_sl.count()
+                      + app_main.SKILL_LIST_PAD_PX, 1000)
+        check(_create_sl.minimumHeight() == _want_c,
+              f"и высота второго списка тоже по навыкам: {_want_c} px")
     nagents = len(list((core.program_root() / 'tools' / 'agents').glob('*.md')))
     check(str(nagents) in ctab.checks['agents'].text(),
           f"агентов названо честно: {ctab.checks['agents'].text()[:40]}")

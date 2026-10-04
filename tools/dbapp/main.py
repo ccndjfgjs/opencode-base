@@ -55,6 +55,36 @@ from PyQt6.QtWidgets import (
 # ---------------------------------------------------------------- рабочий поток
 
 
+#: Высота строки списка навыков в пикселях и запас на рамку. Строки у нас
+#: ровно две — название и короткое описание, — поэтому высота постоянная.
+#: Константа, а не `sizeHintForRow`: спрашивать у виджета смысла нет, когда
+#: высота строки известна и не меняется.
+SKILL_ROW_PX = 26
+SKILL_LIST_PAD_PX = 10
+
+
+def fit_skills_height(lst) -> None:
+    """Растянуть список навыков так, чтобы все были видны сразу.
+
+    Подпись под списком говорит «Отмечены все: 32», а сам список показывал
+    14 — и выглядело так, будто двух третей навыков в нём нет. Внутренняя
+    прокрутка списка вводила в заблуждение: человек видел часть и считал,
+    что остальных не дали. Теперь прокручивается страница целиком, а
+    список показывает все навыки разом.
+
+    Функция на уровне модуля, а не метод класса: списки живут в разных
+    вкладках — `CreateTab` и `CapsTab`, — и метод одного из них из другого
+    был бы недоступен.
+    """
+    count = lst.count()
+    if count == 0:
+        return
+    needed = SKILL_ROW_PX * count + SKILL_LIST_PAD_PX
+    target = min(needed, 1000)
+    lst.setMinimumHeight(target)
+    lst.setMaximumHeight(target)
+
+
 class ScrollPage(QScrollArea):
     """Вкладка с прокруткой.
 
@@ -934,12 +964,15 @@ class ImportTab(ScrollPage):
             )
         )
         self.skills_list = QListWidget()
-        # Тот же дефект, что и у списка навыков для opencode: переносы
-        # вставляет core.skill_item_text, а не Qt.
+        # Переносы, как и у списка навыков для opencode, вставляет
+        # core.skill_item_text, а не Qt: со сворачиванием длинного описания
+        # высота строки заранее неизвестна.
         self.skills_list.setWordWrap(False)
         self.skills_list.setUniformItemSizes(False)
         self.skills_list.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Запас на случай пустого списка: fit_skills_height выставит свою
+        # высоту по фактическому числу навыков.
         self.skills_list.setMinimumHeight(300)
         self.skills_list.setMaximumHeight(600)
         skills_layout.addWidget(self.skills_list)
@@ -1354,6 +1387,7 @@ class ImportTab(ScrollPage):
 
         self.skills_list.blockSignals(False)
         self._skills_changed()
+        fit_skills_height(self.skills_list)
 
     def _chosen_skills(self) -> list[str]:
         names: list[str] = []
@@ -2384,14 +2418,15 @@ class CapsTab(ScrollPage):
         )
         self.caps_skills_list = QListWidget()
         # Перенос делает core.skill_item_text, вставляя переносы в текст
-        # явно. Собственный перенос Qt не нужен и даже вреден: Qt неверно
-        # считал высоту строки и сообщал, что прокрутка не требуется —
-        # максимум ползунка был 0, и до нижних навыков нельзя было
-        # добраться. С явными переносами высота считается правильно.
+        # явно: сворачивание длинного описания в одну строку Qt здесь
+        # делает непредсказуемо, а с явными переносами высота строки
+        # известна заранее и список растёт равномерно.
         self.caps_skills_list.setWordWrap(False)
         self.caps_skills_list.setUniformItemSizes(False)
         self.caps_skills_list.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Запас на случай пустого списка: fit_skills_height выставит свою
+        # высоту по фактическому числу навыков.
         self.caps_skills_list.setMinimumHeight(300)
         self.caps_skills_list.setMaximumHeight(600)
         skills_layout.addWidget(self.caps_skills_list)
@@ -3029,6 +3064,7 @@ class CapsTab(ScrollPage):
             self.caps_skills_list.addItem(row)
         self.caps_skills_list.blockSignals(False)
         self._caps_skills_changed()
+        fit_skills_height(self.caps_skills_list)
 
     def _chosen_caps_skills(self) -> list[str]:
         names: list[str] = []
