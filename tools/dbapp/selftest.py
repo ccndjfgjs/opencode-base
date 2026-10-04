@@ -2985,8 +2985,19 @@ def main() -> int:
     # Python-порт obs-mcp нерабочий: зовёт FastMCP с параметром
     # description, которого в актуальном SDK нет. Проверяем, что мы не
     # вернулись к нему, иначе мост молча упадёт на старте.
-    check(not (_root / "tools" / "thirdparty" / "obs-mcp" / "py_src").is_dir(),
-          "нерабочий Python-порт obs-mcp вынесен из программы")
+    #
+    # Исключение — настоящий git-клон: исходники моста лежат в репозитории
+    # подмодулем на коммите автора, и там `py_src` присутствует законно.
+    # Проверять надо то, что действительно важно: в поставляемой папке
+    # программы мёртвого кода нет, а лаунчер Node-мост не запускает.
+    # Раньше проверка была безусловной, и на копии репозитория падала,
+    # то есть требовала удалить из чужого коммита то, что там есть.
+    _py_port = _root / "tools" / "thirdparty" / "obs-mcp" / "py_src"
+    _is_checkout = (_root / "tools" / "thirdparty" / "obs-mcp" / ".git").exists()
+    check(_is_checkout or not _py_port.is_dir(),
+          "нерабочий Python-порт obs-mcp вынесен из поставляемой программы"
+          + (" (в репозитории он есть: это подмодуль на коммите автора)"
+             if _is_checkout else ""))
     _launcher = (_root / "tools" / "dbapp" / "launchers"
                  / "obs_bridge_launcher.py").read_text(encoding="utf-8")
     check("OBS_WEBSOCKET_PASSWORD" in _launcher,
@@ -4607,6 +4618,94 @@ def main() -> int:
           f"названные папки и файлы есть на диске: {_bad_tok[:6] or 'чисто'}")
     check(not _foreign,
           f"в русском тексте нет чужих символов: {_foreign[:6] or 'чисто'}")
+    # ---- 8р. Исходники моста OBS: подмодуль, а не копия
+    echo("\n--- 8р. Исходники моста OBS в репозитории ---")
+    #
+    # Мост работает из npm-пакета в obs-mcp-node, но его исходники тоже
+    # нужны: их читают и правят. Раньше они лежали рядом обычной папкой,
+    # и про это было написано в уведомлении о стороннем коде — но в
+    # репозитории их не было вовсе, то есть уведомление описывало то,
+    # чего в нём нет.
+    #
+    # Подмодуль, а не копия, по двум причинам. Лицензия: исходники моста
+    # под GPL-2.0, наш проект под MIT, чужие файлы в нашем индексе сделали
+    # бы смесь лицензий. Копированием (режим 100644 вместо 160000) это
+    # ловится сразу. И закреплённость: коммит виден явно, и его нельзя
+    # случайно переписать.
+    #
+    # Где смотреть. Селфтест идёт по папке программы, а подмодуль живёт
+    # в репозитории, и папка программы git-репозиторием не является. Если
+    # селфтест запущен прямо на копии репозитория — проверки настоящие; если
+    # на папке программы — git-механику не проверяем и говорим об этом
+    # прямо, а смотрим то, что проверить можно: наличие исходников и
+    # согласованность с уведомлением.
+    import subprocess as _sp  # noqa: PLC0415 - нужен здесь и только здесь
+
+    _prog = core.program_root()
+    _sub_path = "tools/thirdparty/obs-mcp"
+    _sub_dir = _prog.joinpath(*_sub_path.split("/"))
+    _notices = _prog / "THIRD-PARTY-NOTICES.md"
+    _notices_text = (_notices.read_text(encoding="utf-8", errors="ignore")
+                     if _notices.is_file() else "")
+
+    def _is_repo(folder: Path) -> bool:
+        try:
+            r = _sp.run(["git", "rev-parse", "--is-inside-work-tree"],
+                        cwd=str(folder), capture_output=True, text=True,
+                        timeout=20)
+            return r.returncode == 0 and r.stdout.strip() == "true"
+        except (OSError, ValueError):
+            return False
+
+    _repo_mode = _is_repo(_prog)
+    if _repo_mode:
+        _gm = _prog / ".gitmodules"
+        check(_gm.is_file(), ".gitmodules есть: подмодуль заявлен явно")
+        _gm_text = (_gm.read_text(encoding="utf-8", errors="ignore")
+                    if _gm.is_file() else "")
+        check(_sub_path in _gm_text and "royshil/obs-mcp" in _gm_text,
+              f"подмодуль моста объявлен: {_sub_path}")
+        # Что закреплено: читаем из индекса, а не с диска. Иначе проверка
+        # прошла бы и при рассинхронизации индекса с подмодулем.
+        _pinned = ""
+        try:
+            _st = _sp.run(["git", "ls-files", "--stage", "--", _sub_path],
+                          cwd=str(_prog), capture_output=True, text=True,
+                          timeout=20)
+            for _row in _st.stdout.splitlines():
+                _p = _row.split()
+                if len(_p) >= 2 and _p[0] == "160000":
+                    _pinned = _p[1]
+        except (OSError, ValueError):
+            _pinned = ""
+        check(bool(_pinned),
+              f"исходники моста лежат ссылкой, а не копией файлов: "
+              f"{_pinned[:12] or 'нет'}")
+        check(bool(_pinned) and _pinned[:12] in _notices_text,
+              "закреплённый коммит совпадает с записанным в уведомлении")
+    else:
+        echo("     папка программы не git-репозиторий: проверки подмодуля "
+             "не выполняются, проверяется только наличие исходников")
+
+    check(_sub_dir.is_dir(),
+          f"исходники моста на месте: {_sub_path}")
+    check(_pinned[:12] in _notices_text if _repo_mode
+          else "314e7c0" in _notices_text,
+          "уведомление называет тот же коммит, что и репозиторий")
+    check(_sub_dir.is_dir() and (_sub_dir / "package.json").is_file(),
+          "исходники моста не пустая папка: есть package.json")
+
+    # Навык не должен учить не доверять настоящему пути: раньше он именно
+    # так и делал, называя исходники мёртвым Python-мостом, которого там нет.
+    _obs_skill = _prog / "skills" / "obs-studio" / "SKILL.md"
+    if _obs_skill.is_file():
+        _obs_txt = _obs_skill.read_text(encoding="utf-8", errors="ignore")
+        check(_sub_path in _obs_txt or _sub_path.replace("/", "\\") in _obs_txt,
+              "навык называет настоящее место исходников моста")
+        check("нерабочий Python-мост" not in _obs_txt
+              or "было неверно" in _obs_txt,
+              "навык не утверждает, что исходников нет")
+
     # ---- итог
     failed = [text for good, text in results if not good]
     echo("\n" + "=" * 62)

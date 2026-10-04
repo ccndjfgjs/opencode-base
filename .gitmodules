@@ -1,0 +1,3 @@
+[submodule "tools/thirdparty/obs-mcp"]
+	path = tools/thirdparty/obs-mcp
+	url = https://github.com/royshil/obs-mcp
