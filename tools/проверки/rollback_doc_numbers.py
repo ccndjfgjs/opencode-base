@@ -2,33 +2,34 @@
 """Откат для проверок 5 и 6 в doc_numbers.py.
 
 Проверку, которая ни разу не падала, нельзя считать проверкой. Здесь
-доказывается обратное: правим копию плана — проверки зеленеют, возвращаем
-исходный текст — краснеют.
+доказывается обратное: в копию документа вносятся правки, каждая из
+которых ломает своё утверждение, и проверки обязаны каждую поймать.
 
-Работает на копии в памяти. Настоящий план не трогает.
+Скрипт повторный: он не ждёт, что исходный документ сломан. Сначала
+проверяет текущее состояние, потом ломает копию, потом убеждается, что
+исходный документ не тронут.
+
+Настоящий документ не меняет: работает на копии во временном файле.
 """
 
-import io
-import shutil
+import os
 import subprocess
 import sys
 import tempfile
-from contextlib import redirect_stdout
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-PROG = HERE.parent.parent
-PLAN = PROG / "документы" / "2026-10-05-план-указатели-знаний.md"
+PLAN = HERE.parent.parent / "документы" / "2026-10-05-план-указатели-знаний.md"
 DOC_NUMBERS = HERE / "doc_numbers.py"
 
-#: Что и куда правим. Первое — имя файла, второе и третье — числа в прозе.
-FIXES = [
-    ("`_подсказки-безопасности.md`", "`_подсказки-безопасность.md`",
-     "имя файла, строка 505"),
-    ("девять строк «записан»", "одиннадцать строк «записан»",
-     "число строк в ожидании задачи 5"),
-    ("у всех девяти указателей", "у всех одиннадцати указателей",
-     "число указателей в задаче 6"),
+#: Что ломаем и что обязано сработать.
+BREAKS = [
+    ("имя файла", "`_подсказки-безопасность.md`", "`_подсказки-безопасности.md`",
+     "проверка 6"),
+    ("число строк", "одиннадцать строк «записан»", "девять строк «записан»",
+     "проверка 5"),
+    ("число указателей", "одиннадцати указателей", "девяти указателей",
+     "проверка 5"),
 ]
 
 
@@ -41,69 +42,96 @@ def run_check(doc: Path) -> tuple[int, str]:
         proc = subprocess.run(
             [sys.executable, str(DOC_NUMBERS), str(doc), str(out)],
             capture_output=True, text=True, encoding="utf-8",
-            env={**__import__("os").environ, "PYTHONIOENCODING": "utf-8"},
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         )
         return proc.returncode, out.read_text(encoding="utf-8")
     finally:
         out.unlink(missing_ok=True)
 
 
+def problems(rep: str) -> list[str]:
+    """Строки раздела «ИТОГ замечаний», то есть сами расхождения.
+
+    Формат отчёта — две начальные пробела, а не дефис: doc_numbers.py
+    печатает замечания как ``  текст``. Сначала тут был дефис, и скрипт
+    молча считал, что поймал ноль расхождений, хотя код возвращал 1.
+    """
+    out: list[str] = []
+    grab = False
+    for ln in rep.splitlines():
+        if ln.startswith("ИТОГ замечаний"):
+            grab = True
+            continue
+        if grab:
+            if ln.startswith("  ") and ln.strip():
+                out.append(ln.strip())
+            elif ln.strip():
+                break
+    return out
+
+
 def main() -> int:
-    original = PLAN.read_text(encoding="utf-8")
-    lines_out: list[str] = ["=== откат проверок 5 и 6 ===", ""]
+    lines: list[str] = ["=== откат проверок 5 и 6 ===", ""]
+    ok = True
 
-    code, rep = run_check(PLAN)
-    lines_out.append("1. исходный план")
-    lines_out.append(f"   код {code} (ожидаем 1 — в плане есть расхождения)")
-    lines_out.append(f"   замечаний: "
-                     f"{[l.strip() for l in rep.splitlines() if l.startswith('  ') and ('указател' in l)][:2]}")
+    code0, rep0 = run_check(PLAN)
+    lines.append("1. текущий документ")
+    lines.append(f"   код {code0} (ожидаем 0 — расхождений нет)")
+    if code0 != 0:
+        ok = False
+        lines.append(f"   расхождения: {problems(rep0)}")
 
-    # --- применяем все три правки к копии
-    fixed = original
-    for old, new, _why in FIXES:
-        if old not in fixed:
-            lines_out.append(f"   ВНИМАНИЕ: не найдено «{old}» — правка не применилась")
-            fixed = None
-            break
-        fixed = fixed.replace(old, new)
-    if fixed is None:
-        OUT.write_text("\n".join(lines_out), encoding="utf-8")
-        print("\n".join(lines_out))
+    text = PLAN.read_text(encoding="utf-8")
+    broken = text
+    missing: list[str] = []
+    for _what, good, bad, _probe in BREAKS:
+        if good not in broken:
+            missing.append(good)
+            continue
+        broken = broken.replace(good, bad)
+    if missing:
+        lines.append("")
+        lines.append(f"НЕЛЬЗЯ ДОКАЗАТЬ: в документе нет строк {missing} — "
+                     "правки документа изменились, скрипт устарел")
+        OUT.write_text("\n".join(lines), encoding="utf-8")
+        print("\n".join(lines))
         return 2
 
     with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False,
                                      encoding="utf-8", newline="") as fh:
         tmp = Path(fh.name)
-        fh.write(fixed)
+        fh.write(broken)
     try:
-        code2, rep2 = run_check(tmp)
-        lines_out.append("")
-        lines_out.append("2. копия плана с тремя правками")
-        for _o, n, why in FIXES:
-            lines_out.append(f"   правка: {why}")
-        lines_out.append(f"   код {code2} (ожидаем 0 — расхождений не осталось)")
-        check5 = [l.strip() for l in rep2.splitlines() if "сходится" in l]
-        check6 = [l.strip() for l in rep2.splitlines() if "все они есть" in l]
-        lines_out.append(f"   проверка 5: {check5 or '—'}")
-        lines_out.append(f"   проверка 6: {check6 or '—'}")
-
-        # --- и возвращаем обратно: то же самое состояние обязано падать снова
-        code3, rep3 = run_check(PLAN)
-        lines_out.append("")
-        lines_out.append("3. возврат к исходному (файл не меняли, но проверяем "
-                         "повторно)")
-        lines_out.append(f"   код {code3} (ожидаем 1 — те же расхождения)")
-        lines_out.append(f"   отчёт совпал с первым: {rep3 == rep}")
-
-        ok = (code == 1 and code2 == 0 and code3 == 1 and rep3 == rep
-              and bool(check5) and bool(check6))
-        lines_out.append("")
-        lines_out.append(f"ИТОГ: {'откат доказан' if ok else 'ОТКАТ НЕ ДОКАЗАН'}")
+        code1, rep1 = run_check(tmp)
+        lines.append("")
+        lines.append("2. копия с внесёнными правками")
+        for what, _g, _b, probe in BREAKS:
+            lines.append(f"   сломано: {what} — ждём {probe}")
+        lines.append(f"   код {code1} (ожидаем 1)")
+        caught = problems(rep1)
+        for c in caught:
+            lines.append(f"   поймано: {c}")
+        if code1 != 1:
+            ok = False
+        if len(caught) < 2:
+            ok = False
+            lines.append("   ВНИМАНИЕ: поймано меньше двух расхождений — "
+                         "одна из проверок молчит")
     finally:
         tmp.unlink(missing_ok=True)
 
-    OUT.write_text("\n".join(lines_out), encoding="utf-8")
-    print("\n".join(lines_out))
+    code2, rep2 = run_check(PLAN)
+    lines.append("")
+    lines.append("3. исходный документ после прогона")
+    lines.append(f"   код {code2} (ожидаем 0)")
+    lines.append(f"   отчёт не изменился: {rep2 == rep0}")
+    if code2 != 0 or rep2 != rep0:
+        ok = False
+
+    lines.append("")
+    lines.append(f"ИТОГ: {'откат доказан' if ok else 'ОТКАТ НЕ ДОКАЗАН'}")
+    OUT.write_text("\n".join(lines), encoding="utf-8")
+    print("\n".join(lines))
     return 0 if ok else 1
 
 
