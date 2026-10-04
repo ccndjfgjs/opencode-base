@@ -1460,32 +1460,73 @@ def main() -> int:
         for item in _prog_dirty:
             echo(f"      утечка в папке программы: {item}")
 
-        # Иероглифы в русском тексте. Проверка сделана после того, как
-        # посторонний символ дважды проскочил в комментарий при правке
-        # текста, и оба раза это заметил человек, а не прогон. Диапазоны:
-        # кандзи, кана, корейские хангыль, полноширинные формы.
+        # Иероглифы в наших собственных файлах. Проверка сделана после того,
+        # как посторонний символ дважды проскочил в комментарий при правке
+        # текста, и оба раза это заметил человек, а не прогон.
+        #
+        # Первая версия проверяла всю папку программы и дала пять ложных
+        # срабатываний: в импортированных материалах по безопасности
+        # иероглифы — предмет разговора (unicode-injection, xss, обход
+        # WAF), а в навыке skill-creator китайский цитатой приведён как
+        # пример запроса пользователя. Плюс чужой `.venv` с idna, где
+        # диапазоны CJK зашиты по существу.
+        #
+        # Поэтому охват узкий и перечислен явно: только то, что мы пишем
+        # сами. Измерено: в наших файлах иероглифов ноль, так что проверка
+        # обязана быть зелёной и обязана ловить именно проскочивший символ.
         _cjk = re.compile(
             "[\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf"
             "\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]"
         )
+        _our_dirs = ("tools/dbapp", "tools/проверки", "tools/agents",
+                     "config", "документы", "skills")
+        _our_files = ("ПРАВИЛА-ИИ.md", "КАРТА-БАЗЫ.md")
         _cjk_dirty: list[str] = []
         _cjk_scanned = 0
-        for _p in sorted(_prog_files):
+        _seen_paths: set[Path] = set()
+        for _sub in _our_dirs:
+            _base = _prog / _sub
+            if not _base.is_dir():
+                continue
+            for _p in _base.rglob("*"):
+                if not _p.is_file() or _p.suffix.lower() not in _text_ext:
+                    continue
+                # Чужое внутри — не наше: node_modules, кэши и записи.
+                # Без этого проверка падала на японских локалях zod в
+                # config/node_modules репозитория.
+                if any(part in _not_ours for part in _p.parts):
+                    continue
+                _seen_paths.add(_p)
+        for _name in _our_files:
+            _p = _prog / _name
+            if _p.is_file():
+                _seen_paths.add(_p)
+        for _p in sorted(_seen_paths):
             try:
                 _rows = _p.read_text(encoding="utf-8",
                                      errors="replace").splitlines()
             except OSError:
                 continue
+            _cjk_scanned += 1
             for _i, _row in enumerate(_rows, 1):
                 if _cjk.search(_row):
-                    _cjk_dirty.append(
-                        f"{_p.relative_to(_prog)}:{_i}")
-                    break
-            _cjk_scanned += 1
+                    _cjk_dirty.append(f"{_p.relative_to(_prog)}:{_i}")
+        # Одно исключение, и оно поимённо: в навыке skill-creator китайская
+        # фраза цитатой приведена как пример запроса пользователя. Это
+        # пример, а не опечатка, и поимённое исключение единственное.
+        #
+        # Файл исключён целиком, а не по строке: номер строки сдвигается,
+        # и исключение перестало бы работать тихо. Саму китайскую фразу
+        # здесь не цитируем — иначе эта же проверка ругается на свой
+        # комментарий, что и случилось при первой попытке.
+        _cjk_allowed = {"skills/skill-creator/SKILL.md"}
+        _cjk_dirty = [d for d in _cjk_dirty
+                      if d.rsplit(":", 1)[0].replace("\\", "/")
+                      not in _cjk_allowed]
         check(not _cjk_dirty,
-              f"в русских файлах нет иероглифов: {_cjk_dirty[:5]}")
+              f"в наших файлах нет иероглифов: {_cjk_dirty[:5] or 'чисто'}")
         # Пустой обход ничего не проверяет и при этом выглядит как успех.
-        check(_cjk_scanned > 100,
+        check(_cjk_scanned > 50,
               f"иероглифы проверяли не в пустом списке файлов: {_cjk_scanned}")
         # Перечень не должен выродиться в ноль: пустой проверяет ничто и
         # при этом выглядит как успех. На пустой машине с одной папкой честно.
