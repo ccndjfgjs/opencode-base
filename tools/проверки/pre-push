@@ -1,0 +1,58 @@
+#!/bin/sh
+# Pre-push: отправка без разрешения человека невозможна механически.
+#
+# Зачем. Отправка уже срывалась дважды: разрешение было дано на один
+# конкретный коммит с условиями, а следующие два ушли без спроса. Слова
+# «буду ждать» не удерживают — удерживает отказ выполнять команду.
+#
+# Как пользоваться. Хук отказывает всегда, пока не сказано иначе:
+#
+#     ALLOW_PUSH=1 git push origin main
+#
+# Если ALLOW_PUSH не равна ровно "1" — отказ, и ничего не отправляется.
+# Значение "0", "true", "да" и пустая строка отказа не дают: только
+# ровно единица.
+#
+# Где лежит. Хуки не хранятся в git, поэтому экземпляр ставится копированием:
+#
+#     cp tools/проверки/pre-push .git/hooks/pre-push
+#     chmod +x .git/hooks/pre-push
+#
+# Windows: Git for Windows выполняет хук через sh, отдельная настройка
+# core.hooksPath не нужна.
+
+set -e
+
+# Аргументы pre-push: <remote> <url> и список refspec через stdin.
+REMOTE_NAME=$(echo "$1" | tr -d "'")
+URL=$(echo "$2" | tr -d "'")
+# Имя ветки узнаём у git, а не считаем равным main: в репозитории может
+# быть другая ветка, и подсказка с чужим именем бесполезна.
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)
+
+if [ "$ALLOW_PUSH" != "1" ]; then
+    echo "ОТКАЗ: отправка запрещена без разрешения человека." >&2
+    echo "" >&2
+    echo "  удалённый: ${REMOTE_NAME}  ${URL}" >&2
+    echo "  что отправляется:" >&2
+    # Диапазон берётся от remote-tracking ветки, а не от $1: в $1 лежит
+    # имя удалённого репозитория, и «$1..HEAD» не является диапазоном
+    # ревизий. Первая версия хука писала пустоту.
+    UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)
+    if [ -n "$UPSTREAM" ]; then
+        git log --oneline "${UPSTREAM}..HEAD" 2>/dev/null | sed 's/^/    /' >&2
+        git diff --stat "${UPSTREAM}..HEAD" 2>/dev/null | sed 's/^/    /' >&2
+    else
+        echo "    (ветка не отслеживает удалённую: отправка создаст её)" >&2
+        git log --oneline -5 2>/dev/null | sed 's/^/    /' >&2
+    fi
+    echo "" >&2
+    echo "  Если решение о проверке авторов и поиске по изменениям принято:" >&2
+    echo "      ALLOW_PUSH=1 git push ${REMOTE_NAME} ${BRANCH}" >&2
+    echo "" >&2
+    echo "  Без этой переменной хук отказывает. Проверить без отправки:" >&2
+    echo "      ALLOW_PUSH=1 git push --dry-run ${REMOTE_NAME}" >&2
+    exit 1
+fi
+
+exit 0
