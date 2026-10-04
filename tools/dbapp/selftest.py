@@ -3031,6 +3031,34 @@ def main() -> int:
             check("emulator-5552" in _sk,
                   "в скилле сказано, что инструментам ADB нужен параметр name")
 
+        # Пути, которые навыки называют, должны существовать.
+        #
+        # Навык obs-studio говорил «мост лежит в tools\thirdparty\obs-mcp»
+        # — а в репозитории такого пути нет. На той машине, где папку
+        # удаляли, она ещё лежала неудалённой, и навык выглядел
+        # правдивым; в чистой копии он врёт. Проверки не было, и такая
+        # неправда живёт месяцами.
+        #
+        # Чего эта проверка НЕ ловит: путь, который есть на диске, но не
+        # под git. Против такого помогает только сверка с чистой
+        # распаковкой — ручная, её не автоматизировать.
+        import re as _re  # noqa: PLC0415 - нужен здесь и только здесь
+        _path_re = _re.compile(r"(?<![\w/\\])tools[/\\]"
+                               r"([A-Za-z0-9_.-]+(?:[/\\][A-Za-z0-9_.-]+)*)")
+        _bogus: list[str] = []
+        for _skill_md in sorted(_root.glob("skills/*/SKILL.md")):
+            _txt = _skill_md.read_text(encoding="utf-8", errors="ignore")
+            for _m in _path_re.finditer(_txt):
+                _rel = _m.group(0)
+                if any(_c in _m.group(1) for _c in "<>*?"):
+                    continue          # многоточие или имя в угловых скобках
+                if not (_root / _rel.replace("\\", "/")).exists():
+                    _line = _txt[:_m.start()].count("\n") + 1
+                    _bogus.append(f"{_skill_md.parent.name}:{_line} → {_rel}")
+        check(not _bogus,
+              f"пути, которые навыки называют, есть на диске: "
+              f"{_bogus[:4] or 'чисто'}")
+
     # Оба эмуляторных моста должны быть в настройках opencode: иначе
     # один из них молча не поднимется, а человек решит, что сломан мост.
     _cfg_path = Path.home() / ".config" / "opencode" / "opencode.jsonc"
