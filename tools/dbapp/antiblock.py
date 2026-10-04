@@ -38,6 +38,19 @@ DNS_FILES = (
     "dns_resolver.py",
 )
 
+#: Запускалки других программ через тот же обход. Движка они не
+#: добавляют и сами по себе ничего не делают: без фасада и Xray файл
+#: бесполезен, поэтому ставятся вместе с `facade`.
+#:
+#: Раньше эти два файла лежали в папке набора, но в список не попадали, и
+#: проверка «повтор не двоит и не мусорит в наборе» честно ругалась: набор
+#: должен совпадать с папкой, а он не совпадал. Файлы рабочие, выбрасывать
+#: их было незачем — их надо было в списке.
+EXTRA_LAUNCHERS = (
+    "start_gemini_proxy.cmd",
+    "start_gemini_proxy.ps1",
+)
+
 #: Списки и обновлялка: стартовый пул, подписки, скрипт обновления
 #: с его помощником, инструкция.
 LISTS_FILES = (
@@ -174,11 +187,16 @@ def install_antiblock(
             errors.append(f"Файл {name} не записался: {exc}.")
             return False
 
-    put_engine, put_lists, put_dns = 0, 0, 0
+    put_engine, put_lists, put_dns, put_extra = 0, 0, 0, 0
     if opts.get("facade"):
         for name in ENGINE_FILES:
             if place(name):
                 put_engine += 1
+        # Запускалки ставятся вместе с фасадом: он им нужен, без него
+        # файл только занимает место.
+        for name in EXTRA_LAUNCHERS:
+            if place(name):
+                put_extra += 1
     if opts.get("lists"):
         for name in LISTS_FILES:
             if place(name):
@@ -187,11 +205,33 @@ def install_antiblock(
         for name in DNS_FILES:
             if place(name):
                 put_dns += 1
-    if put_engine or put_lists or put_dns:
+    if put_engine or put_lists or put_dns or put_extra:
         say(
             f"Файлов обхода поставлено: движок {put_engine}, "
-            f"списки {put_lists}, защищённый DNS {put_dns}."
+            f"списки {put_lists}, защищённый DNS {put_dns}"
+            + (f", запускалки {put_extra}" if put_extra else "")
+            + "."
         )
+
+    # Файлы в папке набора, которых нет ни в одном списке, не ставятся.
+    # Это не ошибка, поэтому в `errors` они не идут, но сказать о них
+    # надо: человек написал файл, а набор его не берёт. Так выяснилось
+    # с запускалкой Gemini — она лежала в папке молча, пока проверка
+    # селфтеста не сказала, что набор и папка не совпадают.
+    if src.is_dir():
+        listed = (set(ENGINE_FILES) | set(LISTS_FILES) | set(DNS_FILES)
+                  | set(EXTRA_LAUNCHERS))
+        unregistered = sorted(
+            item.name for item in src.iterdir()
+            if item.is_file()
+            and not item.name.startswith("public_socks5.local")
+            and item.name not in listed
+        )
+        if unregistered:
+            say(
+                "Не входят в набор и не ставятся (список набора в "
+                "antiblock.py): " + ", ".join(unregistered)
+            )
 
     # --- команда /обход: видна в OpenCode в списке команд
     if opts.get("command"):
@@ -302,6 +342,7 @@ def remove_antiblock(
                 item.name in ours
                 or item.name in ENGINE_FILES
                 or item.name in LISTS_FILES
+                or item.name in EXTRA_LAUNCHERS
             ):
                 victims.append(item)
 

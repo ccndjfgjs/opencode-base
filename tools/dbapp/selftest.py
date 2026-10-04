@@ -1767,6 +1767,34 @@ def main() -> int:
     check((fake / "command" / "antiblock.md").is_file(), "команда /обход у программы")
     check(not list((fake / "antiblock").glob("*.local.*")),
           "личных списков у программы нет")
+
+    # Что установщик обещал поставить — это объединение списков, и
+    # только оно. Сверять установленный набор надо со списком, а не со
+    # всеми файлами папки: папка может содержать что угодно (черновик,
+    # заметка, чужой скрипт), и это не делает установщик плохим. Раньше
+    # здесь стояло сравнение с папкой, и любой посторонний файл ронял
+    # проверку — а проверять тут нечего, установщик его и не собирался
+    # ставить.
+    _manifest = sorted(
+        set(antiblock.ENGINE_FILES) | set(antiblock.LISTS_FILES)
+        | set(antiblock.DNS_FILES) | set(antiblock.EXTRA_LAUNCHERS)
+    )
+    # А эта проверка настоящая: всё, что в списках, должно лежать в папке.
+    # Опечатка в имени или забытый файл ломают установку у человека.
+    _src_dir = core.program_root() / "tools" / "antiblock"
+    _absent = [n for n in _manifest
+               if not (_src_dir / n).is_file()
+               and not n.startswith("public_socks5.local")]
+    check(not _absent,
+          f"всё, что в списках, лежит в папке набора: {_absent or 'чисто'}")
+
+    # Запускалка Gemini: файлы лежали в папке набора, но ни в один список
+    # не попадали, поэтому не ставились. Теперь они часть набора.
+    for _gem in ("start_gemini_proxy.cmd", "start_gemini_proxy.ps1"):
+        check(_gem in antiblock.EXTRA_LAUNCHERS,
+              f"запускалка Gemini в списке набора: {_gem}")
+        check((fake / "antiblock" / _gem).is_file(),
+              f"и ставится вместе с фасадом: {_gem}")
     ab_cfg = (fake / "opencode.jsonc").read_text(encoding="utf-8")
     check(opencode_caps.check_jsonc(ab_cfg), "настройки валидны после обхода")
     check("antiblock" not in ab_cfg, "в opencode.jsonc ничего лишнего не вписано")
@@ -1775,15 +1803,27 @@ def main() -> int:
         base, fake, {"antiblock"}, antiblock_opts=ab_opts
     )
     check(not e_ab2, "повтор обхода без ошибок")
-    check(
-        sorted(p.name for p in (fake / "antiblock").iterdir() if p.is_file())
-        == sorted(
-            p.name
-            for p in (core.program_root() / "tools" / "antiblock").iterdir()
-            if p.is_file() and not p.name.startswith("public_socks5.local")
-        ),
-        "повтор не двоит и не мусорит в наборе",
+    # Повтор не должен ни завести дубль, ни оставить мусор: в папке
+    # набора лежит ровно то, что установщик обещал, и ничего сверх.
+    _in_fake = sorted(p.name for p in (fake / "antiblock").iterdir() if p.is_file())
+    check(_in_fake == _manifest,
+          f"в папке набора ровно список, без дублей и лишнего: {_in_fake}")
+
+    # Чужой файл, положенный в папку набора руками, установщик не
+    # трогает. Это проверка на терпимость: положить черновик в папку —
+    # обычное дело, и раньше из-за этого падал весь прогон.
+    _alien = fake / "antiblock" / "моя-заметка.txt"
+    _alien.write_text("черновик", encoding="utf-8")
+    _m3, e3 = opencode_caps.install_caps(
+        base, fake, {"antiblock"}, antiblock_opts=ab_opts
     )
+    _after = sorted(p.name for p in (fake / "antiblock").iterdir() if p.is_file())
+    check("моя-заметка.txt" in _after,
+          "чужой файл в папке набора не тронут — установщик его не сносит")
+    check(not e3, f"и повтор с посторонним файлом прошёл без ошибок: {e3 or 'чисто'}")
+    check(set(_manifest).issubset(set(_after)),
+          "а свои файлы при этом поставил")
+    _alien.unlink()
     check(opencode_caps.caps_status(fake).get("antiblock") is True,
           "статус видит обход")
     ok_conn, _text_conn = antiblock.check_connection(port=_free_port())
@@ -1791,6 +1831,10 @@ def main() -> int:
     _, e_ab3 = opencode_caps.remove_caps(fake, {"antiblock"})
     check(not e_ab3, f"обход убран без ошибок: {e_ab3 or 'чисто'}")
     check(not (fake / "antiblock" / "http_facade.py").exists(), "фасад убран")
+    check(not (fake / "antiblock" / "start_gemini_proxy.cmd").exists(),
+          "запускалка Gemini убрана вместе с обходом")
+    check((fake / "_previous-version" / "antiblock" / "start_gemini_proxy.cmd")
+          .is_file(), "и сохранилась в _previous-version, а не пропала")
     check(not (fake / "command" / "antiblock.md").exists(), "команда /обход убрана")
     check((fake / "_previous-version" / "antiblock" / "http_facade.py").is_file(),
           "файлы обхода сохранены в _previous-version/antiblock")
