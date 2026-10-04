@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
+import webbrowser
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -2524,6 +2525,26 @@ def open_in_explorer(path: Path) -> None:
         os.startfile(str(path))  # type: ignore[attr-defined]
     except AttributeError:
         subprocess.run(["explorer", str(path)], check=False)
+
+
+def open_url(url: str) -> None:
+    """Открывает ссылку в браузере по умолчанию.
+
+    Отдельная функция, а не `open_in_explorer`: адрес приходит из реестра,
+    и подставлять его в команду проводника было бы подстановкой в
+    командную строку. `startfile` и `webbrowser` не строят команду из
+    строки, а значит ничего из адреса командой не станет.
+    """
+    address = str(url or "").strip()
+    if not address:
+        return
+    try:
+        webbrowser.open(address)
+    except Exception:  # noqa: BLE001 - без браузера просто ничего не делаем
+        try:
+            os.startfile(address)  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001,S110 - молчание здесь уместно
+            pass
 
 
 # ---------------------------------------------------------------- список баз

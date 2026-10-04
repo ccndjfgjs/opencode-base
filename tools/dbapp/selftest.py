@@ -1540,9 +1540,10 @@ def main() -> int:
     btmp = Path(tempfile.mkdtemp(prefix="ncp_bridge_"))
 
     btab = window.bridge_tab
-    # Шесть вкладок: создание, подключение, мост NCP, opencode, темы и
-    # инструкция. Раньше вкладки «Инструкция» не было — счётчик стоял на 5.
-    check(window.tabs.count() == 6, f"вкладок в окне: {window.tabs.count()}")
+    # Семь вкладок: создание, подключение, мост NCP, opencode, программы,
+    # темы и инструкция. Счётчик стоял на 5, потом на 6 — по числу
+    # добавленных вкладок, поэтому написан числом, а не «сколько есть».
+    check(window.tabs.count() == 7, f"вкладок в окне: {window.tabs.count()}")
     check(window.tabs.tabText(0) == "Создать новую базу",
           f"первая вкладка — «{window.tabs.tabText(0)}»")
     check(window.tabs.tabText(1) == "Подключить существующую",
@@ -1551,10 +1552,12 @@ def main() -> int:
           f"третья вкладка — «{window.tabs.tabText(2)}»")
     check(window.tabs.tabText(3) == "opencode",
           f"четвёртая вкладка — «{window.tabs.tabText(3)}»")
-    check(window.tabs.tabText(4) == "Темы",
+    check(window.tabs.tabText(4) == "Программы",
           f"пятая вкладка — «{window.tabs.tabText(4)}»")
-    check(window.tabs.tabText(5) == "Инструкция",
+    check(window.tabs.tabText(5) == "Темы",
           f"шестая вкладка — «{window.tabs.tabText(5)}»")
+    check(window.tabs.tabText(6) == "Инструкция",
+          f"седьмая вкладка — «{window.tabs.tabText(6)}»")
     check(isinstance(btab, app_main.BridgeTab), "вкладка моста собрана")
 
     # Образец лежит внутри базы: значит, уедет на любой компьютер вместе
@@ -4143,6 +4146,140 @@ def main() -> int:
               "и никто из них не обещает подтверждённую подпись")
         check(all(not v.verify.verified for v in _views2),
               "до сверки по файлу ни одна карточка не говорит «проверено»")
+
+    # ---- 8о. Карточки вкладки «Программы»
+    echo("\n--- 8о. Карточки и кнопки вкладки «Программы» ---")
+    try:
+        import program_cards as pcard
+        import winget_install as wmod
+    except ImportError:  # pragma: no cover
+        pcard = None
+        wmod = None
+    check(pcard is not None and wmod is not None,
+          "модули карточек и winget импортируются")
+    if pcard is not None and wmod is not None:
+        _pbase = core.program_root()
+        _cards = pcard.cards(_pbase)
+        check(len(_cards) >= 8, f"карточек не меньше восьми: {len(_cards)}")
+        check(pcard.section_problem(_pbase) == "",
+              f"данные для карточек целы: {pcard.section_problem(_pbase)[:60]}")
+
+        # Состояние выводится из требований, а не заводится списком.
+        _by_name = {c.name: c for c in _cards}
+        _node = _by_name.get("Node.js")
+        check(_node is not None, "Node.js — карточка есть")
+        _node_servers = set(_node.servers) if _node else set()
+        check(_node_servers == {"windows-admin", "excel", "obs"},
+              f"Node.js одной карточкой на троих серверов: {sorted(_node_servers)}")
+        check(sum(1 for c in _cards if c.name == "Node.js") == 1,
+              "и не двумя карточками, как он описан в реестре")
+        check("нужна:" in pcard.needed_by_text(_node, pcard.servers_by_name(_pbase)),
+              "кто именно её требует — написано словами, а не идентификаторами")
+
+        _blender = _by_name.get("Blender")
+        check(_blender is not None and _blender.state == pcard.STATE_MISSING,
+              f"Blender честно «не установлена»: "
+              f"{_blender.state if _blender else 'нет карточки'}")
+        check(_blender is not None and _blender.can_install,
+              "и кнопка установки у неё есть")
+        check(_blender is not None and _blender.needs_admin,
+              "а про права администратора сказано прямо")
+        check(_blender is not None
+              and "winget" in _blender.buttons()[1][1] + _blender.buttons()[1][2],
+              "подсказка кнопки называет, кто ставит")
+
+        # Установленная программа не должна предлагать установку.
+        _obs = _by_name.get("OBS Studio")
+        check(_obs is not None and _obs.state == pcard.STATE_OK,
+              "OBS Studio «установлена» — нашлась живым требованием")
+        check(_obs is not None and not _obs.can_install,
+              "и кнопки установки у неё нет")
+        check(_obs is not None and "мост не настроен" in _obs.status,
+              f"но мост не настроен — это видно отдельно: {_obs.status if _obs else ''}")
+        check(_obs is not None and _obs.exe_path.endswith("obs64.exe"),
+              f"и путь к программе найден: {_obs.exe_path[-24:] if _obs else ''}")
+
+        # Решения человека офиса не перепутаны с «нужна кнопка».
+        _excel = _by_name.get("Microsoft Office 2016 (Excel)")
+        check(_excel is not None and not _excel.can_install,
+              "Excel: кнопки установки нет — решение человека от 03.10.2026")
+        check(_excel is not None and not _excel.install.has_button,
+              "и в движке у него метода нет вовсе")
+        _emu = next((c for c in _cards if c.name.startswith("Android-эмулятор")), None)
+        check(_emu is not None and _emu.state == pcard.STATE_UNKNOWN,
+              "эмулятор: «нечем проверять», а не «не установлена»")
+        check(_emu is not None and len(_emu.alternatives) == 4,
+              f"у эмулятора четыре варианта: {len(_emu.alternatives) if _emu else 0}")
+        check(_emu is not None and not _emu.can_install,
+              "и своей кнопки установки нет — подойдёт любая")
+        _adobe = _by_name.get("Adobe Creative Cloud")
+        check(_adobe is not None and _adobe.can_install,
+              "Adobe: кнопка есть — в реестре записано method: winget")
+        check(_adobe is not None and _adobe.hand_over,
+              "и сказано, что после установки нужен человек")
+
+        # Подпись: обещать сверку, которой не было, нельзя.
+        check(_node is not None and _node.verify.can_check
+              and not _node.verify.checked,
+              "Node.js: сверять есть с чем, но файла нет — сверка не запускалась")
+        check(_adobe is not None and not _adobe.verify.can_check,
+              "у остальных сверять не с чем — и карточка не обещает")
+        check(_adobe is not None and "неизвестно" in _adobe.verify.detail,
+              "а прямо говорит, что имя подписанта неизвестно")
+
+        # Чего нет: кнопки «докачать мост» — это этап 6, обещать её нельзя.
+        _all_codes = {code for c in _cards for code, _, _ in c.buttons()}
+        check(pcard.BTN_INSTALL in _all_codes, "кнопка установки в списке есть")
+        check("bridge" not in _all_codes and "докачать" not in _all_codes,
+              "а кнопки «докачать мост» нет — мост качают на этапе 6")
+
+        # winget: команда собирается списком, значение из реестра не станет
+        # командой. Это проверка безопасности, а не оформления.
+        _cmd = wmod.build_command("X; Remove-Item -Recurse C:\\")
+        check(isinstance(_cmd, list), "команда winget — список аргументов, не строка")
+        check(_cmd[_cmd.index("--id") + 1] == "X; Remove-Item -Recurse C:\\",
+              "идентификатор с точкой с запятой остался одним аргументом")
+        check("--exact" in _cmd, "--exact обязателен: иначе winget ставит не то")
+        check(wmod.build_command("X", machine=True)[-2:] == ["--scope", "machine"],
+              "для машинных прав добавляется --scope machine")
+        check(wmod.build_command("OpenJS.NodeJS.LTS")[0].lower().endswith("winget.exe"),
+              "первым идёт сам winget, а не текст команды")
+        check(wmod.install("").error != "",
+              "с пустым идентификатором — отказ с причиной, а не попытка запуска")
+        _installed, _why = wmod.check_installed("Definitely.Not.A.Real.Package.42")
+        check(_installed is False,
+              f"несуществующий пакет не выдаётся за установленный: {_why}")
+
+    # Вкладка в окне: карточки нарисованы, кнопки совпадают с решением.
+    _ptab = getattr(window, "programs_tab", None)
+    check(_ptab is not None, "вкладка «Программы» создана")
+    if _ptab is not None:
+        _titles = [window.tabs.tabText(i) for i in range(window.tabs.count())]
+        check("Программы" in _titles, f"вкладка «Программы» есть в списке: {_titles}")
+        check(_ptab._base() == core.program_root(),
+              "вкладка читает реестр из папки программы, а не из папки базы")
+        check(len(_ptab._rows) == len(_ptab._cards),
+              f"карточек на экране столько же, сколько в данных: {len(_ptab._rows)}")
+        check(_ptab.notice.text() == "",
+              f"замечаний наверху нет: {_ptab.notice.text()[:60]}")
+        _mismatch = [
+            key for key, _row in _ptab._rows.items()
+            if (btn := _row["buttons"].get(pcard.BTN_INSTALL)) is not None
+            and btn.isEnabled() != bool(_ptab._cards[key].can_install)
+        ]
+        check(not _mismatch, f"доступность кнопки совпадает с решением: {_mismatch}")
+        _has_check = all(
+            pcard.BTN_CHECK in row["buttons"] for row in _ptab._rows.values())
+        check(_has_check, "у каждой карточки есть «Проверить»")
+        # Итог установки не должен пропадать при перерисовке — это была
+        # настоящая ошибка: перерисовка стирала написанное сразу же.
+        _some_key = next(iter(_ptab._rows))
+        _ptab._set_result(_some_key, "проверочный текст")
+        _ptab.reload()
+        check(_ptab._rows[_some_key]["result"].text() == "проверочный текст",
+              "сообщение переживает перерисовку карточек")
+        _ptab._messages.clear()
+        _ptab.reload()
     # ---- итог
     failed = [text for good, text in results if not good]
     echo("\n" + "=" * 62)

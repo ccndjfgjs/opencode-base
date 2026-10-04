@@ -20,8 +20,11 @@ if __package__ in (None, ""):
     import opencode_caps  # type: ignore[import-not-found]
     import android_studio  # type: ignore[import-not-found]
     import bridges  # type: ignore[import-not-found]
+    import program_cards  # type: ignore[import-not-found]
+    import winget_install  # type: ignore[import-not-found]
 else:  # запуск как модуль
-    from . import core, ui, mcp_registry, opencode_caps, android_studio, bridges
+    from . import (core, ui, mcp_registry, opencode_caps, android_studio, bridges,
+                   program_cards, winget_install)
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QFontMetrics
@@ -3273,6 +3276,420 @@ class CapsTab(ScrollPage):
         box.exec()
 
 
+# ------------------------------------------------------------- вкладка «Программы»
+
+
+#: Цвет заголовка состояния по самому состоянию. Три состояния — три цвета,
+#: и четвёртого не бывает: программа либо стоит, либо нет, либо «нечем
+#: проверять». Придумывать оттенок для четвёртого состояния нельзя, его
+#: просто не существует.
+_STATE_COLOR = {
+    program_cards.STATE_OK: ui.OK,
+    program_cards.STATE_MISSING: ui.WARN,
+    program_cards.STATE_UNKNOWN: ui.TEXT_DIM,
+}
+
+
+class ProgramsTab(ScrollPage):
+    """Программы, без которых мосты не работают: карточки, кнопки, состояние.
+
+    Этап 5 раздела 7 плана. Вкладка **ничего не знает сама**: карточки
+    приходят из `program_cards`, который читает реестр, а установку
+    запускает `winget_install`. Здесь только вид и реакция на кнопки.
+
+    У кнопки установки три честных ограничения, все три видны человеку:
+
+    * **прав администратора вкладка не берёт сама.** Реестр помечает
+      Blender и Adobe как `needs_admin`, но окно UAC не должно всплывать
+      неожиданно (раздел 14.5 плана). Если winget упрётся в права, кнопка
+      скажет об этом и даст готовую команду с `--scope machine`;
+    * **сверка подписи не блокирует установку.** Файла установщика у нас
+      нет — winget ставит сам и проверяет подпись и хеш по манифесту. Если
+      бы кнопка требовала нашей сверки, она была бы заблокирована всегда;
+    * **после установки состояние перечитывается по-настоящему**, а не
+      считается успехом по коду возврата. winget местами возвращает 0,
+      не сделав ничего.
+    """
+
+    def __init__(self, parent=None) -> None:
+        self._worker: Worker | None = None
+        self._cards: dict[str, program_cards.Card] = {}
+        self._rows: dict[str, dict] = {}
+        # Что сказать в строке результата после перерисовки. Без этого
+        # итог установки пропал бы: перерисовка идёт сразу после неё и
+        # стирает всё написанное, а человек увидел бы пустую строку
+        # там, где должен узнать, что произошло.
+        self._messages: dict[str, str] = {}
+        inner = QWidget()
+        super().__init__(inner, parent)
+        self._page = inner
+        self._build(inner)
+        self.reload()
+
+    # ---- сборка окна
+
+    def _build(self, page: QWidget) -> None:
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(14, 14, 14, 14)
+        outer.setSpacing(10)
+
+        outer.addWidget(ui.label("Программы", kind="title"))
+        outer.addWidget(
+            ui.label(
+                "Здесь то, без чего мосты работать не будут. Карточки строятся "
+                "из реестра: отдельного списка программ нет, иначе он сразу "
+                "разошёлся бы с тем, что на самом деле стоит.",
+                kind="dim",
+                wrap=True,
+            )
+        )
+
+        # Полоса общих замечаний. Сюда попадает и «данные поехали», и
+        # «winget на машине нет» — обе вещи человек обязан увидеть до
+        # того, как начнёт нажимать кнопки.
+        self.notice = ui.label("", kind="dim", wrap=True)
+        outer.addWidget(self.notice)
+
+        self.btn_reload = QPushButton("Перепроверить всё")
+        self.btn_reload.clicked.connect(self.reload)
+        outer.addWidget(self.btn_reload)
+
+        self.cards_box = QVBoxLayout()
+        self.cards_box.setSpacing(10)
+        outer.addLayout(self.cards_box)
+        outer.addStretch(1)
+
+    def _base(self) -> Path:
+        """Папка программы, а не папка базы.
+
+        Реестр `mcp-registry.json` лежит в корне программы. `app_root()`
+        возвращает базу пользователя (`DataBases/OpenCode_Base`), и вкладка
+        читала бы несуществующий файл: карточки выходили бы именами
+        серверов, без раздела «нужно мостам» и без единой кнопки
+        установки. Отличие молчаливое — вкладка выглядела бы рабочей,
+        показывая пустоту, — поэтому здесь написано прямо.
+        """
+        return core.program_root()
+
+    # ---- наполнение
+
+    def reload(self) -> None:
+        """Перечитать реестр и перерисовать карточки.
+
+        Порядок именно такой: сначала убрать старые карточки, потом
+            нарисовать новые. Иначе при повторной проверке карточки
+        накапливались бы и человек видел бы два одинаковых списка.
+        """
+        while self.cards_box.count():
+            item = self.cards_box.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._rows.clear()
+
+        base = self._base()
+        problems = program_cards.section_problem(base)
+        notes: list[str] = []
+        kinds: list[str] = []
+        if problems:
+            notes.append("Данные о программах поехали: " + problems)
+            kinds.append("error")
+        if not winget_install.available():
+            notes.append(
+                "winget на этой машине нет, поэтому кнопки установки ничего "
+                "не сделают. Он входит в Windows 10 версии 1809 и новее."
+            )
+            kinds.append("warn")
+        text = "   ".join(notes)
+        self.notice.setText(text)
+        if kinds:
+            self.notice.setStyleSheet(
+                f"color: {ui.ERROR if 'error' in kinds else ui.WARN}")
+
+        cards = program_cards.cards(base)
+        self._cards = {card.key: card for card in cards}
+        # Текст исчезнувших предметов не должен копиться: ключ мог
+        # остаться от прежней версии реестра.
+        alive = set(self._cards)
+        for gone in [k for k in self._messages if k not in alive]:
+            del self._messages[gone]
+        names = program_cards.servers_by_name(base)
+        if not cards:
+            self.cards_box.addWidget(
+                ui.label("Ни одной карточки. Реестр прочитан, но предметов "
+                         "в нём нет — скажи об этом разработчику, "
+                         "программа тут ни при чём.",
+                         kind="warn", wrap=True)
+            )
+            return
+        for card in cards:
+            self.cards_box.addWidget(self._build_card(card, names))
+
+    def _build_card(self, card: program_cards.Card, names: dict[str, str]) -> QWidget:
+        """Одна карточка. Виджеты запоминаются: их надо гасить на время
+        установки и заполнять заново по ходу дела."""
+        box = QGroupBox(card.name)
+        layout = QVBoxLayout(box)
+        layout.setSpacing(6)
+
+        head = ui.row()
+        head.layout().addWidget(ui.label(card.name, kind="title"))
+        self.status = ui.label(card.status)
+        self.status.setStyleSheet(f"color: {_STATE_COLOR.get(card.state, ui.TEXT_DIM)}")
+        head.layout().addWidget(self.status)
+        head.layout().addStretch(1)
+        layout.addWidget(head)
+
+        needed = program_cards.needed_by_text(card, names)
+        if needed:
+            layout.addWidget(ui.label(needed, kind="dim", wrap=True))
+
+        layout.addWidget(ui.label(card.state_text, wrap=True))
+
+        pending = card.pending_text()
+        if pending:
+            layout.addWidget(ui.label(pending, kind="dim", wrap=True))
+
+        if card.bridge.bundled:
+            layout.addWidget(ui.label("Мост лежит внутри программы — отдельно "
+                                      "ставить не нужно.", kind="dim", wrap=True))
+
+        if card.alternatives:
+            layout.addWidget(self._build_alternatives(card))
+
+        layout.addWidget(ui.label(self._verify_text(card), kind="dim", wrap=True))
+
+        if card.install.instructions:
+            layout.addWidget(
+                ui.label("Как это ставится: " + card.install.instructions,
+                         kind="dim", wrap=True)
+            )
+
+        buttons = ui.row()
+        row: dict[str, QPushButton] = {}
+        for code, label, hint in card.buttons():
+            btn = QPushButton(label)
+            btn.setToolTip(hint)
+            if code == program_cards.BTN_CHECK:
+                btn.clicked.connect(lambda _=False, k=card.key: self._check_one(k))
+            elif code == program_cards.BTN_INSTALL:
+                btn.clicked.connect(lambda _=False, c=card: self._install_card(c))
+                if not card.can_install:
+                    btn.setEnabled(False)
+            elif code == program_cards.BTN_FOLDER:
+                btn.clicked.connect(lambda _=False, p=card.exe_path: self._open_folder(p))
+            elif code == program_cards.BTN_PAGE:
+                btn.clicked.connect(
+                    lambda _=False, u=card.install.official_url: self._open_page(u))
+            row[code] = btn
+            buttons.layout().addWidget(btn)
+        buttons.layout().addStretch(1)
+        layout.addWidget(buttons)
+
+        # Строка результата: сюда пишется ход установки и итог. Пустая
+        # строка — не «ошибок нет», а «здесь ещё ничего не делали».
+        result = ui.label("")
+        result.setWordWrap(True)
+        result.setStyleSheet(f"color: {ui.TEXT_DIM}")
+        layout.addWidget(result)
+
+        self._rows[card.key] = {
+            "box": box, "status": self.status, "result": result, "buttons": row,
+        }
+        remembered = self._messages.get(card.key)
+        if remembered:
+            result.setText(remembered)
+        return box
+
+    def _build_alternatives(self, card: program_cards.Card) -> QWidget:
+        """Варианты программы — как их записал реестр.
+
+        Своя кнопка установки есть только у варианта с методом winget, и
+        кнопка честно пишет, что поставит, — потому что у BlueStacks и
+        MEmu разный путь, и молчаливый общий список их смешал бы.
+        """
+        wrap = QWidget()
+        layout = QVBoxLayout(wrap)
+        layout.setContentsMargins(0, 4, 0, 0)
+        layout.setSpacing(4)
+        layout.addWidget(ui.label("Варианты:", kind="dim"))
+        for alt in card.alternatives:
+            name = str(alt.get("program") or "?")
+            method = str(alt.get("method") or "")
+            winget_id = str(alt.get("winget_id") or "")
+            note = str(alt.get("note") or "")
+            if method == program_cards.METHOD_WINGET:
+                text = f"{name} — ставится через winget: {winget_id}"
+            elif method == "manual":
+                text = f"{name} — кнопки нет, {note}".rstrip(", ")
+            else:
+                text = f"{name} — в реестре написано: {method or 'ничего'}"
+            layout.addWidget(ui.label(text, kind="dim", wrap=True))
+        return wrap
+
+    @staticmethod
+    def _verify_text(card: program_cards.Card) -> str:
+        """Строка про подпись. Правду говорит только она.
+
+        Подписант есть у одной программы — у Node.js. У остальных молчать
+        нельзя: «проверено» без проверки хуже, чем «проверять не с чем».
+        """
+        verify = card.verify
+        if not verify.can_check:
+            if verify.expected_publisher:
+                return (f"Подпись: сверять не с чем — имя подписанта неизвестно. "
+                        f"Издатель из каталога winget — {verify.expected_publisher} — "
+                        f"это другое поле. Имя появится, когда файл будет скачан.")
+            return ("Подпись: сверять не с чем — имя подписанта неизвестно, "
+                    "а файл установщика ещё не скачивали.")
+        if verify.checked and verify.verified:
+            return f"Подпись сходится: подписал {verify.expected_signer}."
+        if verify.checked:
+            return f"Подпись: {verify.detail}"
+        return (f"Подпись: ждём подписанта {verify.expected_signer}, но файл "
+                f"ещё не скачан — сверка не запускалась.")
+
+    # ---- действия
+
+    def _open_folder(self, exe_path: str) -> None:
+        path = Path(exe_path)
+        folder = path if path.is_dir() else path.parent
+        if not folder.exists():
+            QMessageBox.warning(self, "Папки нет",
+                                f"Папки {folder} на машине нет.")
+            return
+        core.open_in_explorer(folder)
+
+    def _open_page(self, url: str) -> None:
+        core.open_url(url)
+
+    def _check_one(self, key: str) -> None:
+        """Перепроверить одну карточку.
+
+        Карточки перерисовываются целиком: собирать разницу по одному
+        полю — значит держать в виджетах состояние, которое тут же
+        устареет. Одна карточка стоит дешевле, чем рассинхрон.
+        """
+        card = self._cards.get(key)
+        if card is None:
+            return
+        self._set_result(key, "Перепроверяю…")
+        self.reload()
+        self._set_result(key, "Перепроверено")
+
+    def _install_card(self, card: program_cards.Card) -> None:
+        if not card.install.winget_id:
+            self._set_result(card.key, "В реестре нет идентификатора winget — "
+                                       "ставить нечем.")
+            return
+        if self._worker is not None and self._worker.isRunning():
+            self._set_result(card.key, "Уже идёт установка — дождись её.")
+            return
+        if not self._ask_install(card):
+            self._set_result(card.key, "Отказался — ничего не ставлю.")
+            return
+
+        self._set_busy(card.key, True)
+        self._set_result(card.key, "Запускаю winget…")
+        worker = Worker(
+            lambda progress: winget_install.install(card.install.winget_id, progress),
+            self,
+        )
+        worker.line.connect(
+            lambda text, _kind, k=card.key: self._set_result(k, text))
+        worker.finished.connect(lambda k=card.key, w=worker: self._install_done(k, w))
+        self._worker = worker
+        worker.start()
+
+    def _ask_install(self, card: program_cards.Card) -> bool:
+        """Спросить перед установкой. Всегда, а не только при правах.
+
+        Права администратора — не единственное, о чём человек должен
+        знать заранее: после установки Adobe нужен вход в учётную
+        запись, и об этом тоже лучше сказать до, чем после.
+        """
+        lines = [f"Поставить {card.install.program or card.name}?",
+                 f"Идентификатор: {card.install.winget_id}"]
+        if card.needs_admin:
+            lines.append(
+                "Установщик может запросить права администратора — появится "
+                "окно Windows с вопросом. Программа сама эти права не берёт.")
+        if card.hand_over:
+            lines.append("После установки нужно будет войти в учётную запись "
+                         "своими руками.")
+        lines.append("Проверить подпись установщика нечем: файл качает winget "
+                     "сам, своей сверкой мы не владеем.")
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("Установить программу")
+        box.setText("\n\n".join(lines))
+        box.setStandardButtons(QMessageBox.StandardButton.Yes
+                               | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        return box.exec() == QMessageBox.StandardButton.Yes
+
+    def _install_done(self, key: str, worker: Worker) -> None:
+        result = worker.result
+        if not isinstance(result, winget_install.InstallResult):
+            self._set_busy(key, False)
+            self._set_result(key, "Установка не закончилась: "
+                                  f"{result if result else 'неизвестно'}")
+            self.reload()
+            return
+        text = result.describe()
+        card = self._cards.get(key)
+        if result.needs_rights and card is not None and card.install.winget_id:
+            text += ("\n winget упёрся в права. Запусти сам, от администратора:"
+                     "\n " + winget_install.command_text(
+                         card.install.winget_id, machine=True))
+        self._set_busy(key, False)
+        self._set_result(key, text)
+        # Состояние перечитывается по-настоящему: успех кода возврата не
+        # доказывает, что программа появилась.
+        self.reload()
+
+    def _set_busy(self, key: str, busy: bool) -> None:
+        """Гасить кнопки на время работы.
+
+        Пока идёт установка, карточка не должна принимать вторую команду:
+        две установки одного пакета winget запускать нельзя, и человек
+        получит ошибку вместо результата. По той же причине гаснут все
+        кнопки карточки, а не только «Установить» — иначе человек успеет
+        нажать «Проверить» посреди установки и увидит «не установлена».
+        """
+        row = self._rows.get(key)
+        if row is None:
+            return
+        card = self._cards.get(key)
+        for code, btn in row["buttons"].items():
+            if busy:
+                btn.setEnabled(False)
+            elif code == program_cards.BTN_INSTALL:
+                btn.setEnabled(bool(card and card.can_install))
+            else:
+                btn.setEnabled(True)
+
+    def _set_result(self, key: str, text: str) -> None:
+        """Написать в строку результата и запомнить на будущее.
+
+        Запоминание обязательно: карточки перерисовываются целиком, и
+        написанное здесь иначе пропадало бы при первой же перерисовке —
+        то есть сразу после установки.
+        """
+        self._messages[key] = text
+        row = self._rows.get(key)
+        if row is None:
+            return
+        row["result"].setText(text)
+        self.refresh_height()
+
+    # ---- показ своего состояния
+
+    def showEvent(self, event) -> None:  # noqa: D102
+        super().showEvent(event)
+        self.refresh_height()
+
+
 # ---------------------------------------------------------------- вкладка «Инструкция»
 
 
@@ -3563,12 +3980,14 @@ class MainWindow(QMainWindow):
         self.import_tab = ImportTab()
         self.bridge_tab = BridgeTab()
         self.caps_tab = CapsTab()
+        self.programs_tab = ProgramsTab()
         self.themes_tab = ThemesTab()
         self.help_tab = HelpTab()
         tabs.addTab(self.create_tab, "Создать новую базу")
         tabs.addTab(self.import_tab, "Подключить существующую")
         tabs.addTab(self.bridge_tab, "Мост NCP — создать")
         tabs.addTab(self.caps_tab, "opencode")
+        tabs.addTab(self.programs_tab, "Программы")
         tabs.addTab(self.themes_tab, "Темы")
         tabs.addTab(self.help_tab, "Инструкция")
         layout.addWidget(tabs, 1)
