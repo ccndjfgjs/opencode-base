@@ -49,6 +49,10 @@ WORDS = {
     "одиннадцать": 11, "одиннадцати": 11,
 }
 
+#: Те же числа словами — для проверки 7 про области.
+WORD_NUM = {k: v for k, v in WORDS.items() if k in ("девять", "девяти")}
+NUM_WORD = {v: k for k, v in WORD_NUM.items()}
+
 
 def code_blocks(lines: list[str]) -> list[str]:
     """Все блоки ```python ... ``` из документа."""
@@ -136,6 +140,43 @@ PLACEHOLDERS = ("*", "<", ">")
 
 #: Имя, которое переименовываем по решению от 05.10.
 OLD_NAME = "_подсказки-программисту.md"
+
+
+def _said_area_counts(text: str) -> tuple[dict[int, list[str]], list[str]]:
+    """Какие числа областей названы в тексте, и где стоят вилки.
+
+    Возвращает (числа, вилки). Вилка «9–12 областей» — не число, а
+    нерешённое сомнение, поэтому возвращается отдельно и всегда
+    считается расхождением. Первая вертика брала из вилки первое число и
+    сравнивала его с настоящим: 9 совпадало с 9, и расхождение проходило
+    молча, хотя вилка ничем не подтверждена.
+    """
+    # Квалификатор перед числом меняет смысл: «остальные 7 областей» —
+    # это подмножество, а не число областей, и такая строка в спецификации
+    # есть и верна. Первая вертика проверки такие строки считала
+    # утверждением и ругалась: 7 против настоящих 9.
+    QUALIFIERS = ("остальные", "из", "более", "менее", "каждые", "из них")
+    pat = re.compile(
+        r"(\d+)(?:\s*[–-]\s*(\d+))?\s+област"
+        r"|\b(" + "|".join(WORD_NUM) + r")\s+област", re.I)
+    out: dict[int, list[str]] = {}
+    forks: list[str] = []
+    for i, row in enumerate(text.splitlines(), 1):
+        for m in pat.finditer(row):
+            before = row[max(0, m.start() - 40):m.start()].lower()
+            before = before.replace("«", " ").replace("»", " ")
+            if any(q in before.split() or before.rstrip().endswith(q)
+                   for q in QUALIFIERS):
+                continue
+            if m.group(3):
+                num = WORD_NUM[m.group(3).lower()]
+            elif m.group(2):
+                forks.append(f"строка {i}: вилка {m.group(1)}–{m.group(2)}")
+                continue
+            else:
+                num = int(m.group(1))
+            out.setdefault(num, []).append(f"строка {i}")
+    return out, forks
 
 
 def wrong_names(lines: list[str], valid: set[str]) -> list[tuple[str, int, str]]:
@@ -342,6 +383,44 @@ def main() -> int:
                             f"{sorted({t for t, _n, _w in typos})}")
         else:
             out_lines.append("  и все они есть в списке функции")
+
+    # --- 7. числа областей в документе против настоящего KNOWLEDGE_AREAS.
+    # В спецификации стояло «9–12 областей» — вилка вместо числа, и её
+    # никто не сверял: проверки 5 и 6 на проектном документе объявляют
+    # «не проверено», потому что функции там нет.
+    out_lines.append("")
+    out_lines.append("=== области знаний (проверка 7) ===")
+    try:
+        # Путь добавляется явно: без него `import core` работал только при
+        # запуске из корня папки программы, и проверка молча объявляла
+        # «не проверено» при любом другом вызове. Откат это вскрыл —
+        # на копии документа во временном файле она молчала.
+        sys.path.insert(0, str(PROG / "tools" / "dbapp"))
+        import core  # noqa: PLC0415
+        real = len(core.KNOWLEDGE_AREAS)
+    except Exception as exc:                      # noqa: BLE001
+        real = None
+        out_lines.append(f"  НЕ ПРОВЕРЕНО: core.py не импортировался ({exc})")
+    said_areas, forks = _said_area_counts(text)
+    if real is None:
+        out_lines.append("  НЕ ПРОВЕРЕНО: не удалось узнать число областей")
+    elif not said_areas and not forks:
+        out_lines.append("  в документе нет утверждений о числе областей — "
+                         "нечего сверять")
+    else:
+        out_lines.append(f"  в core.py областей: {real}")
+        for num, where in sorted(said_areas.items()):
+            out_lines.append(f"  в тексте сказано {num}: {where}")
+        for f in forks:
+            out_lines.append(f"  вилка вместо числа — {f}")
+        wrong_areas = {n: v for n, v in said_areas.items() if n != real}
+        if wrong_areas:
+            problems.append(f"число областей в тексте {sorted(wrong_areas)}, "
+                            f"а в core.py {real}")
+        if forks:
+            problems.append(f"вилка вместо числа областей: {forks}")
+        if not wrong_areas and not forks:
+            out_lines.append(f"  и это сходится: {real}")
 
     out_lines.append("")
     out_lines.append(f"ИТОГ замечаний: {len(problems)}")

@@ -23,13 +23,25 @@ PLAN = HERE.parent.parent / "документы" / "2026-10-05-план-указ
 DOC_NUMBERS = HERE / "doc_numbers.py"
 
 #: Что ломаем и что обязано сработать.
+DOCS = HERE.parent.parent / "документы"
+PLAN = DOCS / "2026-10-05-план-указатели-знаний.md"
+SPEC = DOCS / "2026-10-04-указатели-знаний-дизайн.md"
+
+#: (документ, что ломаем, на что, номер проверки). Поломка ищется только в
+#: своём документе: строка «уровень 1: 9 областей» есть в плане, а строка
+#: «| 1 | 9 областей:» — в спецификации, и искать одно вместо другого
+#: бессмысленно.
 BREAKS = [
-    ("имя файла", "`_подсказки-безопасность.md`", "`_подсказки-безопасности.md`",
-     "проверка 6"),
-    ("число строк", "одиннадцать строк «записан»", "девять строк «записан»",
-     "проверка 5"),
-    ("число указателей", "одиннадцати указателей", "девяти указателей",
-     "проверка 5"),
+    (PLAN, "имя файла", "`_подсказки-безопасность.md`",
+     "`_подсказки-безопасности.md`", "имена указателей не из списка"),
+    (PLAN, "число строк", "одиннадцать строк «записан»",
+     "девять строк «записан»", "число указателей в прозе"),
+    (PLAN, "число указателей", "одиннадцати указателей",
+     "девяти указателей", "число указателей в прозе"),
+    (PLAN, "вилка в числе областей", "уровень 1: 9 областей",
+     "уровень 1: 9–12 областей", "вилка вместо числа областей"),
+    (SPEC, "вилка в числе областей", "9 областей: «тема → область»",
+     "9–12 областей: «тема → область»", "вилка вместо числа областей"),
 ]
 
 
@@ -71,62 +83,68 @@ def problems(rep: str) -> list[str]:
 
 
 def main() -> int:
-    lines: list[str] = ["=== откат проверок 5 и 6 ===", ""]
+    lines: list[str] = ["=== откат проверок 5, 6 и 7 ===", ""]
     ok = True
 
-    code0, rep0 = run_check(PLAN)
-    lines.append("1. текущий документ")
-    lines.append(f"   код {code0} (ожидаем 0 — расхождений нет)")
-    if code0 != 0:
-        ok = False
-        lines.append(f"   расхождения: {problems(rep0)}")
+    # --- 1. текущее состояние обоих документов
+    for doc in (PLAN, SPEC):
+        code, rep = run_check(doc)
+        lines.append(f"1. {doc.name}")
+        lines.append(f"   код {code} (ожидаем 0 — расхождений нет)")
+        if code != 0:
+            ok = False
+            lines.append(f"   расхождения: {problems(rep)}")
 
-    text = PLAN.read_text(encoding="utf-8")
-    broken = text
-    missing: list[str] = []
-    for _what, good, bad, _probe in BREAKS:
-        if good not in broken:
-            missing.append(good)
+    # --- 2. каждая поломка обязана ломать свой документ
+    for target in (PLAN, SPEC):
+        lines.append("")
+        lines.append(f"2. поломки в {target.name}")
+        mine = [b for b in BREAKS if b[0] == target]
+        text = target.read_text(encoding="utf-8")
+        broken = text
+        missing: list[str] = []
+        for _d, _what, good, bad, _probe in mine:
+            if good not in broken:
+                missing.append(good)
+                continue
+            broken = broken.replace(good, bad)
+        if missing:
+            lines.append(f"   НЕЛЬЗЯ ДОКАЗАТЬ: нет строк {missing} — "
+                         "правки изменились, скрипт устарел")
+            ok = False
             continue
-        broken = broken.replace(good, bad)
-    if missing:
-        lines.append("")
-        lines.append(f"НЕЛЬЗЯ ДОКАЗАТЬ: в документе нет строк {missing} — "
-                     "правки документа изменились, скрипт устарел")
-        OUT.write_text("\n".join(lines), encoding="utf-8")
-        print("\n".join(lines))
-        return 2
+        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False,
+                                         encoding="utf-8", newline="") as fh:
+            tmp = Path(fh.name)
+            fh.write(broken)
+        try:
+            code1, rep1 = run_check(tmp)
+            caught = problems(rep1)
+            lines.append(f"   код {code1} (ожидаем 1)")
+            for c in caught:
+                lines.append(f"   поймано: {c}")
+            if code1 != 1:
+                ok = False
+            # Сверка поимённая, а не по числу: две поломки про числа
+            # указателей законно дают одно сообщение, и требование
+            # «столько-то расхождений» искажало бы результат.
+            for _d, what, _g, _b, expect in mine:
+                hit = any(expect in c for c in caught)
+                mark = "поймана" if hit else "ПРОПУЩЕНА"
+                if not hit:
+                    ok = False
+                lines.append(f"   {what}: ждали «{expect}» — {mark}")
+        finally:
+            tmp.unlink(missing_ok=True)
 
-    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False,
-                                     encoding="utf-8", newline="") as fh:
-        tmp = Path(fh.name)
-        fh.write(broken)
-    try:
-        code1, rep1 = run_check(tmp)
-        lines.append("")
-        lines.append("2. копия с внесёнными правками")
-        for what, _g, _b, probe in BREAKS:
-            lines.append(f"   сломано: {what} — ждём {probe}")
-        lines.append(f"   код {code1} (ожидаем 1)")
-        caught = problems(rep1)
-        for c in caught:
-            lines.append(f"   поймано: {c}")
-        if code1 != 1:
-            ok = False
-        if len(caught) < 2:
-            ok = False
-            lines.append("   ВНИМАНИЕ: поймано меньше двух расхождений — "
-                         "одна из проверок молчит")
-    finally:
-        tmp.unlink(missing_ok=True)
-
-    code2, rep2 = run_check(PLAN)
+    # --- 3. исходные документы не тронуты
     lines.append("")
-    lines.append("3. исходный документ после прогона")
-    lines.append(f"   код {code2} (ожидаем 0)")
-    lines.append(f"   отчёт не изменился: {rep2 == rep0}")
-    if code2 != 0 or rep2 != rep0:
-        ok = False
+    lines.append("3. исходные документы после прогона")
+    for doc in (PLAN, SPEC):
+        code, _ = run_check(doc)
+        lines.append(f"   {doc.name}: код {code} (ожидаем 0)")
+        if code != 0:
+            ok = False
 
     lines.append("")
     lines.append(f"ИТОГ: {'откат доказан' if ok else 'ОТКАТ НЕ ДОКАЗАН'}")

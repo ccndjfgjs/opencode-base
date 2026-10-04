@@ -17,6 +17,19 @@ OUT = Path(sys.argv[1])
 NEEDLE = "программисту"
 SKIP = ("node_modules", "\\.git\\", "\\__pycache__\\")
 
+#: Контрольный образец. Поиск, который ничего не находит, и поиск, который
+#: сломан, выглядят одинаково — оба дают ноль. Условие удаления старого
+#: указателя построено на «ноль совпадений», поэтому сломанный поиск
+#: выглядел бы как выполненное условие, и файл удалили бы при живых
+#: ссылках. Поэтому рядом с числом совпадений всегда идёт проверка: файл,
+#: который заведомо содержит искомое, обязан быть найден.
+#:
+#: Образец — сам план: переименование от 05.10 описано там словами про
+#: старое имя, и пока это так, образец жив. Если исчезнет, это не поломка
+#: поиска, а смена документа, и скрипт обязан сказать об этом голосом.
+CONTROL_FILE = "документы/2026-10-05-план-указатели-знаний.md"
+CONTROL_MIN = 1
+
 #: Где ссылка должна быть починена, а где упоминание — часть истории и
 #: переписывать её нельзя.
 WORK = {
@@ -118,5 +131,34 @@ for path in sorted(PROG.rglob("*.md")):
         if row.count(NEEDLE) > 1:
             lines.append(f"  {rel}:{i} — {row.count(NEEDLE)} раз")
 
+control_hits = 0
+control_seen = False
+for _kind, _rel, _cnt, _nums in per_file:
+    if _rel == CONTROL_FILE:
+        control_seen = True
+        control_hits = _cnt
+        break
+
+lines.append("")
+lines.append("=== контрольный образец поиска ===")
+lines.append(f"  образец: {CONTROL_FILE}")
+if not control_seen:
+    lines.append("  ПОИСК СЛОМАН: файл-образец не попал в перебор — "
+                 "искомое в нём есть по построению")
+    lines.append("  Числа выше нельзя читать как «ноль совпадений»: "
+                 "перебор не дошёл до образца.")
+    OUT.write_text("\n".join(lines), encoding="utf-8")
+    print("ПОИСК СЛОМАН: контрольный образец не найден")
+    raise SystemExit(3)
+if control_hits < CONTROL_MIN:
+    lines.append(f"  ПОИСК СЛОМАН или документ изменился: в образце "
+                 f"{control_hits} вхождений, ждали не меньше {CONTROL_MIN}")
+    OUT.write_text("\n".join(lines), encoding="utf-8")
+    print(f"ПОИСК СЛОМАН: в образце {control_hits} вхождений")
+    raise SystemExit(3)
+lines.append(f"  найдено вхождений: {control_hits} — образец найден, "
+             "поиск работает")
+
 OUT.write_text("\n".join(lines), encoding="utf-8")
 print(f"ok: всего {total}, рабочих {work}, истории {history}")
+print(f"контрольный образец: {control_hits} вхождений, поиск рабочий")

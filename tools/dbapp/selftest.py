@@ -1455,6 +1455,22 @@ def main() -> int:
             str(p.relative_to(_prog)) for p in _prog_files
             if user and user in p.read_text(encoding="utf-8", errors="replace")
         )
+        # Проверка без выявленного имени пользователя ищет пустую строку и
+        # находит её в каждом файле — либо, при `user and ...`, молча
+        # проходит. Оба случая выглядят как успех. Поэтому имя обязано
+        # быть непустым, а поиск обязан найти заведомо известную строку.
+        check(bool(user),
+              f"имя пользователя определено, иначе проверка утечки пуста: "
+              f"{user!r}")
+        # Контрольный образец того же поиска: эта строка заведомо есть в
+        # core.py, и если поиск её не находит, он сломан и доверять его
+        # нулю нельзя.
+        _control_found = any(
+            "KNOWLEDGE_AREAS" in p.read_text(encoding="utf-8", errors="replace")
+            for p in _prog_files)
+        check(_control_found,
+              f"поиск утечки рабочий: контрольный образец найден "
+              f"в {len(_prog_files)} файлах")
         check(not _prog_dirty,
               f"в папке программы имени пользователя нет: проверено {len(_prog_files)}")
         for item in _prog_dirty:
