@@ -1641,6 +1641,18 @@ def _copy_ref_files(source: Path, target: Path) -> list[str]:
     src_bez = source / "знания/Техника/Безопасность"
     if src_bez.is_dir():
         ref_files += sorted(src_bez.rglob("*.md"))
+    # Остальные области знаний тоже едут. Раньше копировались ровно два
+    # слоя — Программисту-знать и вся Безопасность, — и новая база
+    # получала 1047 файлов из девяти областей. Семь оставались позади
+    # навсегда, а указатель для них создавать было нечего: он без
+    # содержимого бесполезен.
+    src_zn = source / "знания"
+    if src_zn.is_dir():
+        for area in sorted(p for p in src_zn.iterdir() if p.is_dir()):
+            if area.name == "Техника":
+                continue
+            ref_files += [f for f in sorted(area.rglob("*.md"))
+                          if "Безопасность" not in f.parts]
     for src in ref_files:
         try:
             rel = src.relative_to(source)
@@ -1657,6 +1669,11 @@ def _copy_ref_files(source: Path, target: Path) -> list[str]:
         copied.append("знания/Учёба/Программисту-знать.md")
     if any((target / "знания/Техника/Безопасность").rglob("*.md")):
         copied.append("знания/Техника/Безопасность (текст)")
+    extra = sorted(p.name for p in (target / "знания").iterdir()
+                   if p.is_dir() and p.name not in {"Техника", "Учёба"}) \
+        if (target / "знания").is_dir() else []
+    if extra:
+        copied.append("знания: " + ", ".join(extra))
     return copied
 
 
