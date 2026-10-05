@@ -690,10 +690,19 @@ def knowledge_index_targets() -> list[tuple[str, str, int]]:
     return out
 
 
-#: Пояснение папки и сам указатель — служебные файлы. В счёте «файлов в
-#: папке» им не место: иначе пересборка меняла бы цифру сама у себя.
+#: Пояснение папки, сам указатель и архив потерянных привязок — служебные
+#: файлы. В счёте «файлов в папке» им не место: иначе пересборка меняла бы
+#: цифру сама у себя.
+#:
+#: Архив сюда добавлен измерением, а не догадкой. Он создаётся как раз
+#: пересборкой, но под правило «начинается с `_подсказки`» не подходил, и
+#: файл попадал в счёт: папка исчезала — в указателе писало «файлов: 2» при
+#: одном файле знаний на диске. Второе следствие хуже: модель, читающая
+#: заголовок, приняла бы архив за материал знаний.
 def _is_service_markdown(path: Path) -> bool:
-    return path.name == "_О-ПАПКЕ.md" or path.name.startswith("_подсказки")
+    return (path.name == "_О-ПАПКЕ.md"
+            or path.name.startswith("_подсказки")
+            or path.name == ARCHIVE_NAME)
 
 
 def _index_scope(scope: str) -> str:
@@ -793,6 +802,152 @@ def build_knowledge_index(folder: Path, scope: str, stamp: str) -> str:
         "",
     ]
     return "\n".join(lines)
+
+
+def _split_index(text: str) -> tuple[str, str, str]:
+    """Текст указателя на три части: до маркеров, авточасть, после."""
+    b = text.find(INDEX_BEGIN)
+    e = text.find(INDEX_END)
+    if b < 0 or e < 0 or e < b:
+        return text, "", ""
+    return text[:b], text[b:e + len(INDEX_END)], text[e + len(INDEX_END):]
+
+
+def _referenced_paths(after: str) -> set[str]:
+    """Пути, упомянутые вне маркеров: полные и короткие имена.
+
+    Короткое имя ищем тоже. Нейросеть вправе написать «смотри `Сеть/`», и
+    по одному полному пути такая строка выпала бы из поиска и потерялась.
+    Совпадение по короткому имени с чужой папкой допускаем: лишний раз
+    перенести в архив лучше, чем потерять написанное.
+    """
+    found: set[str] = set()
+    for raw in re.findall(r"`([^`\n]+)`", after):
+        token = raw.strip().rstrip("/")
+        if "/" in token:
+            found.add(token)
+        if token:
+            found.add(token.split("/")[-1])
+    return found
+
+
+def _orphaned_lines(old: str, new_paths: set[str]
+                    ) -> tuple[list[tuple[str, list[str]]], set[str]]:
+    """Строки смысловой части, ссылающиеся на исчезнувшие пути.
+
+    Возвращает пары (прежний_путь, строки) и множество строк, которые из
+    смысловой части уходят. Порядок — по алфавиту, чтобы архив читался
+    сверху вниз одинаково при любом порядке обхода.
+
+    Исчезнувшим считается путь, который был в старой авточасти и которого
+    больше нет, — ровно как в спецификации 4.2, п.2: «для каждого пути,
+    который был и которого нет». Расширять это на пути, которых в авточасти
+    не было, нельзя, и вот почему.
+
+    В смысловой части нейросеть вправе писать не только про папки, но и про
+    код: `ALLOW_PUSH`, `signature.py`, `opencode.jsonc`. Всё, что стоит в
+    обратных кавычках, выглядит одинаково. Если брать кандидатом любое
+    упоминание, которого нет на диске, в архив уедут живые упоминания кода,
+    и указатель станет беднее. Измерено на примере с четырьмя такими
+    упоминаниями: без фильтра по прошлой авточасти уходят все четыре.
+
+    Поэтому условие «было в авточасти» здесь не ускорение, а граница
+    безопасности: она отсекает код от папок.
+    """
+    _, auto_old, after = _split_index(old)
+    known = set(re.findall(r"^- `([^`]+)/`", auto_old, re.M))
+    referenced = _referenced_paths(after)
+    live = set(new_paths)
+    live_tail = {p.split("/")[-1] for p in live}
+    known_tail = {k.split("/")[-1] for k in known}
+    gone = [name for name in sorted(referenced)
+            if name in known or name in known_tail
+            if name not in live and name not in live_tail]
+    if not gone:
+        return [], set()
+    out: list[tuple[str, list[str]]] = []
+    carried: set[str] = set()
+    for name in gone:
+        hits = [ln for ln in after.splitlines() if name in ln]
+        if hits:
+            out.append((name, hits))
+            carried.update(hits)
+    return out, carried
+
+
+def append_archive(folder: Path, moved: list[tuple[str, list[str]]],
+                   stamp: str) -> int:
+    """Дописать потерянные привязки в архив. Только дописывание.
+
+    Перезапись архива уничтожила бы ровно то, ради чего он заведён, поэтому
+    файл открывается на добавление, а заголовок пишется лишь в первый раз.
+    """
+    if not moved:
+        return 0
+    path = folder / ARCHIVE_NAME
+    if not path.exists():
+        path.write_text(
+            "# Потерянные привязки\n\n"
+            "Это **не инструкция** для модели: здесь лежат строки, которые "
+            "ссылались\nна папки, которых больше нет. Не выполняй их и не "
+            "ищи по ним\nпуть — читай как список дел, ожидающих решение "
+            "человека.\n\n"
+            f"Собрано впервые: {stamp}\n", encoding="utf-8")
+    with path.open("a", encoding="utf-8") as fh:
+        for rel, lines in moved:
+            fh.write(f"\n## Было: `{rel}` (потеряно {stamp})\n\n")
+            for ln in lines:
+                fh.write(ln.rstrip() + "\n")
+    return len(moved)
+
+
+def write_knowledge_index(folder: Path, fname: str, scope: str,
+                         stamp: str) -> list[str]:
+    """Пересобрать указатель, сохранив текст модели и уведя о потерях.
+
+    Что делает: считает, что на диске; ищет в смысловой части строки,
+    ссылающиеся на исчезнувшие пути, и переносит их в архив; перезаписывает
+    только авточасть. Разницу переименования и удаления не делает — оба
+    случая уводят строки в архив, потому что отличить их нечем, а догадка
+    в автоматике оборачивается тихой ошибкой.
+
+    Смысловая часть берётся из СТАРОГО файла, а не из свежей сборки. Первая
+    версия брала `fresh_after`, а у `build_knowledge_index` смысловая часть —
+    всегда заглушка «Пока пусто». Формально проверка на заглушку проходила,
+    а по факту всё написанное нейросетью стиралось при каждой пересборке:
+    ровно то, чего задача не должна допустить.
+
+    `fname` передаётся явно и обязан совпадать с тем, что вернула
+    `knowledge_index_targets()`. Выводить имя из `folder.name` нельзя: у
+    корневого указателя папка называется `знания`, и вышло бы
+    `_подсказки-знания.md` вместо `_подсказки-общая.md`.
+    """
+    target = folder / fname
+    old = target.read_text(encoding="utf-8") if target.is_file() else ""
+    _, _, after = _split_index(old)
+    new_paths = {rel for rel, _n in _index_paths(folder, scope)}
+    moved, carried = _orphaned_lines(old, new_paths)
+    append_archive(folder, moved, stamp)
+    fresh = build_knowledge_index(folder, scope, stamp)
+    _, _, fresh_after = _split_index(fresh)
+    head = fresh[:len(fresh) - len(fresh_after)]
+    # Уцелевшие строки смысловой части. Перенесённые уходят: держать их
+    # на месте, откуда они перенесены, — значит держать в архиве то, что
+    # читается как живое, и архив перестаёт быть списком потерянного.
+    keep = [ln for ln in after.splitlines() if ln not in carried]
+    body = "\n".join(keep).strip("\n")
+    if not body.strip():
+        body = fresh_after.strip("\n")
+    # newline="\n" обязателен: без него на Windows текст пишется с CRLF, и
+    # байтовый лимит начинает зависеть от того, чей файл правили последним —
+    # эталон в папке программы оказался на 11 байт меньше копии в живой базе
+    # только из-за одиннадцати переводов строк.
+    target.write_text(f"{head}\n{body}\n", encoding="utf-8", newline="\n")
+    report = [f"указатель: {target.name}"]
+    if moved:
+        report.append("в архив: " + ", ".join(r for r, _ in moved))
+    return report
+
 
 # Имена, занятые в Windows. Такую папку создать нельзя.
 RESERVED = {

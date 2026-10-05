@@ -32,6 +32,28 @@
 # Хуки не хранятся в git. Установка:
 #     cp tools/проверки/pre-push .git/hooks/pre-push
 #     chmod +x .git/hooks/pre-push
+#
+# ЗАЩИТА ОТ SIGPIPE. Об этом — по измерению, а не по догадке.
+#
+# 16.10.2026 в 02:55 отправка ушла мимо работающего хука. Хук печатает 18
+# строк, а команда была `git push origin main 2>&1 | head -10`: канал
+# закрывается после десятой, следующий `echo` получает SIGPIPE, и под
+# `/bin/sh` хук умирает ДО своего `exit 1`. Git for Windows умерший хук
+# считает успешным, и коммит уходит.
+#
+# Проверено в пробном репозитории с пробным удалённым: тот же хук, тот же
+# пуш, но без `head` — код 1 и 0 коммитов в удалённом.
+#
+# Отсюда три меры, все обязательные:
+#   * `trap '' PIPE` — SIGPIPE игнорируется, печать не убивает хук;
+#   * `|| true` у каждого `echo` — страховка, если trap не сработал;
+#   * отказ уходит в stderr — на stderr пайпы вешают реже, чем на stdout,
+#     и в сообщении о случившемся полезно видеть его целиком.
+#
+# Печатать отказ нужно: молчаливый отказ выглядит как зависание.
+
+# Без этой строки хук умирает на первом же закрытом канале.
+trap '' PIPE
 
 set -e
 
@@ -44,28 +66,28 @@ HEAD_SHA=$(git rev-parse HEAD 2>/dev/null || echo '')
 UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)
 
 refuse() {
-    echo "ОТКАЗ: $1" >&2
-    echo "" >&2
-    echo "  удалённый:  ${REMOTE_NAME}  ${URL}" >&2
-    echo "  ветка:      ${BRANCH}" >&2
-    echo "  коммит:     ${HEAD_SHA}" >&2
-    echo "  что уходит:" >&2
+    echo "ОТКАЗ: $1" >&2 || true
+    echo "" >&2 || true
+    echo "  удалённый:  ${REMOTE_NAME}  ${URL}" >&2 || true
+    echo "  ветка:      ${BRANCH}" >&2 || true
+    echo "  коммит:     ${HEAD_SHA}" >&2 || true
+    echo "  что уходит:" >&2 || true
     if [ -n "$UPSTREAM" ]; then
         git log --oneline "${UPSTREAM}..HEAD" 2>/dev/null | sed 's/^/    /' >&2
         git diff --stat "${UPSTREAM}..HEAD" 2>/dev/null | sed 's/^/    /' >&2
     else
-        echo "    (ветка не отслеживает удалённую: отправка создаст её)" >&2
+        echo "    (ветка не отслеживает удалённую: отправка создаст её)" >&2 || true
         git log --oneline -5 2>/dev/null | sed 's/^/    /' >&2
     fi
-    echo "" >&2
-    echo "  Если решение о проверке авторов и поиска по изменениям принято:" >&2
-    echo "      git rev-parse HEAD > '${GIT_DIR_PATH}/разрешение-отправки'" >&2
-    echo "      git push ${REMOTE_NAME} ${BRANCH}" >&2
-    echo "" >&2
-    echo "  Проверить без отправки:" >&2
-    echo "      git rev-parse HEAD > '${GIT_DIR_PATH}/разрешение-отправки'" >&2
-    echo "      git push --dry-run ${REMOTE_NAME} ${BRANCH}" >&2
-    echo "      (--dry-run не отправляет, но разрешение расходует)" >&2
+    echo "" >&2 || true
+    echo "  Если решение о проверке авторов и поиска по изменениям принято:" >&2 || true
+    echo "      git rev-parse HEAD > '${GIT_DIR_PATH}/разрешение-отправки'" >&2 || true
+    echo "      git push ${REMOTE_NAME} ${BRANCH}" >&2 || true
+    echo "" >&2 || true
+    echo "  Проверить без отправки:" >&2 || true
+    echo "      git rev-parse HEAD > '${GIT_DIR_PATH}/разрешение-отправки'" >&2 || true
+    echo "      git push --dry-run ${REMOTE_NAME} ${BRANCH}" >&2 || true
+    echo "      (--dry-run не отправляет, но разрешение расходует)" >&2 || true
     exit 1
 }
 

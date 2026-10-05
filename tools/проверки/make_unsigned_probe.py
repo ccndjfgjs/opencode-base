@@ -12,7 +12,12 @@
 import sys
 from pathlib import Path
 
-PROG = Path(r"C:\Users\Dedy_Sher\Downloads\opencode-base-main")
+# Путь относительный от расположения скрипта. Абсолютный путь с именем
+# учётки стоял здесь раньше: скрипт работал только на той машине и в той
+# папке, где его написали, а падал бы на любой другой. Здесь это важно ещё
+# и потому, что подставляемый путь попадает в текст копии селфтеста.
+HERE = Path(__file__).resolve().parent
+PROG = HERE.parent.parent
 SRC = PROG / "tools" / "dbapp" / "selftest.py"
 OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("selftest-nezakon.py")
 
