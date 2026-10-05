@@ -689,6 +689,111 @@ def knowledge_index_targets() -> list[tuple[str, str, int]]:
                             INDEX_LIMIT_BRANCH))
     return out
 
+
+#: Пояснение папки и сам указатель — служебные файлы. В счёте «файлов в
+#: папке» им не место: иначе пересборка меняла бы цифру сама у себя.
+def _is_service_markdown(path: Path) -> bool:
+    return path.name == "_О-ПАПКЕ.md" or path.name.startswith("_подсказки")
+
+
+def _index_scope(scope: str) -> str:
+    """Нормализует область обхода.
+
+    Неизвестное значение трактуется как «прямые подпапки»: это самый
+    узкий и предсказуемый режим, а ошибочный широкий обход молча утопил
+    бы указатель в лимит байтов.
+    """
+    return "tree" if scope == "tree" else "children"
+
+
+def _index_paths(folder: Path, scope: str) -> list[tuple[str, int]]:
+    """Папки указателя и число содержащихся в них файлов.
+
+    `scope` различает уровни: `areas` и `children` — прямые подпапки
+    (корневой указатель и указатель области), `tree` — всё поддерево,
+    как у ветки с импортом на 171 папку. Разница нужна, иначе проверка
+    «набор путей равен тому, что на диске» падала бы сама по себе.
+
+    Порядок — по путям, а не по порядку обхода файловой системы: иначе
+    две сборки подряд отличались бы построчно и пересборка без изменений
+    выглядела бы как правка.
+
+    Путь относителен к папке самого указателя: полный путь получается
+    сложением, и именно так его читает модель.
+    """
+    if _index_scope(scope) == "tree":
+        folders = [p for p in folder.rglob("*") if p.is_dir()]
+    else:
+        folders = [p for p in folder.iterdir() if p.is_dir()]
+    folders.sort(key=lambda p: p.relative_to(folder).as_posix())
+    out: list[tuple[str, int]] = []
+    for sub in folders:
+        rel = sub.relative_to(folder).as_posix()
+        n = sum(1 for p in sub.rglob("*.md")
+                if not _is_service_markdown(p))
+        out.append((rel, n))
+    return out
+
+
+def _count_markdown(folder: Path) -> int:
+    """Сколько обычных файлов в папке, без служебных."""
+    return sum(1 for p in folder.rglob("*.md")
+               if not _is_service_markdown(p))
+
+
+def _plural_files(n: int) -> str:
+    """«1 файл», «2 файла», «5 файлов», «11 файлов».
+
+    Первая версия различала только единицу и писала «2 файлов» — это
+    заметно и бросается в глаза в тексте, который читает модель.
+    """
+    if n % 100 in (11, 12, 13, 14):
+        return "файлов"
+    last = n % 10
+    if last == 1:
+        return "файл"
+    if last in (2, 3, 4):
+        return "файла"
+    return "файлов"
+
+
+def build_knowledge_index(folder: Path, scope: str, stamp: str) -> str:
+    """Готовый текст указателя: машинная часть и заготовка смысловой.
+
+    Машинная часть лежит между маркерами и перезаписывается целиком.
+    Вне маркеров — текст модели, который программа не трогает.
+
+    Смысловая часть здесь пустая и затравленная: заполняет её нейросеть.
+    """
+    title = folder.name
+    paths = _index_paths(folder, scope)
+    total_files = _count_markdown(folder)
+    lines = [
+        f"# Указатель: {title}",
+        "",
+        INDEX_BEGIN,
+        f"Собрано: {stamp}. Папок: {len(paths)}, файлов: {total_files}.",
+        "",
+        "Пути ниже — относительно папки этого указателя.",
+        "Полный путь = папка указателя + строка из раздела «Пути».",
+        "В строке — число файлов папки вместе со вложенными.",
+        # Фраза одной строкой: проверка ищет её целиком, а перенос внутри
+        # неё превращает поиск в гадание, и проверка гаснет не пойми почему.
+        "Складывать строки нельзя: вложенная папка посчитана дважды.",
+        "",
+        "## Пути",
+    ]
+    for rel, n in paths:
+        lines.append(f"- `{rel}/` — {n} {_plural_files(n)}")
+    lines += [
+        INDEX_END,
+        "",
+        "## Когда заходить",
+        "Пока пусто. Этот раздел пишет нейросеть, программа его не трогает.",
+        "",
+    ]
+    return "\n".join(lines)
+
 # Имена, занятые в Windows. Такую папку создать нельзя.
 RESERVED = {
     "CON", "PRN", "AUX", "NUL",
