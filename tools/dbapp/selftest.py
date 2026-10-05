@@ -783,7 +783,26 @@ def main() -> int:
               f"образец найден рядом с программой: {source.name}")
         if source.is_dir():
             plan2 = core.build_plan(parent, "Проба-копия", source)
-            core.create_base(plan2)
+            # Считаем вызовы пересборки именно во время создания.
+            # Раньше проверка смотрела на plan2.target потом, после
+            # подключения этой же базы к программе, — а подключение
+            # пересборку тоже зовёт. Сломанное создание поэтому было
+            # не видно: указатели появлялись от подключения.
+            _born: list[Path] = []
+            _orig_make = core.refresh_knowledge_indexes
+
+            def _spy_make(base, _o=_orig_make):
+                _born.append(Path(base))
+                return _o(base)
+
+            core.refresh_knowledge_indexes = _spy_make
+            try:
+                core.create_base(plan2)
+            finally:
+                core.refresh_knowledge_indexes = _orig_make
+            check(bool(_born),
+                  f"создание базы зовёт пересборку указателей: "
+                  f"{len(_born)} раз")
             copy_skills = core.count_skills(plan2.target)
             # Скиллы берутся из КОНСТРУКТОРА, а не из образца: образец —
             # это пользовательская база, её набор может отставать и дополняться
