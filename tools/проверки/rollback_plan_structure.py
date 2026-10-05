@@ -31,12 +31,17 @@ CASES = [
      "typo", "tools/проверки/plan_matches_code.py"),
     ("смешаны уровни отступа — сверка плана и кода (plan_matches_code)",
      "mixed_indent", "tools/проверки/plan_matches_code.py"),
-    # Число блоков и число шагов считает скрипт структуры. Съеденный блок
-    # должно поймать именно оно.
-    ("съеден блок python — скрипт структуры (fix_task3_steps)",
-     "drop_block", "tools/проверки/fix_task3_steps.py"),
-    ("убран шаг 3 задачи 3 — число шагов (fix_task3_steps)",
-     "drop_step", "tools/проверки/fix_task3_steps.py"),
+    # Дальше — поломки, которые обязана ловить СВЕРКА, а не инструмент
+    # починки. Прежняя проба гоняла их на fix_task3_steps и conclude
+    # «скрипт красный» — но это говорило о починке, а не о том, что сверка
+    # охраняет план. Обе идут на сверку.
+    #
+    # Шаг 2 добавлен потому, что шаг без кода: убрать его — число блоков
+    # не меняется, и сверка молчала бы. Счёт шагов её этому и учит.
+    ("убран шаг 3 задачи 3 — сверка плана и кода",
+     "drop_step", "tools/проверки/plan_matches_code.py"),
+    ("убран шаг 2 задачи 3 — сверка плана и кода",
+     "drop_step2", "tools/проверки/plan_matches_code.py"),
 ]
 
 
@@ -88,24 +93,12 @@ def main() -> int:
             plan.write_text(t, encoding="utf-8")
             code = subprocess.run([sys.executable, script], cwd=tree,
                                   capture_output=True).returncode
+            ok = code != 0 and applied
             short = script.split("/")[-1]
-            # Два разных ожидания, и путать их нельзя.
-            # Проверка (plan_matches_code) обязана краснеть: код 1.
-            # Починка (fix_task3_steps) обязана починить и вернуть 0, а
-            # после неё сверка обязана стать зелёной снова. Ждать от неё
-            # кода 1 бессмысленно — это инструмент, а не проверка.
-            if script.endswith("fix_task3_steps.py"):
-                after = subprocess.run([sys.executable, SCRIPT], cwd=tree,
-                                       capture_output=True).returncode
-                ok = applied and code == 0 and after == 0
-                verdict = ("починил, сверка снова зелёная" if ok
-                           else f"НЕ ПОЧИНИЛ (код {code}, сверка {after})")
-            else:
-                ok = applied and code != 0
-                verdict = "ненулевой" if ok else (
-                    "0 — НЕ СРАБОТАЛО" if applied else "подмена не прошла")
-            note = "" if applied else " (подмена не применилась)"
             rows.append((i, name, short, code, ok))
+            note = "" if applied else " (поломка не применилась)"
+            verdict = ("ненулевой" if ok
+                       else ("0 — НЕ СРАБОТАЛО" if applied else "подмена не прошла"))
             print(f"| {i} | {name} | {short} | {code} | {verdict}{note} |")
             shutil.rmtree(tree, ignore_errors=True)
 
@@ -113,7 +106,8 @@ def main() -> int:
         good = sum(1 for r in rows if r[4])
         print(f"сработало: {good} из {len(CASES)}")
         if good == len(CASES):
-            print("ИТОГ: скрипт падает на всех четырёх поломках.")
+            print(f"ИТОГ: сверка краснеет на всех {len(CASES)} поломках, "
+              f"и каждая проходит через неё, а не через инструмент починки.")
             return 0
         print("ИТОГ: скрипт где-то не сработал.")
         return 1

@@ -42,6 +42,11 @@ FUNCS = ("_split_index", "_referenced_paths", "_orphaned_lines",
 # плана бессмысленно — съеденный блок уменьшит и ожидаемое.
 EXPECTED_BLOCKS = 12
 
+# Число шагов в задаче 3. Проверять только блоки мало: шаг 2 не содержит
+# кода, и его пропажа не меняет числа блоков. Считается числом, не из
+# плана: вычислять ожидаемое из того же файла бессмысленно.
+EXPECTED_STEPS = 5
+
 
 def blocks(text: str) -> list[tuple[int, str]]:
     """Блоки ```python с номером первой строки. Номер нужен, чтобы
@@ -192,6 +197,23 @@ def main() -> int:
     bad += check_test(selftest, bs)
     if len(bs) != EXPECTED_BLOCKS:
         bad += 1
+    # Шаги задачи 3 — отдельный счёт, см. пункт 4 ниже.
+    t3 = plan.index("## Задача 3:")
+    t3_end = plan.find("## Задача 4", t3 + 1)
+    plan_task = plan[t3:t3_end if t3_end > 0 else len(plan)]
+    n_steps = len(re.findall(r"^- \[ \] \*\*Шаг \d+", plan_task, re.M))
+    if n_steps != EXPECTED_STEPS:
+        bad += 1
+
+    print()
+    # Число шагов задачи 3. Шаг без кода (например шаг 2 — «запусти и
+    # убедись, что падает») при пропаже не меняет числа блоков, и сверка
+    # молчала бы. Отдельная проверка это закрывает.
+    plan_steps = re.findall(r"^- \[ \] \*\*Шаг \d+", plan_task, re.M)
+    print(f"=== 4. шаги задачи 3: {len(plan_steps)} (ждать {EXPECTED_STEPS}) ===")
+    if len(plan_steps) != EXPECTED_STEPS:
+        print(f"  ЧИСЛО ШАГОВ РАСХОДИТСЯ: {len(plan_steps)} вместо "
+              f"{EXPECTED_STEPS}")
 
     print()
     print("ИТОГ:", "плана и кода не расходится" if bad == 0

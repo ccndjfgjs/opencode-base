@@ -74,21 +74,28 @@ def main() -> int:
         block = STEP3_HEAD + f"{FENCE}python\n" + code_body() + f"\n{FENCE}\n\n"
         seg = seg[:anchor] + block + seg[anchor:]
     else:
-        # Шаг 3 есть, а блока кода внутри нет. Удаляем пустое место ДО
-        # вставки: иначе «старым блоком» оказывается только что вставленный
-        # и следующая же строка его съедает. Порядок найден пробой — блоков
-        # после починки оставалось 11 вместо 12.
-        s3 = seg.find("**Шаг 3: реализуй**")
+        # Шаг 3 есть. Блок кода внутри бывает трёх состояний: его нет,
+        # он есть и устарел, он есть и свеж. Прежний инструмент знал
+        # только первое — и на устаревший блок радостно отчитывался об
+        # успехе, оставляя в плане старую версию функции. Сверка потом
+        # честно писала «РАСХОДИТСЯ», а починка — «структура верна».
+        s3 = seg.find("- [ ] **Шаг 3: реализуй**")
         s4 = seg.find("- [ ] **Шаг 4: запусти", s3)
-        if s3 >= 0 and s4 > s3 and "def _split_index(" not in seg[s3:s4]:
-            old_fence = seg.find(f"{FENCE}python\n", s3)
-            if 0 <= old_fence < s4:
-                old_end = seg.index(f"\n{FENCE}", old_fence) + len(f"\n{FENCE}\n")
-                seg = seg[:old_fence] + seg[old_end:]
-            s4 = seg.find("- [ ] **Шаг 4: запусти", s3)
-            block = (STEP3_HEAD + f"{FENCE}python\n" + code_body()
-                     + f"\n{FENCE}\n\n")
-            seg = seg[:s4] + block + seg[s4:]
+        if s3 < 0 or s4 < 0:
+            raise SystemExit("шаг 3 или шаг 4 не найден в задаче 3")
+        mid = seg[s3:s4]
+        f_open = mid.find(f"{FENCE}python\n")
+        if f_open >= 0:
+            f_body = f_open + len(f"{FENCE}python\n")
+            f_close = mid.index(f"\n{FENCE}", f_body) + len(f"\n{FENCE}")
+            mid = mid[:f_open] + mid[f_close:]
+        head3 = "- [ ] **Шаг 3: реализуй**\n\n"
+        marker = "- [ ] **Шаг 3: реализуй**"
+        rest = (mid[len(head3):] if mid.startswith(head3)
+                else mid[len(marker):].lstrip("\n"))
+        block = (head3 + f"{FENCE}python\n" + code_body()
+                 + f"\n{FENCE}\n\n" + rest)
+        seg = seg[:s3] + block + seg[s4:]
 
     # Обновляем тест в шаге 1 — по границам блока, а не по маркеру.
     s = SELFTEST.read_text(encoding="utf-8")
