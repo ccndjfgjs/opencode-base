@@ -1300,6 +1300,25 @@ def main() -> int:
                          and (_k4b / rel / fname).stat().st_size > lim]
                 check(not _over,
                       f"указатели в пределах своих лимитов: {_over[:3]}")
+                # А теперь лимит становится проверяемым: при заниженном
+                # пороге пересборка обязана сказать, что он превышен.
+                # Раньше порог был числом в списке и ничего не сообщал, то
+                # есть проверка выше была наблюдением, а не доказательством.
+                _real_root, _real_branch = (core.INDEX_LIMIT_ROOT,
+                                            core.INDEX_LIMIT_BRANCH)
+                core.INDEX_LIMIT_ROOT = 64
+                core.INDEX_LIMIT_BRANCH = 64
+                try:
+                    _tight = core.refresh_knowledge_indexes(_k4b)
+                finally:
+                    core.INDEX_LIMIT_ROOT = _real_root
+                    core.INDEX_LIMIT_BRANCH = _real_branch
+                _warned = [m for m in _tight if "ПРЕВЫШЕН ЛИМИТ" in m]
+                check(bool(_warned),
+                      f"о превышении лимита сказано прямо: {_warned[:2]}")
+                check(any("дробить" in m for m in _warned),
+                      "в предупреждении сказано, что делать: дробить, "
+                      "а не поднимать лимит")
             finally:
                 shutil.rmtree(_k4b, ignore_errors=True)
 
@@ -4015,20 +4034,40 @@ def main() -> int:
             _first.kill()
         except OSError:
             pass
-        time.sleep(0.5)
-        try:
-            _owner = int(_pid_file.read_text(encoding="utf-8").strip())
-        except (OSError, ValueError):
+        # Номер владельца ждём, а не берём после паузы: файл
+        # мог ещё не появиться, номер не читался, taskkill не
+        # выполнялся — и метка оставалась жить.
+        _got = 0.0
+        while _got < 15.0:
+            try:
+                _owner = int(
+                    _pid_file.read_text(encoding="utf-8").strip())
+                break
+            except (OSError, ValueError):
+                time.sleep(0.2)
+                _got += 0.2
+        else:
             _owner = 0
         if _owner:
             subprocess.run(["taskkill", "/PID", str(_owner), "/F"],
                            capture_output=True, timeout=60)
-        time.sleep(1.5)
-        _third = subprocess.run([sys.executable, str(_probe), str(_pid_file)],
-                                capture_output=True, text=True, timeout=60)
-        check("LOCK-TAKEN" in _third.stdout,
+        # taskkill возвращается раньше, чем процесс уходит, поэтому
+        # метка может ещё занять секунду. Ждём самого события:
+        # повторяем попытку, пока ответ не станет LOCK-TAKEN.
+        _out = ""
+        _waited2 = 0.0
+        while _waited2 < 30.0:
+            _third = subprocess.run(
+                [sys.executable, str(_probe), str(_pid_file)],
+                capture_output=True, text=True, timeout=60)
+            _out = _third.stdout.strip()
+            if "LOCK-TAKEN" in _out:
+                break
+            time.sleep(0.5)
+            _waited2 += 0.5
+        check("LOCK-TAKEN" in _out,
               "после смерти прежнего владельца метку можно взять снова: "
-              f"{_third.stdout.strip() or 'нет ответа'}")
+              f"{_out or 'нет ответа'} (ждали {_waited2:.1f} с)")
     except (OSError, subprocess.SubprocessError) as _exc:
         check(False, f"проверку единственного экземпляра не отработать: {_exc}")
     finally:

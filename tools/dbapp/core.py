@@ -2873,6 +2873,17 @@ def refresh_knowledge_indexes(base: Path) -> list[str]:
             messages.append(f"{rel}/{fname}: {line}")
         if not was:
             messages.append(f"{rel}/{fname}: создан")
+        # Лимит проверяется здесь, а не «где-то в коде». Раньше `_limit`
+        # разворачивался в никуда: порог был числом в списке, и переполнение
+        # проходило молча. Теперь превышение попадает в отчёт — не обрезаем
+        # (обрезание выбросило бы ровно то, ради чего указатель и жив) и не
+        # молчим.
+        size = (folder / fname).stat().st_size
+        if size > _limit:
+            messages.append(
+                f"{rel}/{fname}: ПРЕВЫШЕН ЛИМИТ — {size} байт из {_limit}. "
+                f"Указатель стал велик для карты: его нужно дробить, "
+                f"а не увеличивать лимит.")
     messages.append(
         f"указателей знаний: пересобрано {made} из "
         f"{len(knowledge_index_targets())}")
