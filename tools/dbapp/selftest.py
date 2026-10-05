@@ -4437,6 +4437,33 @@ def main() -> int:
         _extra = sorted(_rows - set(_real))
         check(not _extra,
               f"в таблице нет навыков, которых нет в папке: {_extra}")
+    echo("\n--- 8з-1. У каждого навыка своя строка в инструкции ---")
+    _doc = core.program_root() / "инструкции" / "Скиллы-и-агенты.md"
+    if _doc.is_file():
+        # Название навыка достаётся текстом между кавычками. Строка
+        # годится, только если назван ОДИН навык: общая строка на шестерых
+        # не даёт нейросети выбора — условие срабатывания у всех одно.
+        _solo: set[str] = set()
+        _seen: set[str] = set()
+        for _line in _doc.read_text(encoding="utf-8").splitlines():
+            if not _line.startswith("|"):
+                continue
+            for _cell in [c.strip() for c in _line.strip("|").split("|")]:
+                _parts = _cell.split("`")
+                _toks = [t for i, t in enumerate(_parts) if i % 2 == 1]
+                _seen.update(_toks)
+                if len(_toks) == 1:
+                    _solo.add(_toks[0])
+        _no_row = sorted(set(_real) - _seen)
+        _shared = sorted(n for n in _real if n not in _solo)
+        check(not _no_row,
+              f"каждый навык упомянут в инструкции: нет {_no_row}")
+        check(not _shared,
+              f"у каждого навыка своя строка, не общая на нескольких: "
+              f"{_shared}")
+    else:
+        echo("файл инструкции не найден — проверка пропущена")
+
 # ---- 8и. Файлы рядом с навыками: едут, обновляются и проверяются
     echo("\n--- 8и. Файлы рядом с навыками ---")
     _bi = tempfile.mkdtemp(prefix="selftest-loose-")
