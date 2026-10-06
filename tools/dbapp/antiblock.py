@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import shutil
 import socket
+import subprocess
 from pathlib import Path
 
 #: Движок: переводчик и запускалки. Без них обход не работает.
@@ -567,6 +568,51 @@ def set_facade_port(value: int,
         return False, (f"Порт не сохранён: {path} — {exc}. В силе остался "
                        f"{prefs.get(FACADE_PORT_KEY, FACADE_PORT)}.")
     return True, f"Порт фасада сохранён: {value}."
+
+
+def who_listens(port: int) -> str:
+    """Имя процесса, который слушает порт. Пусто — определить не удалось.
+
+    Через PowerShell, а не через netstat: netstat переводит состояния в
+    зависимость от языка Windows, и разбор строк ломается на другой
+    машине. Параметр -State Listen — имя из перечисления, оно не
+    переводится. Определить не удалось — возвращаем пустую строку, и
+    вызывающий говорит «занят неизвестным процессом».
+    """
+    script = (
+        "$c = Get-NetTCPConnection -State Listen -LocalPort "
+        f"{int(port)} -ErrorAction SilentlyContinue | Select-Object -First 1; "
+        "if ($c) { (Get-Process -Id $c.OwningProcess).ProcessName }"
+    )
+    try:
+        done = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, text=True, timeout=30,
+            encoding="utf-8", errors="replace",
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if done.returncode != 0:
+        return ""
+    return (done.stdout or "").strip()
+
+
+def suggest_free_port(port: int, host: str = FACADE_HOST,
+                      tries: int = 100) -> int:
+    """Ближайший свободный порт вверх от заданного. 0 — не нашлось.
+
+    Порт xray пропускается: занять его фасадом нельзя, канал от этого
+    перестанет работать. Подбор ограничен: за 100 попыток не нашлось —
+    так и говорим, выдумывать ничего не будем.
+    """
+    candidate = int(port)
+    for _ in range(tries):
+        if candidate > PORT_MAX:
+            return 0
+        if candidate != XRAY_PORT and not _port_listening(host, candidate):
+            return candidate
+        candidate += 1
+    return 0
 
 
 def check_connection(port: int = FACADE_PORT) -> tuple[bool, str]:
