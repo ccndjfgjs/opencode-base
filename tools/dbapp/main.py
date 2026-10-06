@@ -2405,6 +2405,13 @@ class CapsTab(ScrollPage):
         row_ab.addWidget(self.btn_ab_dns)
         row_ab.addStretch(1)
         ab_layout.addLayout(row_ab)
+        # Строка состояния: своим каналом, запасным или не работает.
+        # §20.6 плана требует говорить прямо, когда включён запасной:
+        # снаружи оба канала выглядят одинаково, а на деле трафик идёт
+        # через чужие машины. Молчание тут врёт.
+        self.lbl_ab_state = ui.label("Обход: проверяю...", kind="dim", wrap=True)
+        ab_layout.addWidget(self.lbl_ab_state)
+        self._refresh_ab_state()
         outer.addWidget(box_ab)
 
         # --- шаг 5: навыки поштучно
@@ -3027,6 +3034,30 @@ class CapsTab(ScrollPage):
         """Галочки шага 4 — состав набора обхода блокировок."""
         return {key: box.isChecked() for key, box in self.achecks.items()}
 
+    def _refresh_ab_state(self) -> None:
+        """Строка состояния обхода: свой канал, запасной пул или тишина.
+
+        Обновляется при открытии секции и после кнопок проверки. Две
+        проверки локальных портов стоят почти ноль: закрытый порт падает
+        с отказом сразу, а не по таймауту, поэтому ждать не приходится и
+        поток не нужен — так же сделано и для кнопки DNS.
+        """
+        item = getattr(self, "lbl_ab_state", None)
+        if item is None:
+            return
+        try:
+            import antiblock  # noqa: PLC0415 — рядом лежит
+
+            state, text = antiblock.channel_state()
+            color = {
+                antiblock.CHANNEL_OWN: ui.OK,
+                antiblock.CHANNEL_FALLBACK: ui.WARN,
+            }.get(state, ui.ERROR)
+        except Exception as exc:  # noqa: BLE001 — строка не должна ронять окно
+            text, color = f"проверка не запустилась: {exc}", ui.ERROR
+        item.setText(f"Обход: {text}")
+        item.setStyleSheet(f"color: {color};")
+
     def _check_antiblock(self) -> None:
         """Кнопка «Проверить подключение»: слушает ли фасад свой порт."""
         try:
@@ -3036,6 +3067,7 @@ class CapsTab(ScrollPage):
         except Exception as exc:
             ok, text = False, f"Проверка не запустилась: {exc}"
         self.log.add(text, "ok" if ok else "warn")
+        self._refresh_ab_state()
 
     def _check_dns(self) -> None:
         """Кнопка «Проверить DNS»: резолвит домен через защищённый DNS."""
@@ -3049,6 +3081,7 @@ class CapsTab(ScrollPage):
         finally:
             self.btn_ab_dns.setEnabled(True)
         self.log.add(text, "ok" if ok else "warn")
+        self._refresh_ab_state()
 
     # ---- навыки поштучно
 

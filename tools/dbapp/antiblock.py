@@ -83,6 +83,19 @@ OPENCODE_EXE_HINTS = (
 FACADE_HOST = "127.0.0.1"
 FACADE_PORT = 17890
 
+#: Порт своего канала: SOCKS5 от xray. Тот же порт и в стартерах
+#: (`$XrayPort = 10900`), и в самом раннере (`XRAY_DEFAULT_PORT`), и
+#: начало жизни обходчика: «свой Xray слушает 10900 — не трогаю».
+#: Различать каналы можно только по нему — фасад поднимается в обоих
+#: случаях, а вот SOCKS5 от xray существует ровно тогда, когда канал свой.
+XRAY_PORT = 10900
+
+#: Три состояния обхода. Слова — те же, что в плане (20.6): «свой»,
+#: «запасной», «не работает».
+CHANNEL_OWN = "свой"
+CHANNEL_FALLBACK = "запасной"
+CHANNEL_DOWN = "не работает"
+
 MANIFEST = ".opencode-base-caps.json"
 
 
@@ -409,15 +422,57 @@ def antiblock_status(dest: Path) -> bool:
     )
 
 
-def facade_running(
-    host: str = FACADE_HOST, port: int = FACADE_PORT, timeout: float = 1.0
-) -> bool:
-    """Слушает ли фасад свой порт (без интернета, только свой компьютер)."""
+def _port_listening(host: str, port: int, timeout: float = 1.0) -> bool:
+    """Слушает ли локальный порт. Без интернета, только свой компьютер.
+
+    Отдельная функция потому, что портов теперь два — фасад и свой
+    канал, — а проверка одна и та же. Закрытый локальный порт падает
+    мгновенно с отказом, а не по таймауту, поэтому вызов дешёвый и
+    годится для строки состояния при открытии вкладки.
+    """
     try:
         with socket.create_connection((host, port), timeout=timeout):
             return True
     except OSError:
         return False
+
+
+def facade_running(
+    host: str = FACADE_HOST, port: int = FACADE_PORT, timeout: float = 1.0
+) -> bool:
+    """Слушает ли фасад свой порт."""
+    return _port_listening(host, port, timeout)
+
+
+def channel_state(
+    host: str = FACADE_HOST,
+    xray_port: int = XRAY_PORT,
+    facade_port: int = FACADE_PORT,
+    timeout: float = 1.0,
+) -> tuple[str, str]:
+    """Чем жив обход прямо сейчас: своим каналом, запасным или ничем.
+
+    Различает по портам, как это уже делают стартеры: свой Xray на
+    `xray_port` — значит канал свой; молчит, но фасад на `facade_port`
+    жив — значит держимся на бесплатном пуле; молчат оба — обхода нет.
+
+    Требуется §20.6 плана: когда запасной включён, программа обязана
+    говорить об этом прямо. Молчание тут врёт: снаружи всё выглядит
+    как будто канал один, а на деле трафик идёт через чужие машины.
+    """
+    if _port_listening(host, xray_port, timeout):
+        return CHANNEL_OWN, f"Свой канал: Xray слушает {host}:{xray_port}."
+    if _port_listening(host, facade_port, timeout):
+        return CHANNEL_FALLBACK, (
+            f"Запасной канал: своего Xray на {host}:{xray_port} нет, "
+            "фасад держится на бесплатном пуле. Это чужие машины — "
+            "через них нельзя передавать пароли и ключи."
+        )
+    return CHANNEL_DOWN, (
+        f"Обход не работает: нет ни своего канала ({host}:{xray_port}), "
+        f"ни фасада ({host}:{facade_port}). Запусти OpenCode через "
+        "ярлык «OpenCode (обход)»."
+    )
 
 
 def check_connection(port: int = FACADE_PORT) -> tuple[bool, str]:

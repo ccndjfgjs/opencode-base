@@ -2570,6 +2570,55 @@ def main() -> int:
           "статус видит обход")
     ok_conn, _text_conn = antiblock.check_connection(port=_free_port())
     check(ok_conn is False, "проверка честно говорит: фасад не запущен (свободный порт)")
+
+    # Строка состояния обхода. Проверяется на настоящих слушающих сокетах:
+    # закрытый локальный порт падает с отказом сразу, а не по таймауту,
+    # поэтому поднимки мгновенные и проверка не ждёт.
+    import socket as _sock  # noqa: PLC0415 — как в _free_port
+
+    def _listen_ab(port: int):
+        srv = _sock.socket()
+        srv.setsockopt(_sock.SOL_SOCKET, _sock.SO_REUSEADDR, 1)
+        srv.bind((antiblock.FACADE_HOST, port))
+        srv.listen(1)
+        return srv
+
+    _xp, _fp = _free_port(), _free_port()
+
+    def _state() -> tuple[str, str]:
+        return antiblock.channel_state(
+            xray_port=_xp, facade_port=_fp, timeout=0.5)
+
+    st_down, _txt_down = _state()
+    check(st_down == antiblock.CHANNEL_DOWN,
+          f"оба порта молчат — обход не работает: {st_down}")
+    check(st_down != antiblock.CHANNEL_OWN,
+          "молчание никогда не выдаётся за рабочий свой канал")
+    _srv_x = _listen_ab(_xp)
+    try:
+        st_own, _ = _state()
+        check(st_own == antiblock.CHANNEL_OWN,
+              f"слушает свой канал — состояние «свой»: {st_own}")
+    finally:
+        _srv_x.close()
+    _srv_f = _listen_ab(_fp)
+    try:
+        st_fb, txt_fb = _state()
+        check(st_fb == antiblock.CHANNEL_FALLBACK,
+              f"фасад без своего Xray — состояние «запасной»: {st_fb}")
+        check("чужие машины" in txt_fb,
+              "и текст говорит прямо, что канал запасной и это чужие машины")
+        _srv_x2 = _listen_ab(_xp)
+        try:
+            st_both, _ = _state()
+            check(st_both == antiblock.CHANNEL_OWN,
+                  f"слушают оба — «свой» важнее «запасного»: {st_both}")
+        finally:
+            _srv_x2.close()
+    finally:
+        _srv_f.close()
+    check(antiblock.XRAY_PORT == 10900,
+          f"порт своего канала тот же, что в стартерах: {antiblock.XRAY_PORT}")
     _, e_ab3 = opencode_caps.remove_caps(fake, {"antiblock"})
     check(not e_ab3, f"обход убран без ошибок: {e_ab3 or 'чисто'}")
     check(not (fake / "antiblock" / "http_facade.py").exists(), "фасад убран")
