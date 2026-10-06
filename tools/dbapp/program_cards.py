@@ -218,6 +218,7 @@ class _Draft:
 
     name: str
     servers: list[str] = field(default_factory=list)
+    is_extra: bool = False   # программа вне серверов
     install: programs.InstallView = field(default_factory=programs.InstallView)
     verify: programs.VerifyView = field(default_factory=programs.VerifyView)
     bridge: programs.BridgeView = field(default_factory=programs.BridgeView)
@@ -257,6 +258,19 @@ def _drafts(base: Path) -> list[_Draft]:
         draft.install = _fill_gaps(need.install, draft.install)
         if need.install.instructions:
             draft.install.instructions = need.install.instructions
+
+    # Прочие программы — в конец, после серверов и мостов. Порядок важен:
+    # девятая программа не должна вставать в ряд с восемью серверами,
+    # иначе она читается как девятый сервер.
+    for block in mcp_registry.load_extra_programs(base):
+        draft = slot(block.program or "без названия")
+        draft.is_extra = True
+        draft.install = _fill_gaps(
+            draft.install, programs._install_from_block(block))
+        draft.verify = programs.VerifyView(
+            expected_signer=block.expected_signer,
+            expected_publisher=block.expected_publisher,
+            detail="программа вне списка серверов MCP")
 
     return list(out.values())
 
@@ -323,6 +337,16 @@ def _state(draft: _Draft, servers_by_id: dict) -> _State:
                     blocking.append(requirement.what)
 
     out = _State(exe=_executable(matched))
+
+    if getattr(draft, "is_extra", False):
+        # Серверов нет, и общая ветка ниже сказала бы «нечем
+        # проверять». Это неправда в обе сторонах: программа
+        # ставится вручную по официальному адресу, и кнопка установки не будет.
+        out.status = "вне серверов MCP"
+        out.text = ("не сервер MCP: ставится вручную по официальному "
+                    "адресу, кнопки установки нет")
+        out.pending = pending
+        return out
 
     if not matched:
         if draft.install.action == programs.ACTION_NONE:

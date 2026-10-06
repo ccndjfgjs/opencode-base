@@ -401,6 +401,26 @@ def check_requirement(spec: dict) -> Requirement:
     return req
 
 
+def load_extra_programs(base: Path) -> list[ProgramInstall]:
+    """Программы вне списка серверов MCP: ставятся в той же вкладке, но
+    серверами не являются.
+
+    Отдельный ключ `extra_programs`, а не девятая запись в серверах. Иначе
+    xray попал бы в проверку готовности серверов и в отчёт о подключении,
+    а он там лишний: он не подключается к программе, а проксирует трафик.
+    """
+    data = load_registry(base)
+    out: list[ProgramInstall] = []
+    for raw in data.get("extra_programs") or []:
+        if not isinstance(raw, dict):
+            continue
+        known = {f for f in ProgramInstall.__dataclass_fields__}
+        extra = {k: v for k, v in raw.items() if k in known}
+        extra.pop("id", None)
+        out.append(ProgramInstall(**extra))
+    return out
+
+
 def load_servers(base: Path) -> list[Server]:
     """Читает реестр и проверяет требования каждого сервера."""
     data = load_registry(base)

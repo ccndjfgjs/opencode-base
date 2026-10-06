@@ -51,7 +51,7 @@ REPO = Path(__file__).resolve().parent.parent.parent
 PROGRAM = REPO / "tools" / "dbapp" / "core.py"
 
 #: Что определяет программу. Порядок — как в описании.
-INCLUDE = ("tools/dbapp", "skills", "инструкции", "config",
+INCLUDE = ("tools/dbapp", "tools/hooks", "skills", "инструкции", "config",
            "mcp-registry.json", "skills-index.json", "README.md")
 
 #: Папки и файлы внутри INCLUDE, которые создаёт работа программы, а не

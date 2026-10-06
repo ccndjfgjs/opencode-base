@@ -1,81 +1,38 @@
 # -*- coding: utf-8 -*-
-"""Проверка цифровой подписи установщика через Get-AuthenticodeSignature.
+"""Проверка цифровой подписи установщика.
 
-Этап 4 раздела 7 плана. Модуль отвечает на один вопрос: файл подписан тем,
-кем мы ожидаем, или нет.
+Зачем. Установщик, скачанный через чужой прокси, может быть подменён.
+Правило плана: подпись проверяется **до** запуска, и сверяется не «есть
+ли подпись», а **кто подписал файл**. Подпись бывает и поддельной, поэтому
+одного факта её наличия мало.
 
-**Что проверено живьём 03.10.2026, а не взято из памяти.**
+Почему статусы числами. Windows отдаёт статус как имя перечисления
+(`Valid`, `NotSigned`, …), а эти имена локализованы и завтра могут
+измениться. Сверять их строками нельзя, поэтому значения зафиксированы
+числами, а имена лежат рядом для показа человеку.
 
-| Что | Факт |
-|---|---|
-| Перечисление | `System.Management.Automation.SignatureStatus` |
-| Значения | `Valid`=0, `UnknownError`=1, `NotSigned`=2, `HashMismatch`=3, `NotTrusted`=4, `NotSupportedFileFormat`=5, `Incompatible`=6 |
-| Скорость | **0,28 с на файл** — сверка обязана идти в рабочем потоке, не в потоке окна |
-| Имя подписанта | лежит в `SignerCertificate.Subject`, а простом виде это `CN=OpenJS Foundation` |
+Почему сверка словами, а не сравнением строк. Подпись пишет как
+`CN=Microsoft Windows, O=Microsoft Corporation`, а в реестре программ
+ожидание лежит как `Microsoft Corporation`. Сравнение строк никогда бы не
+сошлось. Правило: **все слова ожидания должны найтись среди слов
+подписанта**. Отсюда следует и обратное — короткое фактическое имя не
+подтверждает длинное ожидание: `CN=Microsoft` не подтверждает
+`Microsoft Corporation`, потому что слова `Corporation` в подписанте нет.
 
-**Три вещи, на которых спотыкаются по незнанию.**
-
-1. **Статус сравнивается по числу, а не по строке.** На этой машине приходит
-   английское `Valid`, но локализация зависит от установки Windows, и завтра
-   имя может стать другим. Число останется прежним.
-
-2. **`NotSigned` — это ответ, а не сбой.** Сбой — когда команда не дала
-   результата вовсе: например, `winget.exe` в WindowsApps не является обычным
-   файлом и команда падает с `System.IO.IOException`. Такой случай обязан
-   давать «проверка не выполнена», а не «подпись верна». Путать эти два
-   исхода опаснее всего: первый означает «мы не знаем», второй — «всё в
-   порядке».
-
-3. **Сверять надо по полному Subject, а не по одному `CN`.** Подписантом
-   `cmd.exe` является `CN=Microsoft Windows`, и имени `Microsoft Corporation`
-   в `CN` нет — оно лежит в `O=` того же сертификата:
-   `CN=Microsoft Windows, O=Microsoft Corporation, L=Redmond…`. Сравнение
-   только по `CN` отвергло бы файлы самой Windows. Поэтому сверяется вся
-   строка Subject, а `CN` остаётся только для показа.
-
-**`HashMismatch` воспроизводится, но не на любом файле.** Правка байта внутри
-`node.exe` даёт именно `HashMismatch` (3). Правка байта внутри `cmd.exe` на
-трёх разных смещениях даёт `NotSigned` (2) — файлы самой Windows ведут себя
-иначе. Из этого нельзя заключать, что состояние недостижимо: сначала был
-сделан вывод «воспроизвести не удалось» по одному файлу, и он был неверен.
-
-**Имя подписанта не равно издателю из winget.** `winget show` отдаёт
-издателя из манифеста пакета, а подпись файла — это кто подписал сам `.exe`.
-Разные вещи, и разница видна на Node.js:
-
-| | что | |
-|---|---|---|
-| издатель в манифесте winget | `Node.js Foundation` | |
-| кто подписал node.exe | `OpenJS Foundation` | **не совпадает** |
-
-Поэтому в реестре два разных поля: `expected_publisher` — издатель из
-каталога winget, и `expected_signer` — кто подписал файл. Сверка идёт по
-второму. Сравнивать по первому значило бы отвергать настоящие установщики,
-а это худший вид ошибки в проверке безопасности.
-
-**Совпадение ищется по вхождению в ПОЛНОМ Subject, а не равенством и не по
-одному `CN`.** Подписантом `cmd.exe` является `CN=Microsoft Windows`, а
-`Microsoft Corporation` лежит в `O=` того же сертификата. Строгое равенство
-по `CN` отвергло бы файлы самой Windows. Поэтому хранится вся строка Subject,
-и ожидаемое имя ищется в ней. Ожидаемое может быть и списком через запятую —
-так подписывают те, кто переименовал компанию.
+Пустое ожидание не проходит: нечего сверять — это «не проверено», а не
+«совпало». Иначе программа с незаполненным реестром получала бы
+установку любого подписанного файла.
 """
-
 from __future__ import annotations
 
+import os
 import re
 import subprocess
-from dataclasses import dataclass
 from pathlib import Path
 
-#: Сколько ждать PowerShell. Проверка одного файла идёт около 0,3 с, но
-#: первый вызов на холодную разворачивает сборку и уходил в 1,8 с. Запас
-#: большой, потому что зависшая проверка хуже неверного ответа: человек
-#: не поймёт, что окно замерло.
-POWERSHELL_TIMEOUT = 30
-
-#: Значения System.Management.Automation.SignatureStatus. Проверено 03.10.2026
-#: запросом [enum]::GetNames. Числа, а не строки: см. предупреждение вверху.
+#: Статусы подписи. Значения сняты через
+#: `[enum]::GetNames([System.Management.Automation.SignatureStatus])`
+#: и зафиксированы числами намеренно: имена локализованы.
 STATUS_VALID = 0
 STATUS_UNKNOWN_ERROR = 1
 STATUS_NOT_SIGNED = 2
@@ -84,268 +41,306 @@ STATUS_NOT_TRUSTED = 4
 STATUS_NOT_SUPPORTED_FILE_FORMAT = 5
 STATUS_INCOMPATIBLE = 6
 
+#: Имя статуса по-русски — для показа человеку, не для сверки.
 STATUS_NAMES = {
     STATUS_VALID: "подпись действительна",
-    STATUS_UNKNOWN_ERROR: "проверка не удалась",
+    STATUS_UNKNOWN_ERROR: "система не смогла прочитать подпись",
     STATUS_NOT_SIGNED: "подписи нет",
-    STATUS_HASH_MISMATCH: "подпись не сходится с файлом",
-    STATUS_NOT_TRUSTED: "подписавшему нельзя доверять",
-    STATUS_NOT_SUPPORTED_FILE_FORMAT: "формат файла не поддерживается",
-    STATUS_INCOMPATIBLE: "несовместимая подпись",
+    STATUS_HASH_MISMATCH: "подпись не совпадает с содержимым файла",
+    STATUS_NOT_TRUSTED: "подпись есть, цепочке доверия не доверяют",
+    STATUS_NOT_SUPPORTED_FILE_FORMAT: "файл вообще не подписывается этим способом",
+    STATUS_INCOMPATIBLE: "подпись несовместима с этой версией",
 }
 
-#: Что означает каждый исход для решения «запускать ли файл». True — файл
-#: можно запускать, False — нельзя. Отдельного «не знаю» здесь нет намеренно:
-#: для установщика неизвестность равносильна отказу. Сама неизвестность
-#: остаётся видна в checked, чтобы её можно было показать человеку отдельно.
+#: Значение, когда подпись спросить не удалось. Отличается от «сбой»:
+#: одно означает «подписи нет», другое — «спросить не вышло».
+STATUS_UNREADABLE = -1
+
+_WORD = re.compile(r"[^\W_]+", re.UNICODE)
+
+
+def _tokens(subject: str | None) -> list[str]:
+    """Разбирает строку на слова.
+
+    `CN=A B, O=C` -> `['CN', 'A', 'B', 'O', 'C']`.
+
+    Сравнивать строки целиком нельзя: подпись пишет `CN=Microsoft Windows,
+    O=Microsoft Corporation`, а ожидание — `Microsoft Corporation`. Слова
+    убирают и порядок, и префиксы, и регистр. Подчёркивание не часть слова:
+    в `CN=Some_Company` это один идентификатор, а не два слова.
+
+    Пустая строка и None дают пустой список, а не исключение: отсутствие
+    подписанта — обычное дело, а не сбой.
+    """
+    if not subject:
+        return []
+    return _WORD.findall(str(subject))
+
+
+def _appears_in_order(have: list[str], want: list[str]) -> bool:
+    """Есть ли want в have как НЕПРЕРЫВНЫЙ кусок.
+
+    Непрерывность — единственное, что отличает одну фирму от
+    другой. Мягкое правило «все слова есть где-то» пропускало
+    подмену: CN=Microsoft Windows, O=Contoso Corporation содержит
+    и Microsoft, и Corporation, но это две разных фирмы в разных полях.
+    """
+    n, m = len(have), len(want)
+    for start in range(n - m + 1):
+        if have[start:start + m] == want:
+            return True
+    return False
+
+
+def signer_matches(subject: str | None, expected: str | None) -> bool:
+    """Сошлось ли имя подписавшего с ожидаемым.
+
+    Правило одно: ожидание непустое и **каждое** его слово встречается
+    среди слов подписанта. Отсюда следует всё остальное, что нужно:
+
+      CN=OpenJS Foundation, O=OpenJS Foundation  и  Node.js Foundation -> False
+          слова Node нет в подписанте
+      CN=Microsoft Windows, O=Microsoft Corporation  и  Google LLC      -> False
+      CN=Microsoft  и  Microsoft Corporation                              -> False
+          короткое фактическое имя не подтверждает длинное ожидание
+      пустое ожидание                                                   -> False
+          сверять не с чем
+    """
+    exp = [w.lower() for w in _tokens(expected)]
+    if not exp:
+        return False
+    have = [w.lower() for w in _tokens(subject)]
+    return _appears_in_order(have, exp)
+
+
+def _ask_system(path: Path) -> tuple[int, str]:
+    """Спрашивает у Windows статус подписи и подписанта.
+
+    Возвращает пару (статус, подписант). Статус — число из набора выше
+    либо STATUS_UNREADABLE, если спросить не вышло.
+    """
+    if os.name != "nt":
+        return STATUS_UNREADABLE, ""
+    # Путь идёт через переменную окружения: при -Command переменная $args
+    # не заполняется, PowerShell молча спрашивал подпись у пустого пути,
+    # а молчание выглядит как «подписи нет».
+    env = dict(os.environ)
+    env["DBAPP_SIGN_TARGET"] = str(path)
+    script = (
+        "$ErrorActionPreference='Stop';"
+        "$s=Get-AuthenticodeSignature -LiteralPath $env:DBAPP_SIGN_TARGET;"
+        "[int]$s.Status; $s.SignerCertificate.Subject"
+    )
+    try:
+        p = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=120, env=env)
+    except (OSError, subprocess.SubprocessError):
+        return STATUS_UNREADABLE, ""
+    if p.returncode != 0:
+        return STATUS_UNREADABLE, ""
+    lines = [ln.strip() for ln in (p.stdout or "").splitlines() if ln.strip()]
+    if not lines:
+        return STATUS_UNREADABLE, ""
+    try:
+        status = int(lines[0])
+    except ValueError:
+        return STATUS_UNREADABLE, ""
+    return status, lines[1] if len(lines) > 1 else ""
+
+
+#: Разрешает ли статус запуск файла. Ключи — статусы, значения — можно ли.
+#: Главное свойство: **неизвестность означает отказ**. Статус, который мы
+#: не умеем читать, или подпись, которой не доверяют, запускаться не
+#: должны. Иначе проверка подписи пропускает ровно те файлы, ради которых
+#: и делалась.
 STATUS_ALLows = {
     STATUS_VALID: True,
+    STATUS_UNKNOWN_ERROR: False,
     STATUS_NOT_SIGNED: False,
     STATUS_HASH_MISMATCH: False,
     STATUS_NOT_TRUSTED: False,
     STATUS_NOT_SUPPORTED_FILE_FORMAT: False,
     STATUS_INCOMPATIBLE: False,
-    STATUS_UNKNOWN_ERROR: False,
 }
 
 
-@dataclass
 class SignatureResult:
-    """Ответ одной проверки. Различает «не подходит» и «не смогли узнать»."""
+    """Итог проверки. Поля — те же, что читает движок вкладки.
 
-    path: str = ""
-    checked: bool = False        # ответ получен?
-    status: int = STATUS_UNKNOWN_ERROR
-    status_text: str = ""        # как это назвала Windows, строкой
-    signer: str = ""             # CN из сертификата, только для показа
-    subject: str = ""            # весь Subject, именно по нему идёт сверка
-    issuer: str = ""
-    expected: str = ""
-    detail: str = ""
+    Имена полей зафиксированы проверкой раздела 8н: `status`, `verified`,
+    `safe_to_run`, `signer`, `detail`. Переименование ломает не только
+    проверку, но и движок, который по ним решает, запускать ли файл.
 
-    @property
-    def safe_to_run(self) -> bool:
-        """Можно ли запускать файл. Неизвестность равносильна отказу.
-
-        Для установщика это единственно разумное поведение: «мы не смогли
-        узнать» и «всё в порядке» не должны выглядеть одинаково, а выглядеть
-        одинаково они будут, если «не знаем» прочитать как «можно».
-        """
-        return bool(self.checked and STATUS_ALLows.get(self.status) is True)
-
-    @property
-    def verified(self) -> bool:
-        """Подпись проверена и подписант тот, кого ждали.
-
-        Отличать от `safe_to_run` обязательно: файл может быть подписан верно,
-        но не тем, кто ожидался. Запускать его нельзя, а сказать «подпись
-        плохая» тоже нельзя — она в порядке, не тот, кто нужен.
-        """
-        return (self.checked
-                and self.status == STATUS_VALID
-                and bool(self.expected)
-                and signer_matches(self.subject or self.signer, self.expected))
-
-
-def _tokens(value: str) -> list[str]:
-    """Разбить на слова: буквы и цифры, всё прочее — разделитель.
-
-    Сверка идёт по словам, а не по кускам строки. Причина — «CN=Adobe
-    Systems» и «CN=Adobe Inc.» должны подходить под ожидание «Adobe», но
-    подстрока без границ пропустила бы и «CN=Notepad Adobe Viewer» от
-    постороннего издателя. Слова и есть те границы.
+    Три разных ответа, и их нельзя смешивать:
+        verified True    подпись настоящая и подписант тот
+        verified False   подпись настоящая, но подписал не тот — не запускать
+        verified None    проверить нечем: подписи нет или спросить не вышло
+                         и подпись плохая, и сверять не с чем — это один
+                         и тот же отказ, но сказать о нём надо по-разному
     """
-    return [w for w in re.split(r"[^0-9A-Za-zЀ-ӿ]+", str(value or "")) if w]
+
+    __slots__ = ("status", "verified", "safe_to_run", "signer", "detail",
+                 "path", "name", "checked")
+
+    def __init__(self, status: int, verified: bool, signer: str,
+                 detail: str, path: str, name: str,
+                 checked: bool | None = None) -> None:
+        self.status = status
+        #: Строго True или False, без третьего значения. «Проверить не
+        #: чем» передаётся полем checked, а не значением verified:
+        #: иначе «нет файла» и «подпись плохая» выглядели бы одинаково,
+        #: а разница между ними — разница между «файла нет» и
+        #: «файл подменили».
+        self.verified = bool(verified)
+        self.safe_to_run = self.verified and STATUS_ALLows.get(status, False)
+        self.signer = signer
+        self.detail = detail
+        self.path = path
+        self.name = name
+        #: Выполнена ли проверка вовсе: систему спросили и она ответила.
+        self.checked = (status != STATUS_UNREADABLE) if checked is None \
+            else bool(checked)
+
+    def __repr__(self) -> str:
+        return (f"<SignatureResult статус={self.status} "
+                f"checked={self.checked} verified={self.verified} "
+                f"подписал={self.signer!r}>")
 
 
-def _contains_sequence(haystack: list[str], needle: list[str]) -> bool:
-    """Есть ли подряд идущие слова needle внутри haystack."""
-    if not needle or len(needle) > len(haystack):
-        return False
-    width = len(needle)
-    for start in range(len(haystack) - width + 1):
-        if haystack[start:start + width] == needle:
-            return True
-    return False
+def check_signature(path: str | Path,
+                    expected_signer: str | None = None) -> SignatureResult:
+    """Проверяет подпись файла и сверяет подписанта с ожидаемым.
 
+    Тонкость формулировок. Подпись, которая в порядке, но подписана не тем,
+    кем ждали, — это не «плохая подпись». Плохая подпись значит файл
+    изменён. Здесь файл цел, и говорить «плохая» нельзя: человек увидит
+    и подумает, что файл подменили, а подменили только ожидание.
 
-def signer_matches(subject_or_name: str, expected: str) -> bool:
-    """Подошло ли имя подписанта к ожидаемому.
-
-    Принимается полный Subject или одно имя. Сравнение идёт по словам, а не
-    по одному `CN`: подписантом `cmd.exe` является `CN=Microsoft Windows`, а
-    `Microsoft Corporation` лежит в `O=` того же сертификата, и сверка только
-    по `CN` отвергла бы файлы самой Windows.
-
-    Ожидаемое может быть и списком через запятую: так подписывают те, кто
-    переименовал компанию, и одна строка описывает и прежнего, и нынешнего
-    подписанта.
+    Порядок проверок важен: сначала есть ли файл, потом есть ли что
+    сверять, и только потом спрашиваем систему. Файл без подписи и файл,
+    который нечем сверять, — разные вещи, и система на оба вопроса ответит
+    одинаково.
     """
-    actual_tokens = _tokens(subject_or_name)
-    if not actual_tokens or not expected:
-        return False
-    for want in str(expected).split(","):
-        want_tokens = _tokens(want)
-        if not want_tokens:
-            continue
-        if _contains_sequence(actual_tokens, want_tokens):
-            return True
-        # Обратный порядок встречается, когда ожидание записано короче
-        # настоящего имени: «Epic Games, Inc.» против «Epic Games». Обратное
-        # вхождение допускается только при заметной длине ожидания, иначе
-        # короткое имя начало бы подтверждать что угодно.
-        if len(want_tokens) >= 2 and _contains_sequence(want_tokens, actual_tokens):
-            return True
-    return False
+    target = Path(path)
 
+    # 1. Файла нет. Проверка не выполнялась, но и успеха здесь нет.
+    if not target.is_file():
+        return SignatureResult(STATUS_UNREADABLE, False, "",
+                               f"файла нет: {target}", str(target),
+                               "файла нет", checked=False)
 
-def _run_powershell(path: Path) -> tuple[dict | None, str]:
-    """Спросить у PowerShell про подпись. None — команды не было ответа.
+    # 2. Сверять не с чем. Тоже проверка не выполнялась: систему звать
+    #    незачем, всё равно решения нет.
+    if not _tokens(expected_signer):
+        return SignatureResult(STATUS_UNREADABLE, False, "",
+                               "подпись настоящая или нет — но сверять не с "
+                               "чем: ожидаемый подписант не задан",
+                               str(target), "сверять не с чем", checked=False)
 
-    PowerShell вызывается отдельным процессом, а не через текущий: так его
-    версия и политика выполнения не зависят от того, чем запущена программа.
-    Ошибки команды не проглатываются молча — они возвращаются вторым
-    значением, чтобы «не смогли узнать» не превратилось в «подпись верна».
-    """
-    literal = str(path).replace("'", "''")
-    script = (
-        "$ErrorActionPreference = 'Stop';"
-        f"$s = Get-AuthenticodeSignature -FilePath '{literal}';"
-        "$o = [ordered]@{ Status = [string]$s.Status; Value = [int]$s.Status;"
-        " CN = ''; Subject = ''; Issuer = '' };"
-        "if ($null -ne $s.SignerCertificate) {"
-        "  $o.Subject = [string]$s.SignerCertificate.Subject;"
-        "  $p = ($s.SignerCertificate.Subject -split ','"
-        "    | Where-Object { $_ -match 'CN=' } | Select-Object -First 1);"
-        "  $o.CN = ($p -replace '^\\s*CN=', '').Trim();"
-        "  $o.Issuer = [string]$s.SignerCertificate.Issuer"
-        "};"
-        "$o | ConvertTo-Json -Compress"
-    )
-    try:
-        proc = subprocess.run(
-            ["powershell", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass",
-             "-Command", script],
-            capture_output=True, text=True, encoding="utf-8",
-            errors="replace", timeout=POWERSHELL_TIMEOUT,
-        )
-    except subprocess.TimeoutExpired:
-        return None, f"PowerShell не ответил за {POWERSHELL_TIMEOUT} с"
-    except OSError as exc:
-        return None, f"PowerShell не запустился: {exc.__class__.__name__}"
-    out = (proc.stdout or "").strip()
-    if proc.returncode != 0 or not out:
-        err = (proc.stderr or "").strip().splitlines()
-        tail = err[-1][:200] if err else "без текста ошибки"
-        return None, f"команда не сработала: {tail}"
-    # Ответ может прийти несколькими строками, если PowerShell что-то дописал.
-    last = out.splitlines()[-1]
-    try:
-        import json
+    # 3. Спрашиваем систему.
+    status, signer = _ask_system(target)
+    name = STATUS_NAMES.get(status, "неизвестный статус")
 
-        data = json.loads(last)
-    except ValueError:
-        return None, f"ответ не разобран: {last[:120]}"
-    if not isinstance(data, dict) or "Value" not in data:
-        return None, f"в ответе нет статуса: {last[:120]}"
-    return data, ""
+    # 4. Система не ответила. Это «не знаю», а не «плохая подпись».
+    if status == STATUS_UNREADABLE:
+        return SignatureResult(status, False, "",
+                               "проверка не удалась: систему не удалось "
+                               "спросить. Запускать нельзя — но подпись "
+                               "плохой не названа: её никто не смотрел",
+                               str(target), name, checked=False)
 
+    # 5. Статус, который запускать не разрешает.
+    if not STATUS_ALLows.get(status, False):
+        return SignatureResult(status, False, signer,
+                               f"подпись плохая: {name}. Запускать нельзя",
+                               str(target), name, checked=True)
 
-def check_signature(path: Path, expected: str = "") -> SignatureResult:
-    """Проверить подпись файла.
+    # 6. Подпись настоящая. Осталось сверить, кто подписал.
+    if not signer_matches(signer, expected_signer):
+        return SignatureResult(
+            status, False, signer,
+            f"подпись настоящая, но подписал {signer}, а ждали "
+            f"{expected_signer}. Установка не идёт дальше",
+            str(target), name, checked=True)
 
-    Ожидаемое имя пустым быть не должно: тогда сверять не с чем, и результат
-    честно говорит «проверять нечего», а не сходит с рук. Отличать эти два
-    случая обязательно — иначе вкладка напишет «подпись проверена», не
-    сверив ничего.
-    """
-    path = Path(path)
-    result = SignatureResult(path=str(path), expected=str(expected or "").strip())
-    if not path.is_file():
-        result.detail = "файла нет — проверять нечего"
-        return result
-    if not result.expected:
-        result.detail = ("имя ожидаемого подписанта не задано в реестре — "
-                         "проверять не с чем, и сказать «подпись верна» нельзя")
-        return result
-
-    data, error = _run_powershell(path)
-    if data is None:
-        # Сбой команды — это «не знаю», а не «не подходит». Путать нельзя.
-        result.checked = False
-        result.status = STATUS_UNKNOWN_ERROR
-        result.status_text = STATUS_NAMES[STATUS_UNKNOWN_ERROR]
-        result.detail = error
-        return result
-
-    try:
-        result.status = int(data.get("Value"))
-    except (TypeError, ValueError):
-        result.detail = f"в ответе не число: {data.get('Value')!r}"
-        return result
-    result.checked = True
-    result.status_text = str(data.get("Status") or "")
-    result.signer = str(data.get("CN") or "").strip()
-    result.subject = str(data.get("Subject") or "").strip()
-    result.issuer = str(data.get("Issuer") or "").strip()
-
-    if result.status != STATUS_VALID:
-        result.detail = (f"{STATUS_NAMES.get(result.status, 'неизвестный статус')} "
-                        f"(Windows сказала {result.status_text})")
-        return result
-
-    if not result.signer:
-        result.detail = "подпись действительна, но имя подписанта получить не удалось"
-        return result
-
-    # Сверка идёт по полному Subject: у cmd.exe имя Microsoft Corporation
-    # лежит в поле O=, а в поле CN там Microsoft Windows.
-    if signer_matches(result.subject or result.signer, result.expected):
-        result.detail = f"подпись действительна, подписал {result.signer}"
-        return result
-
-    # Самое важное сообщение в модуле: файл подписан по-настоящему, но не тем,
-    # кем мы ожидали. Молчаливый отказ здесь выглядел бы как «подпись плохая».
-    result.detail = (f"подпись действительна, но подписал {result.signer}, "
-                     f"а ожидали {result.expected}")
-    return result
+    return SignatureResult(status, True, signer,
+                           f"подпись настоящая, подписал {signer}",
+                           str(target), name, checked=True)
 
 
 def describe(result: SignatureResult) -> str:
-    """Строка для показа человеку."""
-    if not result.path:
-        return "проверять нечего"
-    if result.detail:
-        return result.detail
+    """Пересказывает результат человеку.
+
+    Отдельная функция, а не готовый `detail`: движок показывает это в
+    карточке рядом с тем, кого ждали и кто подписал на самом деле. Одной
+    строкой «отказ» человек ничего не поймёт, а одной строкой
+    «подписал OpenJS Foundation, а ждали Node.js Foundation» поймёт всё.
+
+    Порядок слов неслучаен: сначала что случилось, потом кто подписал,
+    потом кого ждали.
+    """
+    if not result.checked:
+        # Проверки не было. Обязательно сказать это прямо: иначе
+        # «не проверено» читается как «проверено и плохо».
+        return (f"Проверка не выполнялась: {result.detail}. "
+                f"Ничего не сказано о подписи.")
     if result.verified:
-        return f"подпись действительна, подписал {result.signer}"
-    return STATUS_NAMES.get(result.status, "неизвестный статус")
+        return f"Подпись настоящая. {result.detail}. Запускать можно."
+    return (f"Запускать нельзя. {result.detail}.")
 
 
-def powershell_available() -> tuple[bool, str]:
-    """Есть ли PowerShell. Проверяется один раз и кэшируется вызывающим."""
-    try:
-        proc = subprocess.run(
-            ["powershell", "-NoLogo", "-NoProfile", "-Command",
-             "$PSVersionTable.PSVersion.Major"],
-            capture_output=True, text=True, encoding="utf-8",
-            errors="replace", timeout=POWERSHELL_TIMEOUT,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return False, f"запустить не удалось: {exc.__class__.__name__}"
-    if proc.returncode != 0:
-        return False, "PowerShell есть, но не отвечает"
-    major = (proc.stdout or "").strip().splitlines()
-    return True, f"PowerShell {major[0] if major else '?'}"
+def verify_signature(path: str | Path,
+                     expected_signer: str | None = None) -> dict:
+    """Проверяет подпись файла и сверяет подписанта с ожидаемым.
 
+    Возвращает словарь:
+        status     число из набора STATUS_*, либо STATUS_UNREADABLE
+        name       подпись как её показывают человеку
+        signer     кто подписал
+        expected   кого ждали
+        verdict    ok | отказ | нечем
+        detail     объяснение человеческим языком
 
-#: Имя издателя из манифеста winget и имя подписанта — разные вещи. Регулярка
-#: используется, чтобы убрать из полного имени только CN: в Subject лежит
-#: «CN=OpenJS Foundation, O=OpenJS Foundation, L=..., C=US», а нужно имя.
-CN_RE = re.compile(r"(?:^|,)\s*CN\s*=\s*(?P<name>[^,]+)")
+    Три вердикта, и они не одно и то же:
+        ok      подпись действительна и подписант сошёлся
+        отказ   подпись настоящая, но подписал не тот — установка не идёт
+        нечем   сверять нечем: подписи нет либо ожидание не задано
+    """
+    out = {"status": STATUS_UNREADABLE, "name": "", "signer": "",
+           "expected": expected_signer or "", "verdict": "нечем",
+           "detail": "", "file": str(path)}
 
+    target = Path(path)
+    if not target.is_file():
+        out["detail"] = f"файла нет: {target}"
+        return out
 
-def subject_to_common_name(subject: str) -> str:
-    """Из полного Subject взять только CN. На случай строк извне."""
-    match = CN_RE.search(str(subject or ""))
-    return match.group("name").strip() if match else ""
+    status, signer = _ask_system(target)
+    out["status"] = status
+    out["signer"] = signer
+    out["name"] = STATUS_NAMES.get(status, "неизвестный статус")
+
+    if status == STATUS_UNREADABLE:
+        out["detail"] = "систему не удалось спросить — проверить нечем"
+        return out
+    if status != STATUS_VALID:
+        # Подпись недействительна. Это «нечем», а не «отказ»: файлом,
+        # возможно, никто не подписывал, и виноват не подписант.
+        out["detail"] = f"{out['name']}. Сверять подписанта бессмысленно."
+        return out
+    if not signer_matches(signer, expected_signer):
+        if not _tokens(expected_signer):
+            out["detail"] = ("подпись действительна, сверять не с чем: "
+                             "ожидаемый подписант не задан")
+        else:
+            out["verdict"] = "отказ"
+            out["detail"] = (f"подпись действительна, но подписал {signer}, "
+                             f"а ждали {expected_signer}. Установка не идёт "
+                             f"дальше.")
+        return out
+
+    out["verdict"] = "ok"
+    out["detail"] = f"подпись действительна, подписал {signer}"
+    return out
