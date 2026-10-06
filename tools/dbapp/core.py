@@ -233,6 +233,46 @@ INSTRUCTION_TARGETS = (
     "инструкции/МCP-серверы.md",
 )
 
+#: Где программа хранит файлы, которые копируются в корень новой базы.
+#:
+#: Раздел 16 плана разбирает корень программы по папкам: документы в
+#: `документы/`, реестры в `данные/`. Имена файлов **в созданной базе**
+#: при этом прежние — `КАРТА-БАЗЫ.md` лежит в корне базы и должен лежать
+#: там же, иначе `config/opencode.jsonc` начнёт указывать в пустоту.
+#: Поэтому у программы свой путь, у базы свой, и путать их нельзя.
+PROGRAM_FILES = {
+    "ОБРАЗЕЦ-БАЗЫ.md": ("документы",),
+    "КАРТА-БАЗЫ.md": ("документы",),
+    "ПРАВИЛА-ИИ.md": ("документы",),
+    "THIRD-PARTY-NOTICES.md": ("документы",),
+    "mcp-registry.json": ("данные",),
+    "skills-index.json": ("данные",),
+}
+
+
+def program_file(name: str, root: Path | None = None) -> Path:
+    """Путь к файлу программы с учётом разобранного корня.
+
+    Сначала новое место, потом корень как запасной. Обратная
+    совместимость здесь не для красоты: программа обязана работать и с
+    папкой, где перенос ещё не сделан. Иначе проверки в тестах, где
+    образец программы собирается на лету, сломались бы молча — а это
+    ровно тот класс поломок, который §16.6 называет главной опасностью.
+
+    Если нет ни одного из двух, возвращается новый путь: чтобы ошибка
+    называла то место, где файл должен лежать.
+    """
+    base = Path(root) if root is not None else program_root()
+    parts = PROGRAM_FILES.get(name)
+    if parts:
+        nested = base.joinpath(*parts, name)
+        if nested.is_file():
+            return nested
+    flat = base / name
+    if flat.is_file():
+        return flat
+    return base.joinpath(*parts, name) if parts else flat
+
 
 def find_config_source(base: Path) -> Path | None:
     """Ищет папку config с плагином. Возвращает None, если её нет."""
@@ -1983,7 +2023,7 @@ def _copy_skills(source: Path, target: Path) -> list[str]:
                 continue
         shipped_files[name] = want_f
 
-    index_src = source / "skills-index.json"
+    index_src = program_file("skills-index.json", source)
     index_dst = target / "skills-index.json"
     want_index = ""
     if index_src.is_file():
@@ -2017,7 +2057,7 @@ def _copy_skills(source: Path, target: Path) -> list[str]:
             continue
         shutil.copytree(item, dest, ignore=shutil.ignore_patterns("__pycache__"))
         copied.append(f"скилл {sub}")
-    index_src = source / "skills-index.json"
+    index_src = program_file("skills-index.json", source)
     if index_src.is_file():
         index_dst = target / "skills-index.json"
         if not index_dst.exists():
@@ -2145,7 +2185,7 @@ def _copy_template(template: Path, target: Path) -> list[str]:
     """Переносит образец базы, не перезаписывая существующее."""
     copied: list[str] = []
     for name in REQUIRED_FILES:
-        src = template / name
+        src = program_file(name, template)
         if src.is_file():
             shutil.copy2(src, target / name)
             copied.append(name)
@@ -2153,7 +2193,7 @@ def _copy_template(template: Path, target: Path) -> list[str]:
     # Файлы-навигаторы: карта базы и правила поведения. Без них нейросеть
     # не знает об устройстве базы и не пользуется её разделами.
     for name in NAV_FILES:
-        src = template / name
+        src = program_file(name, template)
         if src.is_file() and not (target / name).exists():
             shutil.copy2(src, target / name)
             copied.append(name)
@@ -2522,7 +2562,7 @@ def refresh_skills(base: Path) -> list[str]:
 
     # Индекс — часть программы, обновляется всегда: из него нейросеть
     # узнаёт, когда какой скилл применять.
-    src_index = program_root() / "skills-index.json"
+    src_index = program_file("skills-index.json")
     dst_index = base / "skills-index.json"
     if src_index.is_file():
         try:
@@ -2553,7 +2593,7 @@ def refresh_skills(base: Path) -> list[str]:
 
     # Реестр MCP-серверов — та же история, едет вместе с базой.
     for name in ("mcp-registry.json", "THIRD-PARTY-NOTICES.md"):
-        src_file = program_root() / name
+        src_file = program_file(name)
         dst_file = base / name
         if not src_file.is_file():
             continue
@@ -3439,16 +3479,30 @@ def ensure_data_bases_folder() -> Path:
     return folder
 
 
+#: Отметка о первом запуске. В корне программы её больше нет: раздел 16
+#: отправил служебное в `служебное/`. Папку приходится создавать при
+#: записи — иначе отметка молча не сохранится и окно первого запуска
+#: покажут второй раз.
+FIRST_RUN_MARKER = ("служебное", ".first-run-done")
+
+
 def first_run_done() -> bool:
-    """True, если окно первого запуска уже показывали."""
-    marker = program_root() / ".first-run-done"
-    return marker.is_file()
+    """True, если окно первого запуска уже показывали.
+
+    Второй путь — запасной: у копии программы, где перенос ещё не сделан,
+    отметка лежит в корне. Без него окно первого запуска показывалось бы
+    заново, и это выглядело бы как ошибка.
+    """
+    if program_root().joinpath(*FIRST_RUN_MARKER).is_file():
+        return True
+    return (program_root() / ".first-run-done").is_file()
 
 
 def mark_first_run_done() -> None:
     """Запоминает, что первый запуск состоялся."""
-    marker = program_root() / ".first-run-done"
+    marker = program_root().joinpath(*FIRST_RUN_MARKER)
     try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text("done", encoding="utf-8")
     except OSError:
         pass

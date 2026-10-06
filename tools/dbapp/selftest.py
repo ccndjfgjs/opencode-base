@@ -2103,7 +2103,7 @@ def main() -> int:
         )
         _our_dirs = ("tools/dbapp", "tools/проверки", "tools/agents",
                      "config", "документы", "skills")
-        _our_files = ("ПРАВИЛА-ИИ.md", "КАРТА-БАЗЫ.md")
+        _our_files = ("документы/ПРАВИЛА-ИИ.md", "документы/КАРТА-БАЗЫ.md")
         _cjk_dirty: list[str] = []
         _cjk_scanned = 0
         _seen_paths: set[Path] = set()
@@ -3029,7 +3029,12 @@ def main() -> int:
           f"личных записей NCP в конструкторе нет: {len(_priv)}")
     check((_pl / "_О-ПАПКЕ.md").is_file(),
           "в конструкторе есть папка личное с пояснением, а не записями")
-    check((_kit / "ОБРАЗЕЦ-БАЗЫ.md").is_file(),
+    # Путь берёмся через core.PROGRAM_FILES: у программы
+    # свой путь отличается от пути в базе. Прямое проверка
+    # ище смотрела в корень, и после реструктури оказалась красной.
+    _ob = core.PROGRAM_FILES.get("ОБРАЗЕЦ-БАЗЫ.md", ("",))
+    check(any((_kit / sub / "ОБРАЗЕЦ-БАЗЫ.md").is_file()
+              for sub in _ob),
           "заготовка ОБРАЗЕЦ-БАЗЫ.md на месте — её создавать база должна")
 
     # 2. Копирование личное пропускает, а справочное везёт.
@@ -3650,7 +3655,7 @@ def main() -> int:
     # настоящими путями. Плейсхолдер в настройках недопустим: мост не
     # запустится.
     check("{PROGRAM}" in (json.loads(
-              (core.program_root() / "mcp-registry.json").read_text(
+              core.program_file("mcp-registry.json").read_text(
                   encoding="utf-8"))["servers"][-1].get("connection", {})
               .get("command", [""])[-1]),
           "в реестре команда записана плейсхолдером {PROGRAM}")
@@ -4239,7 +4244,8 @@ def main() -> int:
             _ms = Path(_bm)
             shutil.copytree(_src_sk / "skills", _ms / "skills",
                             ignore=shutil.ignore_patterns("__pycache__"))
-            shutil.copy2(_src_sk / "skills-index.json", _ms / "skills-index.json")
+            shutil.copy2(core.program_file("skills-index.json", _src_sk),
+                            _ms / "skills-index.json")
             _nw = _ms / "skills" / "новый-тестовый"
             _nw.mkdir()
             (_nw / "SKILL.md").write_text("# тест\n", encoding="utf-8")
@@ -4872,7 +4878,7 @@ def main() -> int:
               "раздел «нужно мостам» в порядке")
         _fake = Path(tempfile.mkdtemp(prefix="programs-nobridge-"))
         try:
-            _reg_src = _base / mcp_registry.REGISTRY_NAME
+            _reg_src = mcp_registry.registry_path(_base)
             _raw = json.loads(_reg_src.read_text(encoding="utf-8"))
             _raw.pop("bridge_requirements", None)
             (_fake / mcp_registry.REGISTRY_NAME).write_text(
@@ -5488,7 +5494,7 @@ def main() -> int:
     _prog = core.program_root()
     _sub_path = "tools/thirdparty/obs-mcp"
     _sub_dir = _prog.joinpath(*_sub_path.split("/"))
-    _notices = _prog / "THIRD-PARTY-NOTICES.md"
+    _notices = core.program_file("THIRD-PARTY-NOTICES.md")
     _notices_text = (_notices.read_text(encoding="utf-8", errors="ignore")
                      if _notices.is_file() else "")
 

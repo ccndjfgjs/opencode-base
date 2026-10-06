@@ -265,8 +265,23 @@ class Server:
 # ------------------------------------------------------------------ чтение
 
 
+#: Реестр уехал в `данные/` — это раздел 16 плана. Но в созданной базе он
+#: остался в корне: оттуда его читают `programs.py` и окно управления, и
+#: переносить его в базе незачем. Поэтому мест два, и порядок задан явно:
+#: сначала новое, потом старое. Пустой элемент означает «в корне».
+REGISTRY_FOLDERS = ("данные", "")
+
+
 def registry_path(base: Path) -> Path:
-    return Path(base) / REGISTRY_NAME
+    """Где лежит реестр: в новой папке программы или в корне базы."""
+    base = Path(base)
+    for part in REGISTRY_FOLDERS:
+        candidate = base.joinpath(part, REGISTRY_NAME)
+        if candidate.is_file():
+            return candidate
+    # Файла нет ни там, ни там. Возвращаем новое место, чтобы ошибка
+    # называла то место, где файл должен лежать, а не то, где он был.
+    return base.joinpath(REGISTRY_FOLDERS[0], REGISTRY_NAME)
 
 
 def load_registry(base: Path) -> dict:

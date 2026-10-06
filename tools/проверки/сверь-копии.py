@@ -51,8 +51,13 @@ REPO = Path(__file__).resolve().parent.parent.parent
 PROGRAM = REPO / "tools" / "dbapp" / "core.py"
 
 #: Что определяет программу. Порядок — как в описании.
+#: Раздел 16 плана разобрал корень, поэтому реестры и документы названы
+#: папками: пока в списке были пути от корня, перенос тихо выключил бы их
+#: из сверки, и она продолжала бы говорить «совпадают», не проверяя
+#: ничего. Папки `служебное/` здесь нет намеренно: `.first-run-done`
+#: создаёт работа программы, и на двух машинах он законно разный.
 INCLUDE = ("tools/dbapp", "tools/hooks", "skills", "инструкции", "config",
-           "mcp-registry.json", "skills-index.json", "README.md")
+           "документы", "отчёты", "данные", ".github")
 
 #: Папки и файлы внутри INCLUDE, которые создаёт работа программы, а не
 #: её исходники. Они в .gitignore, и сверять их между двумя папками
@@ -163,8 +168,7 @@ def main() -> int:
               "сверка идёт только по диску")
     # Только те же области, что и INCLUDE. Файл вне их не сверяется:
     # он не попадёт в список папки программы и был бы виден вечно.
-    scopes = tuple(INCLUDE) + tuple(
-        p for p in ("skills", "инструкции", "config") if p in INCLUDE)
+    scopes = tuple(INCLUDE)
     for rel in sorted(tracked_here):
         if rel not in b and (rel.startswith(scopes) or is_skipped(rel)):
             b[rel] = REPO / rel
