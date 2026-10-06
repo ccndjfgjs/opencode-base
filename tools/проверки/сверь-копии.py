@@ -113,15 +113,35 @@ def tracked(repo: Path) -> set[str]:
     """Файлы под контролем версий. Если git недоступен — пусто, сверка
     перейдёт на диск и честно скажет об этом в выводе."""
     try:
-        p = subprocess.run(["git", "-C", str(repo), "ls-files", "--"],
-                           capture_output=True, text=True, encoding="utf-8",
-                           errors="replace", timeout=120)
+        # Два флага, и оба нужны. `core.quotepath=false` — иначе русские
+        # пути приходят восьмеричными кавычками и не совпадают с диском
+        # никогда: проверка сравнивает мусор с оригиналом и выглядит
+        # рабочей. `-z` — разделитель NUL, а не перевод строки: имя файла
+        # с переводом строки построчное чтение молча разрезает на два
+        # несуществующих пути, и обе половины уезжают в «нет на диске».
+        p = subprocess.run(
+            ["git", "-C", str(repo), "-c", "core.quotepath=false",
+             "ls-files", "-z", "--"],
+            capture_output=True, timeout=120)
     except (OSError, subprocess.SubprocessError):
         return set()
     if p.returncode != 0:
         return set()
-    return {ln.strip().replace("\\", "/") for ln in p.stdout.splitlines()
-            if ln.strip()}
+    out: set[str] = set()
+    skipped: list[str] = []
+    for raw in p.stdout.split(b"\x00"):
+        if not raw:
+            continue
+        try:
+            out.add(raw.decode("utf-8", "replace").replace("\\", "/"))
+        except Exception:
+            # Имя оказалось не в UTF-8: пропускаем и говорим, сколько
+            # таких, иначе потеря файла выглядит как «всё на месте».
+            skipped.append(raw.decode("utf-8", "replace"))
+    if skipped:
+        print(f"  сверка копий: не удалось разобрать {len(skipped)} путей "
+              f"git, первый: {skipped[0][:60]!r}")
+    return out
 
 
 def files_of(root: Path) -> dict[str, Path]:

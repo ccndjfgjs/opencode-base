@@ -18,7 +18,9 @@
 
 from __future__ import annotations
 
+import glob
 import json
+import datetime
 import os
 import re
 import shutil
@@ -72,6 +74,28 @@ class Requirement:
 
 
 @dataclass
+class PluginSpec:
+    """Плагин чужой программы, который вкладка умеет докачать сама.
+
+    Отдельный блок, а не поле в `ProgramInstall`, потому что это не про
+    установку самой программы: OBS стоит, а не хватает одной её части.
+    Смешивать их значило бы получить две разные кнопки из одного описания.
+
+    `finder` — короткое имя, по которому код находит папку программы.
+    Не имя программы и не путь: путь меняется при переносе, а программу
+    вкладке называет реестр. На «obs» код знает, где папка OBS; на
+    незнакомое имя кнопки не будет, и карточка это скажет.
+    """
+
+    finder: str = ""
+    name: str = ""
+    button: str = ""
+    hint: str = ""
+    unavailable: str = ""
+    fallback: str = ""      # запасная дорога разрешена в реестре?
+
+
+@dataclass
 class ProgramInstall:
     """Как поставить программу, нужную серверу, и где вкладка должна остановиться.
 
@@ -113,7 +137,24 @@ class ProgramInstall:
     bridge: str = ""              # bundled — мост уже лежит внутри программы
     instructions: str = ""
     checked: str = ""             # когда сверяли с winget, а не когда ставили
+    # Что известно о версии НА ЭТОЙ МАШИНЕ. Поле catalog_version — версия
+    # в каталоге winget, это другое; здесь то, что реально стоит.
+    installed_version: str = ""
+    known_good: list[str] = field(default_factory=list)
+    version_measured: str = ""    # когда сняли версию
+    bridge_checked: bool = False  # мост проверен живым запросом
+    version_note: str = ""        # что именно измерено и чем
+    #: Какие версии стояли ДО последнего обновления. Откат строит команду
+    #: `winget install --version` из этого списка, и winget сам эти версии
+    #: не помнит — он знает только текущую. Поэтому список пополняется
+    #: ДО запуска обновления, а не после: после обновления прежняя версия
+    #: уже никому не известна. Пустой список означает, что откатываться
+    #: нечем, и кнопка обязана быть выключена с этой причиной, а не
+    #: спрятана: человек, только что обновившийся и сломавший мост, не
+    #: должен гадать, появится ли возврат.
+    previous_versions: list[str] = field(default_factory=list)
     alternatives: list[dict] = field(default_factory=list)
+    plugin: PluginSpec | None = None
 
     @property
     def can_install(self) -> bool:
@@ -254,7 +295,17 @@ class Server:
             bridge=str(raw.get("bridge") or ""),
             instructions=str(raw.get("instructions") or ""),
             checked=str(raw.get("checked") or ""),
+            installed_version=str(raw.get("installed_version") or ""),
+            known_good=[str(v).strip() for v in (raw.get("known_good") or [])
+                        if str(v).strip()],
+            version_measured=str(raw.get("version_measured") or ""),
+            bridge_checked=bool(raw.get("bridge_checked")),
+            version_note=str(raw.get("version_note") or ""),
+            previous_versions=[str(v).strip()
+                                for v in (raw.get("previous_versions") or [])
+                                if str(v).strip()],
             alternatives=[a for a in (raw.get("alternatives") or []) if isinstance(a, dict)],
+            plugin=_plugin_spec(raw.get("plugin")),
         )
 
     @property
@@ -292,6 +343,107 @@ def load_registry(base: Path) -> dict:
         return {}
     return data if isinstance(data, dict) else {}
 
+#: Сколько прежних версий держим. Пять — с запасом на несколько обновлений
+#: подряд, но без бесконечного роста файла: список не архив, а точки отката.
+#: Сама константа забыта была при первой записи версии, и `NameError`
+#: вылез на первой же записи — `py_compile` на такое не смотрит, он не
+#: проверяет имена. Поймал живой вызов на копии реестра.
+HISTORY_LIMIT = 5
+
+
+def save_registry(base: Path, data: dict) -> tuple[bool, str]:
+    """Записать реестр целиком. Атомарно, иначе обрыв оставил бы битый файл.
+
+    Сначала временный файл **рядом** с настоящим, потом `os.replace`.
+    Замена атомарна только внутри одной папки: временный файл в
+    `TEMP` на другой файловой системе заменой не станет, и при обрыве
+    останется половина. Отказ возвращается текстом, а не молчанием —
+    реестр это данные пользователя, и молчаливая потеря хуже отказа.
+
+    Формат записи измерен: `ensure_ascii=False, indent=2` и перевод
+    строки в конце воспроизводят нынешний файл побайтово, поэтому правка
+    одного поля не переписывает остальное форматирование.
+    """
+    path = registry_path(base)
+    body = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp = path.with_name(path.name + ".новое")
+        temp.write_text(body, encoding="utf-8")
+        os.replace(temp, path)
+    except OSError as exc:
+        try:
+            path.with_name(path.name + ".новое").unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False, f"не удалось записать реестр: {exc}"
+    return True, f"реестр записан: {path}"
+
+
+def _program_block(data: dict, server_id: str) -> dict | None:
+    """Блок `program_install` сервера. None, если сервера или блока нет."""
+    for server in data.get("servers") or []:
+        if not isinstance(server, dict):
+            continue
+        if str(server.get("id") or "") != str(server_id):
+            continue
+        block = server.get("program_install")
+        return block if isinstance(block, dict) else {}
+    return None
+
+
+def remember_version(base: Path, server_id: str, version: str) -> tuple[bool, str]:
+    """Запомнить версию, которая стоит сейчас, ДО обновления.
+
+    Вызывать надо до запуска `winget upgrade`. После обновления прежняя
+    версия не известна никому: winget её не хранит, а мы её ещё не
+    записали. Отсюда и порядок, и проверка порядка в селфтесте.
+
+    Дубли не копим: повторное обновление той же версии не должно
+    превращать список в ten одинаковых строк.
+    """
+    want = str(version or "").strip()
+    if not want:
+        return False, "нечего запоминать: версия не названа"
+    data = load_registry(base)
+    if not data:
+        return False, "реестр не прочитан — записывать некуда"
+    block = _program_block(data, server_id)
+    if block is None:
+        return False, f"сервера {server_id} нет в реестре"
+    history = [str(v).strip() for v in (block.get("previous_versions") or [])
+               if str(v).strip()]
+    history = [v for v in history if v != want]
+    history.insert(0, want)
+    del history[HISTORY_LIMIT:]
+    block["previous_versions"] = history
+    return save_registry(base, data)
+
+
+def set_installed_version(base: Path, server_id: str, version: str,
+                          note: str = "") -> tuple[bool, str]:
+    """Записать, какая версия стоит после обновления, — и чем это снято.
+
+    Отдельно от `remember_version` намеренно: первое пишет историю ДО
+    обновления, второе — состояние ПОСЛЕ. Перепутать их — значит либо
+    потерять точку отката, либо записать в историю версию, которая
+    никогда не стояла.
+    """
+    want = str(version or "").strip()
+    if not want:
+        return False, "нечего записывать: версия не названа"
+    data = load_registry(base)
+    if not data:
+        return False, "реестр не прочитан — записывать некуда"
+    block = _program_block(data, server_id)
+    if block is None:
+        return False, f"сервера {server_id} нет в реестре"
+    block["installed_version"] = want
+    block["version_measured"] = datetime.date.today().isoformat()
+    block["version_note"] = str(note or "снято живьём через winget list")
+    return save_registry(base, data)
+
+
 
 # --------------------------------------------------------------- проверки
 
@@ -320,8 +472,44 @@ def _run(command: str, args: list[str]) -> tuple[bool, str]:
     return done.returncode == 0, out
 
 
+def _find_by_pattern(pattern: str) -> str:
+    """Ищет файл по шаблону пути и берёт самую новую версию.
+
+    Только абсолютные шаблоны. Относительный означал бы угадывание
+    («а где обычно ставят»), а угадывание молчит: не нашлось не там — и
+    человек увидел «не установлена» про установленное.
+
+    Версия выбирается по числам в имени папки, в которой лежит файл:
+    `Blender 5.2` даёт (5, 2). Если чисел нет, порядок не меняется и
+    берётся первый найденный — и это сказано здесь, потому что выбор
+    «какая версия новее» по папке без номера иначе выглядел бы
+    определённым.
+    """
+    if not re.match(r"^[A-Za-z]:[\\/]", pattern):
+        return ""
+    hits = [h for h in glob.glob(pattern) if Path(h).is_file()]
+    if not hits:
+        return ""
+    best = max(hits, key=lambda h: _version_tuple(Path(h).parent.name))
+    return str(Path(best).resolve())
+
+
 def find_program(name: str) -> str:
-    """Ищет исполняемый файл: сначала PATH, потом ветка реестра Windows."""
+    """Ищет исполняемый файл: PATH, ветка реестра Windows, шаблон пути.
+
+    Шаблон нужен программам, которые кладут себя в папку с номером
+    версии: `Blender 5.2`, `OBS 31`. Имя папки меняется при каждом
+    обновлении, поэтому жёсткий путь протухает молча, а отсутствие пути
+    вовсе выдаёт установленную программу за отсутствующую — и карточка
+    предлагает поставить то, что уже стоит.
+    """
+    if any(ch in name for ch in "*?"):
+        by_pattern = _find_by_pattern(name)
+        if by_pattern:
+            return by_pattern
+        # Шаблон не нашёлся — не значит, что программы нет: она может
+        # стоять в PATH, а в Program Files быть другой версии.
+        return shutil.which(Path(name).name) or ""
     found = shutil.which(name)
     if found:
         return found
@@ -350,6 +538,59 @@ def _version_tuple(text: str) -> tuple[int, ...]:
     return tuple(int(part) for part in match.group(1).split("."))
 
 
+def _plugin_spec(raw) -> PluginSpec | None:
+    """Разобрать блок плагина. Нет блока или он не объект — плагина нет.
+
+    Молчать об этом нельзя только в одном случае: если блок есть, но
+    сломан. Пустой блок — обычное «плагина не описано», и карточка молчит
+    правильно.
+    """
+    if not isinstance(raw, dict):
+        return None
+    return PluginSpec(
+        finder=str(raw.get("finder") or "").strip(),
+        name=str(raw.get("name") or "").strip(),
+        button=str(raw.get("button") or "").strip(),
+        hint=str(raw.get("hint") or "").strip(),
+        unavailable=str(raw.get("unavailable") or "").strip(),
+        fallback=str(raw.get("fallback") or "").strip(),
+    )
+
+
+def _check_obs_websocket(name: str) -> tuple[bool, str]:
+    """Живая проверка плагина obs-websocket: библиотека на месте или нет.
+
+    Импорт внутри функции намеренно. `bridges` — тяжёлый модуль про
+    OBS и эмуляторы, а читать реестр можно и без него; тянуть мосты на
+    этапе чтения незачем.
+    """
+    import bridges  # noqa: PLC0415 - тяжёлый модуль, нужен в одном месте
+
+    present, _can_write, note = bridges.obs_plugin_state()
+    return present, note
+
+
+def _check_blender_addon(name: str) -> tuple[bool, str]:
+    """Живая проверка аддона Blender: файл на месте или нет.
+
+    Возвращает текст и про «осталось включить руками», потому что файл
+    и работающий аддон — разные вещи. Импорт внутри функции: модуль
+    аддона тянет за собой вещи тяжелее, чем чтение реестра, и на этапе
+    чтения он не нужен.
+    """
+    import blender_addon  # noqa: PLC0415 - тяжёлый модуль, нужен здесь
+
+    present, _can_write, note = blender_addon.addon_state()
+    return present, note
+
+
+#: Чем проверяется требование типа `plugin`. Ключ — то, что написано в
+#: реестре в поле `check`. Это не список программ вкладки: программу
+#: называет реестр, и без записи о плагине требования не будет.
+_PLUGIN_CHECKS = {"obs-websocket": _check_obs_websocket,
+                   "blender-mcp-addon": _check_blender_addon}
+
+
 def check_requirement(spec: dict) -> Requirement:
     """Проверяет одно требование и возвращает его с результатом."""
     req = Requirement(
@@ -371,6 +612,21 @@ def check_requirement(spec: dict) -> Requirement:
         # подписка, установленное приложение. Говорим прямо, а не угадываем.
         req.ok = False
         req.detail = "проверяется вручную"
+        return req
+
+    if req.kind == "plugin":
+        # Плагин проверяется по-настоящему: папку установщик создаёт
+        # всегда, даже когда плагин не выбран, и считать папку плагином —
+        # значит вечно говорить «готово». Типа `manual` здесь быть не
+        # должно: программа умеет и проверить, и починить, а «вручную»
+        # скрыло бы и поломку, и кнопку.
+        checker = _PLUGIN_CHECKS.get(req.value.strip().lower())
+        if checker is None:
+            req.ok = False
+            req.detail = (f"в коде нет проверки для плагина «{req.value}» — "
+                          f"состояние неизвестно, а не «есть»")
+            return req
+        req.ok, req.detail = checker(req.value)
         return req
 
     if req.kind == "program":

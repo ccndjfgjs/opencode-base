@@ -2,7 +2,8 @@
 """Обход блокировок для opencode — установка по выбору.
 
 Простыми словами: кладёт в папку настроек opencode переводчика
-(фасад на 127.0.0.1:17890), бесплатные списки SOCKS5 и VLESS-подписки,
+(фасад на своём порту, по умолчанию 17890 — порт задаётся
+в настройках), бесплатные списки SOCKS5 и VLESS-подписки,
 команду /обход и, по желанию, ярлык «OpenCode (обход)» с иконкой
 программы на рабочий стол. Пул узлов фасад обновляет сам раз в сутки
 с тех же источников. Глобальные переменные Windows не меняются:
@@ -107,6 +108,11 @@ CHANNEL_FALLBACK = "запасной"
 CHANNEL_DOWN = "не работает"
 
 MANIFEST = ".opencode-base-caps.json"
+
+#: Ключ манифеста с путём к папке программы. Из него стартер берёт, где
+#: лежит config/preferences.json — без этого пути рабочая копия стартера
+#: читала бы несуществующий файл и молча брала порт по умолчанию.
+BASE_KEY = "antiblock_base"
 
 
 def _read_manifest(dest: Path) -> dict:
@@ -326,6 +332,12 @@ def install_antiblock(
             errors.append(f"Ярлык не создался: {exc}.")
 
     manifest["antiblock_files"] = sorted(ours)
+    # Путь к папке программы кладём рядом со списком файлов: стартеры
+    # лежат в папке настроек opencode, а настройку читают из папки
+    # программы. Связь между этими двумя папками иначе неоткуда взять —
+    # подъёмом вверх от $PSScriptRoot до папки программы не дойти, они
+    # в разных деревьях.
+    manifest[BASE_KEY] = str(Path(base).resolve())
     try:
         _write_manifest(dest, manifest)
     except OSError as exc:
@@ -415,6 +427,7 @@ def remove_antiblock(
     if removed_links:
         say(f"Ярлыки с рабочего стола убраны в _previous-version/antiblock: {removed_links}.")
     manifest.pop("antiblock_files", None)
+    manifest.pop(BASE_KEY, None)
     manifest.pop("antiblock_shortcut", None)
     try:
         _write_manifest(dest, manifest)

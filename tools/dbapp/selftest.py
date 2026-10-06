@@ -12,6 +12,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import copy
+
 import shutil
 import sys
 import tempfile
@@ -19,13 +21,36 @@ import traceback
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+
+#: Папка модуля обязана попасть в путь ДО того, как начнут импортироваться
+#: соседние модули. При запуске файлом (`python tools/dbapp/selftest.py`)
+#: это происходит само, а при запуске через `-m` в sys.path[0] лежит
+#: текущая папка, и импорт падает с ModuleNotFoundError. Такая правка уже
+#: ломала штатный запуск: `import blender_addon` стоял выше этой строки, и
+#: команда из плана `python -m tools.dbapp.selftest` не работала ни в
+#: одной копии. Проверка порядка стоит в селфтесте отдельным пунктом.
 sys.path.insert(0, str(HERE))
 
 import android_studio  # noqa: E402
+import blender_addon  # noqa: E402
 import bridges  # noqa: E402
 import core  # noqa: E402
 import mcp_registry as _mcp_registry  # noqa: E402
 import ui  # noqa: E402
+
+#: Соседние модули селфтеста. Проверка ниже требует, чтобы все они
+#: импортировались ПОСЛЕ `sys.path.insert`, и это не педантизм: при
+#: запуске через `-m` в sys.path[0] лежит текущая папка, и импорт выше
+#: вставки падает с ModuleNotFoundError. Так уже ломалось: `import
+#: blender_addon` стоял на строке 18, а вставка была на 25, и команда
+#: `python -m tools.dbapp.selftest` не работала ни в одной копии. Прямой
+#: запуск файлом при этом продолжал работать, и поломка выглядела
+#: безобидно, пока её не увидел второй агент, обходивший запуск через
+#: PYTHONPATH.
+_SELFTEST_LOCAL_MODULES = (
+    "android_studio", "blender_addon", "bridges", "core", "mcp_registry",
+    "ui", "antiblock", "winget_install", "versions",
+)
 
 #: отчёт пишется и на экран, и в файл — в этой оболочке вывод теряется
 REPORT = HERE / "selftest-report.txt"
@@ -103,7 +128,8 @@ def _looks_ready(result) -> bool:
 
 def _free_port() -> int:
     """Свободный локальный порт — чтобы проверка не зависела от того,
-    запущен ли настоящий фасад на 17890 прямо сейчас."""
+    запущен ли настоящий фасад на том порту, который задан
+    в настройках."""
     import socket
 
     with socket.socket() as sock:
@@ -426,13 +452,37 @@ def main() -> int:
                       "у android-studio в реестре постоянный адрес сервера")
                 check("Bearer" not in json.dumps(_spec, ensure_ascii=False),
                       "токена студии в реестре нет")
+        # Типы требований перечислены здесь и в коде. Список растёт вместе
+        # с реестром, и это нормально: `plugin` проверяется по-настоящему
+        # (есть библиотека или нет), в отличие от `manual`, где программа
+        # честно говорит «не знаю, спроси человека».
+        _TYPES = ("command", "program", "manual", "plugin")
         for _spec in reg_data.get("servers") or []:
             _bad = [
                 r.get("what")
                 for r in (_spec.get("requires") or [])
-                if r.get("type") not in ("command", "program", "manual")
+                if r.get("type") not in _TYPES
             ]
             check(not _bad, f"у {_spec.get('id')} у всех требований проставлен тип: {_bad}")
+        _obs_types = [
+            r.get("type") for r in (next((s for s in reg_data["servers"]
+                                          if s.get("id") == "obs"), {})
+                                    .get("requires") or [])
+        ]
+        check("plugin" in _obs_types,
+              f"плагин заявлен требованием, а не заметкой: {_obs_types}")
+        _plug_spec = next((r for r in (next((s for s in reg_data["servers"]
+                                             if s.get("id") == "obs"), {})
+                                        .get("requires") or [])
+                           if r.get("type") == "plugin"), {})
+        check(bool(_plug_spec.get("blocks")),
+              "требование о плагине помечено blocks: без него сервер мёртв, "
+              "и «Включить» обязано быть недоступно")
+        check(not (next((s for s in reg_data["servers"]
+                         if s.get("id") == "obs"), {})
+                   .get("ready_here")),
+              "готовность obs выключена по факту: плагина нет, а запись "
+              "«работает, проверено вживую» была бы враньём")
         _servers = mcp_registry.load_servers(target)
         check(len(_servers) == len(reg_data.get("servers") or []),
               f"модуль загрузил серверов: {len(_servers)}")
@@ -2615,6 +2665,69 @@ def main() -> int:
     check(antiblock.port_error(antiblock.PORT_MAX) == "",
           "верхняя граница допустима")
 
+    # Окно: поле порта фасада и кнопка сохранения. Проверяем живым окном,
+    # а не поиском по исходнику: собранное поле доказывает, что элемент
+    # действительно появился, и не доказывает ничего, если его имя
+    # осталось только в тексте файла.
+    _pf_win = Path(tempfile.mkdtemp(prefix="selftest-abwin-"))
+    (_pf_win / "config").mkdir(parents=True, exist_ok=True)
+    _pf_win_prefs = _pf_win / "config" / "preferences.json"
+    _pf_win_prefs.write_text(json.dumps({"facade_port": 17891}),
+                             encoding="utf-8")
+    _base_saved = antiblock._program_base
+    antiblock._program_base = lambda: _pf_win
+    try:
+        _abtab = app_main.CapsTab()
+        check(hasattr(_abtab, "spin_ab_port"), "в окне есть поле порта фасада")
+        check(hasattr(_abtab, "btn_ab_save"), "и кнопка «Сохранить»")
+        check(callable(getattr(_abtab, "_save_ab_port", None)),
+              "и обработчик сохранения")
+        # Кнопка обязана быть связана с обработчиком. Остальные проверки
+        # зовут его напрямую и о связи кнопки ничего не говорят: снять
+        # connect — и все они останутся зелёными.
+        check(_abtab.btn_ab_save.receivers(_abtab.btn_ab_save.clicked) >= 1,
+              "кнопка «Сохранить» связана с обработчиком")
+        _spin_win = _abtab.spin_ab_port
+        check(_spin_win.minimum() == antiblock.PORT_MIN
+              and _spin_win.maximum() == antiblock.PORT_MAX,
+              f"поле не выпускает за {antiblock.PORT_MIN}-{antiblock.PORT_MAX}")
+        check(_spin_win.value() == 17891,
+              f"пользу берёт порт из настройки: {_spin_win.value()}")
+        check("127.0.0.1:17891" in _abtab.achecks["facade"].text(),
+              f"текст галочки собран из настройки: "
+              f"{_abtab.achecks['facade'].text()[:70]}")
+        # Занятый порт сохраняться не должен: иначе настройка всплывёт
+        # только при следующем запуске обхода.
+        import socket as _sock_w  # noqa: PLC0415 — как _free_port
+
+        _p_busy_win = _free_port()
+        _srv_w = _sock_w.socket()
+        _srv_w.setsockopt(_sock_w.SOL_SOCKET, _sock_w.SO_REUSEADDR, 1)
+        _srv_w.bind((antiblock.FACADE_HOST, _p_busy_win))
+        _srv_w.listen(1)
+        try:
+            _log_w = _abtab.log.toPlainText()
+            _spin_win.setValue(_p_busy_win)
+            _abtab._save_ab_port()
+            _said_w = _abtab.log.toPlainText()[len(_log_w):]
+            check("занят" in _said_w,
+                  f"занятый порт уходит в лог: {_said_w.strip()[:70]}")
+            check(json.loads(_pf_win_prefs.read_text(
+                encoding="utf-8")).get("facade_port") == 17891,
+                  "и в файл настроек не попадает")
+        finally:
+            _srv_w.close()
+        _p_ok_win = _free_port()
+        _spin_win.setValue(_p_ok_win)
+        _abtab._save_ab_port()
+        check(json.loads(_pf_win_prefs.read_text(
+            encoding="utf-8")).get("facade_port") == _p_ok_win,
+            f"свободный порт сохраняется кнопкой: {_p_ok_win}")
+        check(_spin_win.value() == _p_ok_win,
+              "и поле остаётся на сохранённом")
+    finally:
+        antiblock._program_base = _base_saved
+
     # Строка состояния обхода. Проверяется на настоящих слушающих сокетах:
     # закрытый локальный порт падает с отказом сразу, а не по таймауту,
     # поэтому поднимки мгновенные и проверка не ждёт.
@@ -2663,6 +2776,49 @@ def main() -> int:
         _srv_f.close()
     check(antiblock.XRAY_PORT == 10900,
           f"порт своего канала тот же, что в стартерах: {antiblock.XRAY_PORT}")
+
+    # Занятость порта и подбор свободного.
+    import socket as _sock2  # noqa: PLC0415 — как в _free_port
+
+    def _listen_ab2(port: int):
+        srv = _sock2.socket()
+        srv.setsockopt(_sock2.SOL_SOCKET, _sock2.SO_REUSEADDR, 1)
+        srv.bind((antiblock.FACADE_HOST, port))
+        srv.listen(1)
+        return srv
+
+    _p_free = _free_port()
+    check(antiblock.suggest_free_port(_p_free) == _p_free,
+          "свободный порт предлагается как есть")
+    _p_busy = _free_port()
+    _srv_b = _listen_ab2(_p_busy)
+    try:
+        _suggest = antiblock.suggest_free_port(_p_busy)
+        check(_suggest != _p_busy, f"занятый порт заменяется: {_suggest}")
+        check(not antiblock._port_listening(antiblock.FACADE_HOST, _suggest, 0.3),
+              "и предложенный порт свободен")
+        check(_suggest != antiblock.XRAY_PORT,
+              "предложенный порт не порт xray")
+        _who = antiblock.who_listens(_p_busy)
+        check(bool(_who), f"занятый порт кем-то слушается: {_who or 'не определили'}")
+    finally:
+        _srv_b.close()
+    # Граница сверху. Сам 65535 свободен, и предлагать его верно: порт
+    # допустимый. Проверяем другое — упершись в занятые верхние порты,
+    # подбор обязан сказать «не нашлось», а не выдать 65536.
+    _hi1 = _listen_ab2(antiblock.PORT_MAX - 1)
+    _hi2 = _listen_ab2(antiblock.PORT_MAX)
+    try:
+        check(antiblock.suggest_free_port(antiblock.PORT_MAX - 1) == 0,
+              "выше 65535 подбор не лезет")
+    finally:
+        _hi1.close()
+        _hi2.close()
+    check(antiblock.suggest_free_port(antiblock.XRAY_PORT) != antiblock.XRAY_PORT,
+          "порт xray фасадом не предлагается")
+    check(antiblock.who_listens(_p_free) == "",
+          "на свободном порту никто не слушает")
+
     _, e_ab3 = opencode_caps.remove_caps(fake, {"antiblock"})
     check(not e_ab3, f"обход убран без ошибок: {e_ab3 or 'чисто'}")
     check(not (fake / "antiblock" / "http_facade.py").exists(), "фасад убран")
@@ -2678,6 +2834,62 @@ def main() -> int:
           "после уборки обхода валидно и чужое цело")
     check(opencode_caps.caps_status(fake).get("antiblock") is not True,
           "статус больше не видит обход")
+
+    # Стартеры читают порт из настроек программы, а не из константы.
+    # Путь к папке программы лежит в манифесте набора: рабочая копия
+    # стартера лежит в папке настроек opencode, и подъёмом вверх от
+    # $PSScriptRoot до папки программы не дойти — это другое дерево.
+    _mf = json.loads((fake / antiblock.MANIFEST).read_text(encoding="utf-8"))
+    check(antiblock.BASE_KEY not in _mf,
+          "после снятия обхода путь к программе из манифеста убран")
+    _ab_opts_mf = antiblock.default_opts()
+    _ab_opts_mf["shortcut"] = False
+    _mf_dir = Path(tempfile.mkdtemp(prefix="selftest-mf-"))
+    # Папка программы — именно program_root(): установщик берёт её
+    # оттуда, а не из base того набора, который ставится.
+    _prog_root = core.program_root()
+    _m_mf, _e_mf = antiblock.install_antiblock(
+        _prog_root, _mf_dir, _ab_opts_mf)
+    check(not _e_mf, f"обход ставится для проверки манифеста: {_e_mf or 'чисто'}")
+    _mf2 = json.loads((_mf_dir / antiblock.MANIFEST).read_text(encoding="utf-8"))
+    check(_mf2.get(antiblock.BASE_KEY) == str(_prog_root.resolve()),
+          f"установка кладёт путь к программе в манифест: "
+          f"{_mf2.get(antiblock.BASE_KEY)}")
+    check(bool(_mf2.get("antiblock_files")),
+          "и не теряет список файлов набора")
+    # Повторная установка ключ не теряет — иначе после любого переутановления
+    # стартер снова ушёл бы в дефолт.
+    antiblock.install_antiblock(_prog_root, _mf_dir, _ab_opts_mf)
+    _mf3 = json.loads((_mf_dir / antiblock.MANIFEST).read_text(encoding="utf-8"))
+    check(_mf3.get(antiblock.BASE_KEY) == str(_prog_root.resolve()),
+          "повторная установка путь к программе не теряет")
+    shutil.rmtree(_mf_dir, ignore_errors=True)
+
+    for _starter in ("start_opencode_proxy.ps1", "start_gemini_proxy.ps1"):
+        _sp = core.program_root() / "tools" / "antiblock" / _starter
+        _txt = _sp.read_text(encoding="utf-8-sig") if _sp.is_file() else ""
+        check(bool(_txt), f"{_starter} на месте")
+        check("Get-FacadePort" in _txt,
+              f"{_starter} читает порт из настроек")
+        check(antiblock.FACADE_PORT_KEY in _txt,
+              f"{_starter} знает ключ {antiblock.FACADE_PORT_KEY}")
+        check(antiblock.BASE_KEY in _txt,
+              f"{_starter} берёт путь к программе из манифеста")
+        check(f"$FacadeDefaultPort = {antiblock.FACADE_PORT}" in _txt,
+              f"{_starter} объявляет дефолт параметром")
+        _hard = [ln.strip() for ln in _txt.splitlines()
+                 if str(antiblock.FACADE_PORT) in ln
+                 and "$FacadeDefaultPort" not in ln]
+        check(not _hard,
+              f"{_starter} не зашивает {antiblock.FACADE_PORT} в коде: {_hard}")
+        check(_txt.startswith("\ufeff") or _sp.read_bytes()[:3] == b"\xef\xbb\xbf",
+              f"{_starter} с BOM — иначе PowerShell 5.1 не читает русский текст")
+        # Стартер обязан звать функцию, а не подставлять свой порт.
+        _call = [ln.strip() for ln in _txt.splitlines()
+                 if ln.strip().startswith("$listenPort =")
+                 or ln.strip().startswith("$FacadePort =")]
+        check(any("Get-FacadePort" in ln for ln in _call),
+              f"{_starter} порт берёт вызовом Get-FacadePort: {_call}")
 
     # Горячая подмена пула (set_upstreams) и безопасность автообновления.
     sys.path.insert(0, str(core.program_root() / "tools" / "antiblock"))
@@ -4091,6 +4303,201 @@ def main() -> int:
           and _param.default is False,
           "запись ключа по умолчанию выключена"
           f" (значение по умолчанию: {_param.default if _param else 'параметра нет'})")
+    # Порядок импортов в самом селфтесте. Соседние модули обязаны
+    # импортироваться ПОСЛЕ sys.path.insert: при запуске через `-m` в
+    # sys.path[0] лежит текущая папка, а не папка модуля, и импорт выше
+    # вставки падает с ModuleNotFoundError. Так уже ломалось — команда
+    # `python -m tools.dbapp.selftest`, которой проверяется каждая задача
+    # плана, не работала ни в одной копии, а прямой запуск файлом работал,
+    # и поломка выглядела безобидно. Проверка смотрит на этот же файл, а
+    # не на значение: ломается обратной перестановкой двух строк.
+    _self_lines = Path(__file__).read_text(encoding="utf-8").splitlines()
+    _insert_at = next((n for n, ln in enumerate(_self_lines)
+                       if ln.startswith("sys.path.insert")), -1)
+    check(_insert_at >= 0, "в селфтесте есть вставка папки модуля в путь")
+    _imports_above = [
+        (n, ln.strip()) for n, ln in enumerate(_self_lines)
+        if ln.strip().startswith("import ")
+        and ln.strip().split()[1].split(".")[0] in _SELFTEST_LOCAL_MODULES
+        and 0 <= n < _insert_at
+    ]
+    check(not _imports_above,
+          f"соседние модули импортируются после sys.path.insert: "
+          f"{_imports_above[:3]}")
+    # Обновление и откат программы. Живое обновление Node.js пройти можно
+    # только со словом человека: `winget upgrade` меняет программу, от
+    # которой идёт эта сессия. Здесь синтетика на подставных блоках
+    # реестра, а живая часть доказана измерением `winget list` отдельно.
+    import program_cards as _cards12  # noqa: PLC0415 — рядом лежит
+    import programs as _prog12  # noqa: PLC0415 — рядом лежит
+    import winget_install as _wi12  # noqa: PLC0415 — рядом лежит
+
+    def _blk12(**kw):
+        """Подставной блок program_install. Настоящий реестр не трогаем."""
+        return _mcp_registry.ProgramInstall(**kw)
+
+    _none12 = _prog12._update_from_block(None)
+    check(not _none12.declared and not _none12.can_update,
+          "без блока обновление не предлагается")
+
+    _no_id12 = _prog12._update_from_block(_blk12(installed_version="1.0"))
+    check(not _no_id12.can_update,
+          f"без winget_id обновлять нечем: {_no_id12.update_reason}")
+    check(bool(_no_id12.update_reason),
+          "и причина названа, а не молчание")
+
+    _no_ver12 = _prog12._update_from_block(
+        _blk12(winget_id="P.X", installed_version="", catalog_version="2.0"))
+    check(not _no_ver12.can_update,
+          "без записанной версии судить не о чем")
+
+    _newer12 = _prog12._update_from_block(
+        _blk12(winget_id="P.X", installed_version="1.0",
+               catalog_version="2.0"))
+    check(_newer12.can_update and _newer12.update_available,
+          f"каталог новее — обновление предлагается: {_newer12.text[:60]}")
+    check(not _newer12.can_rollback,
+          "но откатываться пока нечем, истории нет")
+    check(_newer12.rollback_reason == _prog12.REASON_NO_HISTORY,
+          f"и причина отказа названа: {_newer12.rollback_reason}")
+
+    _same12 = _prog12._update_from_block(
+        _blk12(winget_id="P.X", installed_version="2.0",
+               catalog_version="2.0"))
+    check(not _same12.can_update,
+          f"версии совпадают — обновления нет: {_same12.update_reason}")
+
+    _older12 = _prog12._update_from_block(
+        _blk12(winget_id="P.X", installed_version="2.10",
+               catalog_version="2.9"))
+    check(not _older12.can_update,
+          "2.9 против 2.10 сравнено числами, а не строками")
+    check(_older12.update_reason
+          == _prog12.REASON_CATALOG_NEWER_THAN_INSTALLED,
+          f"источник откатился — сказано прямо: {_older12.update_reason}")
+
+    _junk12 = _prog12._update_from_block(
+        _blk12(winget_id="P.X", installed_version="бета",
+               catalog_version="2.0"))
+    check(not _junk12.can_update,
+          "версия, которая не разбиралась как числа, обновления не даёт")
+
+    _hist12 = _prog12._update_from_block(
+        _blk12(winget_id="P.X", installed_version="2.0",
+               catalog_version="3.0", previous_versions=["1.9", "1.8"]))
+    check(_hist12.can_update and _hist12.can_rollback,
+          "с историей доступны и обновление, и откат")
+    check(_hist12.previous == ["1.9", "1.8"],
+          f"история на месте целиком: {_hist12.previous}")
+
+    # Карточка: кнопки появляются и гаснут честно.
+    def _card12(update, winget_id="P.X", state=_cards12.STATE_OK):
+        # Состояние по умолчанию — установлена: без него кнопок обновления
+        # не было бы вовсе, и проверки на кнопки проверяли бы другое.
+        card = _cards12.Card(key="k", name="Программа", state=state)
+        card.install = _prog12.InstallView(winget_id=winget_id)
+        card.update = update
+        return card
+
+    _c_new12 = _card12(_newer12)
+    _codes12 = [code for code, _l, _h in _c_new12.buttons()]
+    check(_cards12.BTN_UPDATE in _codes12,
+          "при доступном обновлении кнопка есть")
+    check(_cards12.BTN_ROLLBACK in _codes12,
+          "и кнопка отката видна, хотя откатываться нечем")
+    check(_c_new12.can_update and not _c_new12.can_rollback,
+          "откат при пустой истории выключен")
+
+    _hint12 = dict((c, h) for c, _l, h in _c_new12.buttons()).get(
+        _cards12.BTN_ROLLBACK, "")
+    check("недоступно" in _hint12,
+          f"у выключенного отката названа причина: {_hint12[:56]}")
+
+    _c_no12 = _card12(_none12)
+    check(_cards12.BTN_UPDATE not in [c for c, _l, _h in _c_no12.buttons()],
+          "программа без блока не получает кнопок обновления")
+
+    # У отсутствующей программы обновлять нечего, и «Установить» рядом уже
+    # объясняет, что нужно. Без этой проверки кнопки появлялись бы у всех
+    # подряд — так и вышло, когда условие стояло только на `declared`.
+    for _st12 in (_cards12.STATE_MISSING, _cards12.STATE_UNKNOWN):
+        _c_absent12 = _card12(_hist12, state=_st12)
+        _codes_absent12 = [c for c, _l, _h in _c_absent12.buttons()]
+        check(_cards12.BTN_UPDATE not in _codes_absent12,
+              f"у неустановленной программы (состояние {_st12}) нет кнопки "
+              "обновления")
+        check(_cards12.BTN_ROLLBACK not in _codes_absent12,
+              f"и нет кнопки отката (состояние {_st12})")
+    check("self.state == STATE_OK" in Path(app_main.__file__).parent.joinpath(
+        "program_cards.py").read_text(encoding="utf-8"),
+        "кнопки обновления завязаны на состояние «установлена»")
+
+    _c_hist12 = _card12(_hist12)
+    check(_c_hist12.can_rollback and _c_hist12.rollback_target == "1.9",
+          f"возврат идёт к последней стоявшей: {_c_hist12.rollback_target}")
+    _label12 = [lb for c, lb, _h in _c_hist12.buttons()
+                if c == _cards12.BTN_ROLLBACK]
+    check(_label12 and "1.9" in _label12[0],
+          f"в кнопке названа версия: {_label12}")
+
+    check(_c_hist12.rollback_target != "1.8",
+          "и не первая в списке: список может кончиться версией, которой "
+          "уже нет в источнике")
+
+    # Модуль: команды строятся списком, версия идёт отдельным аргументом.
+    _argv12 = _wi12.build_install_version_command("P.X", "1.9")
+    check(_argv12[_argv12.index("--version") + 1] == "1.9",
+          "версия передаётся отдельным аргументом")
+    check(all(isinstance(a, str) for a in _argv12),
+          "команда строится списком строк, а не склейкой")
+    check(_wi12.RemoteState(seen=True, installed="1.9",
+                            available="1.10").update_available,
+          "1.10 новее 1.9 по числам")
+    check(not _wi12.RemoteState(seen=True, installed="1.10",
+                                available="1.9").update_available,
+          "и наоборот — строкой было бы наоборот")
+    check(not _wi12.RemoteState(seen=True, installed="1.9",
+                                available="2.0").update_available is None,
+          "состояние без источника не выдаёт ошибку")
+
+    # Порядок в коде окна: прежняя версия записывается ДО обновления.
+    _src12 = Path(app_main.__file__).read_text(encoding="utf-8")
+
+    def _body12(fn_name):
+        _s = _src12.index(f"def {fn_name}(")
+        _e = _src12.index("\n    def ", _s + 1)
+        return _src12[_s:_e]
+
+    _up12 = _body12("_update_card")
+    check(_up12.index("_record_before_update") < _up12.index("worker.start()"),
+          "прежняя версия записывается ДО запуска обновления")
+    check(_up12.index("remote_state(") < _up12.index("_ask_update("),
+          "источник спрашивается ДО вопроса человеку")
+    check(_up12.index("_ask_update(") < _up12.index("_record_before_update"),
+          "человека спрашивают ДО записи версии")
+    check("if not self._ask_update(" in _up12,
+          "отказ человека останавливает всё, версия не пишется")
+    check("if not card.install.winget_id:" in _up12,
+          "без идентификатора winget обновление отказано")
+
+    _rb12 = _body12("_rollback_card")
+    check("version_offered(" in _rb12,
+          "откат спрашивает источник, есть ли ещё эта версия")
+    check("больше нет в" in _rb12,
+          "и честно говорит, что версии больше нет")
+    check(_rb12.index("_ask_rollback(") < _rb12.index("worker.start()"),
+          "откат спрашивает человека ДО запуска")
+
+    # Реестр умеет помнить версию и записывать новую.
+    check(hasattr(_mcp_registry, "remember_version"),
+          "реестр умеет запоминать прежнюю версию")
+    check(hasattr(_mcp_registry, "set_installed_version"),
+          "и записывать версию после обновления")
+    check(hasattr(_mcp_registry.ProgramInstall(), "previous_versions"),
+          "в блоке реестра есть поле прежних версий")
+    check(_mcp_registry.HISTORY_LIMIT >= 2,
+          f"прежних версий хранится больше одной: "
+          f"{_mcp_registry.HISTORY_LIMIT}")
     _main_src = (_root / "tools" / "dbapp" / "main.py").read_text(encoding="utf-8")
     check("allow_install_path_fix=fix_install_path" in _main_src,
           "кнопка передаёт в автонастройку своё решение")
@@ -4237,28 +4644,52 @@ def main() -> int:
             return next((s for s in _mcp_registry.load_servers(
                 core.program_root()) if s.id == "obs"), None)
 
-        _obs_srv = _fresh_obs()
-        _req_ok = _obs_srv is not None and not _obs_srv.missing
-        for _attempt in range(2):
-            if _req_ok:
-                break
-            import time as _time
-            _time.sleep(1.0)
-            _obs_srv = _fresh_obs()
-            _req_ok = _obs_srv is not None and not _obs_srv.missing
+        # Не все требования важны для проверки записи. `plugin` требует
+        # починить чужую программу, а enable() этого не делает и не
+        # обещает: он вписывает сервер в настройки, а не запускает его.
+        # Требовать от этой проверки установленного плагина значило бы
+        # убрать её ровно на сломанных машинах — там, где она нужнее.
+        def _ready_for_write(server) -> bool:
+            if server is None:
+                return False
+            return not [r for r in server.missing if r.kind != "plugin"]
 
-        if _obs_srv is None:
+        # Копия сервера OBS с подменёнными требованиями. Копия нужна,
+        # чтобы не мутить живой объект: он перечитывается на каждом
+        # рисунке вкладки, и правка на месте осталась бы в памяти до
+        # следующей перечитки — а это проверка, которая портит данные.
+        def _obs_variant(requires: list[dict]) -> object:
+            """Сервер obs с другим списком требований. None — нет сервера.
+
+            Требования пересчитываются, а не только подменяются в raw: у
+            Server это готовое поле, вычисленное при чтении реестра.
+            Подменить одно и забыть про другое — значит получить сервер,
+            который ведёт себя по-старому, и удивляться отказу, которого
+            уже не должно быть. Первая версия проверки так и сделала.
+            """
+            server = _fresh_obs()
+            if server is None:
+                return None
+            clone = copy.copy(server)
+            clone.raw = dict(server.raw)
+            clone.raw["requires"] = list(requires)
+            clone.requirements = [
+                _mcp_registry.check_requirement(spec) for spec in requires
+            ]
+            return clone
+
+        _real_obs = _fresh_obs()
+        if _real_obs is None:
             check_machine(False, "сервер obs не найден для проверки записи")
-        elif not _req_ok:
-            _miss = ", ".join(r.what for r in _obs_srv.missing)
-            check_machine(False,
-                          f"требования obs не проверились за три попытки "
-                          f"(не хватает по мнению машины: {_miss})")
         else:
+            # (1) Запись в настройки — вопрос про код enable(), а не про
+            # готовность OBS. Требования снимаем, иначе проверка молчала бы
+            # на любой машине без плагина, то есть там, где нужнее.
+            _no_reqs = _obs_variant([])
             _cfg_tmp = _tmp_dir / "opencode.jsonc"
-            _msgs1, _errs1 = _mcp_registry.enable(_tmp_dir, _obs_srv)
+            _msgs1, _errs1 = _mcp_registry.enable(_tmp_dir, _no_reqs)
             _after_first = _cfg_tmp.read_text(encoding="utf-8")
-            _msgs2, _errs2 = _mcp_registry.enable(_tmp_dir, _obs_srv)
+            _msgs2, _errs2 = _mcp_registry.enable(_tmp_dir, _no_reqs)
             _after_second = _cfg_tmp.read_text(encoding="utf-8")
             check('"obs"' in _after_first,
                   "первое нажатие вписывает сервер в настройки")
@@ -4269,6 +4700,36 @@ def main() -> int:
             check(not _errs2, f"повторное нажатие без ошибок: {_errs2}")
             check(any("не трогаю" in m for m in _msgs2),
                   "программа честно говорит, что файл не тронула")
+
+            # (2) Отказ включать мост, который не заработает. Плагин
+            # взят несуществующий, поэтому отказ гарантирован на любой
+            # машине: проверка не зависит ни от OBS, ни от сети.
+            _unknown = [{"what": "Плагин нетакой-точки",
+                         "check": "такого-плагина-в-коде-нет",
+                         "type": "plugin", "blocks": True}]
+            _refuse = _obs_variant(_unknown)
+            _cfg_refuse = _tmp_dir / "облом.jsonc"
+            _msgs_r, _errs_r = _mcp_registry.enable(_cfg_refuse, _refuse)
+            check(bool(_errs_r) and "Плагин" in " ".join(_errs_r),
+                  f"мост без плагина не включается, и сказано почему: "
+                  f"{_errs_r}")
+            check(not _cfg_refuse.exists(),
+                  "и файл настроек при отказе не создан")
+
+            # Тот же случай на живой машине: если плагин есть, отказа
+            # быть не должно — иначе проверка врёт, запрещая рабочий
+            # мост. Если плагина нет, обязана быть причина с цифрами.
+            _live_plugin = [r for r in _real_obs.missing
+                            if r.kind == "plugin"]
+            if _live_plugin:
+                check_machine(all(r.detail and r.detail != "есть"
+                                  for r in _live_plugin),
+                              f"невыполненное требование о плагине объяснено: "
+                              f"{_live_plugin[0].detail[:56]}")
+            else:
+                check_machine(bool(_real_obs.ready),
+                              f"плагин на месте — и obs готов включаться: "
+                              f"ready={_real_obs.ready}")
     finally:
         shutil.rmtree(_tmp_dir, ignore_errors=True)
 
@@ -5220,17 +5681,49 @@ def main() -> int:
         check("нужна:" in pcard.needed_by_text(_node, pcard.servers_by_name(_pbase)),
               "кто именно её требует — написано словами, а не идентификаторами")
 
-        _blender = _by_name.get("Blender")
-        check(_blender is not None and _blender.state == pcard.STATE_MISSING,
-              f"Blender честно «не установлена»: "
-              f"{_blender.state if _blender else 'нет карточки'}")
-        check(_blender is not None and _blender.can_install,
-              "и кнопка установки у неё есть")
-        check(_blender is not None and _blender.needs_admin,
-              "а про права администратора сказано прямо")
-        check(_blender is not None
-              and "winget" in _blender.buttons()[1][1] + _blender.buttons()[1][2],
-              "подсказка кнопки называет, кто ставит")
+        # Кнопка у неустановленной программы — на синтетической карточке.
+        # Раньше здесь стоял Blender, и проверка требовала, чтобы он был
+        # «не установлена» с кнопкой установки. Это было неправдой:
+        # Blender 5.2.2 стоит, а программа предлагала запустить winget
+        # поверх её и попросить права администратора. Проверка не просто
+        # устарела — она закрепляла поломку, и потому выглядела защитой.
+        # Намерение проверяется без машины, а живое состояние — отдельно,
+        # ниже и в разделе 8у.
+        _missing = pcard.Card(key="нет", name="Нету её", state=pcard.STATE_MISSING,
+                              install=pmod.InstallView(
+                                  action=pmod.ACTION_WINGET,
+                                  program="Нету её",
+                                  winget_id="Пример.Пакет",
+                                  needs_admin=True))
+        _missing_codes = [c for c, _, _ in _missing.buttons()]
+        check(_missing.can_install,
+              "неустановленная программа: кнопка установки есть")
+        check(pcard.BTN_INSTALL in _missing_codes,
+              "и она в списке кнопок, а не только в свойствах")
+        _missing_hint = next((h for c, _, h in _missing.buttons()
+                              if c == pcard.BTN_INSTALL), "")
+        check("winget" in _missing_hint,
+              f"подсказка называет, кто ставит: {_missing_hint[:50]}")
+        check(_missing.needs_admin
+              and "администратор" in _missing_hint,
+              "и про права администратора сказано прямо")
+
+        # Общий инвариант по всем карточкам: установленная программа не
+        # предлагает установку. Его не было — и именно поэтому Blender с
+        # кнопкой «Установить» прошла селфтест насквозь.
+        _offered = sorted(c.name for c in _cards
+                          if c.state == pcard.STATE_OK and c.can_install)
+        check(not _offered,
+              f"ни одна установленная программа не предлагает установку: "
+              f"{_offered or 'чисто'}")
+        _wrong_hint = sorted(
+            c.name for c in _cards
+            if c.can_install
+            and "winget" not in next((h for code, _, h in c.buttons()
+                                      if code == pcard.BTN_INSTALL), ""))
+        check(not _wrong_hint,
+              f"и у каждой кнопки установки сказано, что ставит winget: "
+              f"{_wrong_hint or 'чисто'}")
 
         # Установленная программа не должна предлагать установку.
         _obs = _by_name.get("OBS Studio")
@@ -5271,11 +5764,83 @@ def main() -> int:
         check(_adobe is not None and "неизвестно" in _adobe.verify.detail,
               "а прямо говорит, что имя подписанта неизвестно")
 
-        # Чего нет: кнопки «докачать мост» — это этап 6, обещать её нельзя.
+        # Кнопка докачки плагина. Раньше здесь стояла проверка обратного:
+        # «кнопки нет — мост качают на этапе 6». Она была верна для старого
+        # кода и перестала быть правдой, когда появился сам плагин.
+        # Теперь проверяем три вещи, и все три — про наш код, а не про
+        # состояние машины: кнопка выведена из реестра, появляется ровно
+        # когда плагина нет, и при отказе называет причину.
         _all_codes = {code for c in _cards for code, _, _ in c.buttons()}
         check(pcard.BTN_INSTALL in _all_codes, "кнопка установки в списке есть")
-        check("bridge" not in _all_codes and "докачать" not in _all_codes,
-              "а кнопки «докачать мост» нет — мост качают на этапе 6")
+        # Правила — по всем карточкам с плагином, а не по одной. Раньше
+        # здесь бралась «первая карточка с объявленным плагином», и пока
+        # плагин был один, это был OBS. С появлением аддона Blender первым
+        # стал Blender — и проверка молча переехала на него: имя сверяла с
+        # «obs-websocket», а в списке «что ещё не готово» искала слово
+        # «плагин», которого в тексте про аддон нет. Привязка к предмету
+        # вместо правила — молчаливая поломка проверки.
+        _plug_cards = [c for c in _cards if c.plugin.declared]
+        check(len(_plug_cards) >= 2,
+              f"плагин описан у нескольких программ: "
+              f"{[c.name for c in _plug_cards]}")
+        check(all(c.plugin.name for c in _plug_cards),
+              "и у каждого имя взято из реестра, а не придумано кодом")
+        check(all(c.plugin.finder for c in _plug_cards),
+              "и у каждого есть finder: по нему код знает, как проверить")
+        check(all(pcard.BTN_FETCH in {code for code, _, _ in c.buttons()}
+                  or c.plugin.present for c in _plug_cards),
+              "кнопка докачки есть ровно тогда, когда плагина нет")
+        check(not any(pcard.BTN_FETCH in {code for code, _, _ in c.buttons()}
+                      for c in _plug_cards if c.plugin.present),
+              "а у карточек с установленным плагином её нет — нечего "
+              "докачивать")
+        # Только те карточки, где кнопка есть. У карточки с уже
+        # установленным плагином кнопки нет — и требовать от неё
+        # подсказку значило бы требовать несуществующую вещь.
+        _missing_plugin = [c for c in _plug_cards if not c.plugin.present]
+        _bad_hint = [c.name for c in _missing_plugin
+                     if not (c.can_fetch or "недоступно" in next(
+                         (h for code, _, h in c.buttons()
+                          if code == pcard.BTN_FETCH), ""))]
+        check(not _bad_hint,
+              f"подсказка кнопки объясняет отказ, а не молчит: "
+              f"{_bad_hint or 'у всех, где кнопка есть'}")
+        check(all(c.can_fetch == (c.plugin.declared and not c.plugin.present
+                                  and c.plugin.can_write)
+                  for c in _plug_cards),
+              "can_fetch — ровно «плагин описан, его нет, и папка принимает "
+              "запись»")
+        # Назван должен быть плагин, которого нет. Тот, что на месте, в
+        # списке неготового упоминаться не должен: он готов, и упоминание
+        # о нём было бы враньём с другой стороны.
+        _not_named = [c.name for c in _missing_plugin
+                      if not c.bridge_pending]
+        check(not _not_named,
+              f"у каждой карточки без плагина он назван прямо в списке "
+              f"«что ещё не готово»: {_not_named or 'у всех'}")
+        check(not [c.name for c in _plug_cards if c.plugin.present
+                   and any(c.plugin.name in p
+                           for p in c.bridge_pending)],
+              "а у тех, где плагин есть, он в списке неготового не "
+              "значится — иначе врали бы в другую сторону")
+
+        # Частные утверждения про OBS остаются про OBS и находят его по
+        # finder, а не по порядку в реестре.
+        _obs_card = next((c for c in _plug_cards
+                          if c.plugin.finder == "obs"), None)
+        check(_obs_card is not None, "карточка OBS с плагином найдена")
+        check(_obs_card is not None and _obs_card.plugin.name == "obs-websocket",
+              f"имя плагина OBS взято из реестра: "
+              f"{_obs_card.plugin.name if _obs_card else '—'}")
+        check_machine(_obs_card is None or not _obs_card.can_fetch,
+                      f"на живой установке докачка OBS заблокирована: "
+                      f"{_obs_card.plugin.note[:60] if _obs_card else '—'}")
+        _bl_card = next((c for c in _plug_cards
+                         if c.plugin.finder == "blender-addon"), None)
+        check(_bl_card is not None, "карточка Blender с аддоном найдена")
+        check(_bl_card is not None and _bl_card.plugin.name == "blender_mcp",
+              f"имя аддона взято из реестра: "
+              f"{_bl_card.plugin.name if _bl_card else '—'}")
 
         # winget: команда собирается списком, значение из реестра не станет
         # командой. Это проверка безопасности, а не оформления.
@@ -5312,6 +5877,26 @@ def main() -> int:
             and btn.isEnabled() != bool(_ptab._cards[key].can_install)
         ]
         check(not _mismatch, f"доступность кнопки совпадает с решением: {_mismatch}")
+        # Та же сверка для кнопки докачки: она обязана быть выключена ровно
+        # там, где карточка говорит «нельзя». Иначе человек нажмёт и
+        # получит отказ вместо ответа — а это ровно то, ради чего всё
+        # затевалось.
+        _fetch_mismatch = [
+            key for key, _row in _ptab._rows.items()
+            if (btn := _row["buttons"].get(pcard.BTN_FETCH)) is not None
+            and btn.isEnabled() != bool(_ptab._cards[key].can_fetch)
+        ]
+        check(not _fetch_mismatch,
+              f"доступность кнопки докачки совпадает с решением: {_fetch_mismatch}")
+        _fetch_rows = [row for row in _ptab._rows.values()
+                       if pcard.BTN_FETCH in row["buttons"]]
+        check(bool(_fetch_rows), "кнопка докачки дошла до экрана")
+        check(all("недоступно" in row["buttons"][pcard.BTN_FETCH].toolTip()
+                  for row in _fetch_rows
+                  if not _ptab._cards[
+                      next(k for k, r in _ptab._rows.items() if r is row)
+                  ].can_fetch),
+              "и у выключенной кнопки видна причина отказа, а не пустота")
         _has_check = all(
             pcard.BTN_CHECK in row["buttons"] for row in _ptab._rows.values())
         check(_has_check, "у каждой карточки есть «Проверить»")
@@ -5648,6 +6233,609 @@ def main() -> int:
         check("нерабочий Python-мост" not in _obs_txt
               or "было неверно" in _obs_txt,
               "навык не утверждает, что исходников нет")
+
+    # ---- 8с. Установка OBS: честный счёт и разбор архива
+    echo("\n--- 8с. Установка OBS: что насчитано и куда разложено ---")
+    #
+    # Откуда эти проверки. Первая версия считала «плагином» папку с любым
+    # .dll и рапортовала «из 25 плагинов с библиотекой 2». Обе эти папки —
+    # win-capture и win-dshow — держат вспомогательные модули захвата
+    # экрана и виртуальной камеры. Плагинов у OBS не было ни одного, а
+    # человек читал «установка почти полная» и жал «докачать мост».
+    #
+    # Почему дерево искусственное. Настоящая папка плагинов лежит в
+    # Program Files и закрыта для записи: сломать её, чтобы увидеть, что
+    # проверка ловит поломку, нельзя. Искусственное дерево проходит по тем
+    # же строкам кода, поэтому поломка видна.
+    #
+    # Чего эти проверки НЕ ловят:
+    #  - неверное определение «что такое плагин»: дерево повторяет
+    #    раскладку, измеренную на OBS 32.2.2. Сменится сборка — правила
+    #    придётся перемерять, и молча оно не протухнет;
+    #  - состояние настоящей установки: для неё внизу check_machine, а не
+    #    обычная check, чтобы чужой диск не ронял проверку нашего кода;
+    #  - сетевую часть докачки: она не проверяется вовсе. 179 МБ из сети
+    #    ради этого не качаются, проверяется только разбор архива.
+    import zipfile as _zip  # noqa: PLC0415 - нужен здесь и только здесь
+
+    check(callable(getattr(bridges, "obs_plugin_scan", None)),
+          "в модуле есть счётчик плагинов")
+    check(callable(getattr(bridges, "install_plugin_from_zip", None)),
+          "разбор архива вынесен в отдельную функцию — её можно проверить "
+          "без сети")
+
+    if callable(getattr(bridges, "obs_plugin_scan", None)):
+        _lib_entry = f"obs-plugins/64bit/{bridges.WANTED_DIR}.dll"
+        _loc_prefix = f"data/obs-plugins/{bridges.WANTED_DIR}/locale/"
+
+        def _obs_plugin_tree(root: Path) -> Path:
+            """Папка плагинов: две с вспомогательными модулями, одна с
+            настоящей библиотекой в bin/64bit, одна пустая под вебсокет."""
+            (root / "win-capture").mkdir(parents=True)
+            (root / "win-capture" / "graphics-hook64.dll").write_bytes(b"MZ")
+            (root / "win-dshow").mkdir()
+            (root / "win-dshow" / "obs-virtualcam-module64.dll").write_bytes(b"MZ")
+            _plug_dir = root / "obs-browser" / "bin" / "64bit"
+            _plug_dir.mkdir(parents=True)
+            (_plug_dir / "obs-browser.dll").write_bytes(b"MZ")
+            (root / bridges.WANTED_DIR / "locale").mkdir(parents=True)
+            (root / bridges.WANTED_DIR / "locale" / "de-DE.ini").write_text(
+                "d", encoding="utf-8")
+            return root
+
+        def _obs_zip(path: Path, with_lib: bool) -> Path:
+            """Архив по измеренной раскладке OBS 32.2.2. Порядок записей
+            тот же, что в настоящем: data/ идёт раньше obs-plugins/."""
+            with _zip.ZipFile(path, "w") as zf:
+                zf.writestr(_loc_prefix, "")
+                zf.writestr(_loc_prefix + "de-DE.ini", "deutsch")
+                zf.writestr(_loc_prefix + "en-US.ini", "english")
+                if with_lib:
+                    zf.writestr(_lib_entry, b"MZ" + b"\0" * 500)
+                    zf.writestr(f"obs-plugins/64bit/{bridges.WANTED_DIR}.pdb",
+                                b"PDB" * 100)
+                    zf.writestr("obs-plugins/64bit/obs-browser.dll", b"MZ")
+                zf.writestr("bin/64bit/obs64.exe", b"MZ")
+            return path
+
+        _td = tempfile.mkdtemp(prefix="selftest-obs-")
+        try:
+            _plug = _obs_plugin_tree(Path(_td) / "obs-plugins")
+            _scan = bridges.obs_plugin_scan(_plug)
+            check(_scan["dirs"] == 4,
+                  f"папок плагинов посчитано верно: {_scan['dirs']}")
+            check(_scan["plugins"] == 1,
+                  f"настоящий плагин один, а не четыре: {_scan['plugins']}")
+            check(_scan["helpers"] == 2,
+                  f"вспомогательные модули посчитаны отдельно: "
+                  f"{_scan['helpers']}")
+            check(_scan["bridge"] is False,
+                  "пустая папка вебсокета не считается поставленным плагином")
+
+            _st = bridges.obs_install_completeness(base=Path(_td), root=_plug)
+            check(_st["can_write"] is None,
+                  "подставленная папка не проверяется пробой записи")
+            check("мост не поднимется" in _st["message"].lower(),
+                  f"в тексте сказано про мост: {_st['message'][:60]}")
+            check(_st["complete"] is False,
+                  "установка с одним плагином из трёх не названа полной")
+
+            # Архив без библиотеки. Раньше он разкладывал 57 языковых
+            # файлов, а плагина не появлялось.
+            _obs2 = Path(_td) / "obs-2"
+            (_obs2 / "data" / "obs-plugins").mkdir(parents=True)
+            _ok2, _why2 = bridges.install_plugin_from_zip(
+                _obs_zip(Path(_td) / "без-библиотеки.zip", with_lib=False),
+                _obs2)
+            check(not _ok2, "архив без библиотеки — отказ, а не «готово»")
+            check(_lib_entry in _why2,
+                  f"в отказе назван искомый файл: {_why2[:70]}")
+            _left = sorted(str(p.relative_to(_obs2)) for p in _obs2.rglob("*")
+                           if p.is_file())
+            check(not _left,
+                  f"после отказа на диске ничего не осталось: {_left[:4]}")
+
+            # Правильный архив: библиотека ложится туда, где её ищет OBS.
+            _obs3 = Path(_td) / "obs-3"
+            (_obs3 / "data" / "obs-plugins").mkdir(parents=True)
+            _ok3, _msg3 = bridges.install_plugin_from_zip(
+                _obs_zip(Path(_td) / "полный.zip", with_lib=True), _obs3)
+            _dll = _obs3 / "data" / "obs-plugins" / bridges.WANTED_DIR / \
+                Path(*bridges.PLUGIN_DLL)
+            check(_ok3 and _dll.is_file(),
+                  f"библиотека разложена туда, где её ждёт OBS: {_msg3[:50]}")
+            check(bridges.plugin_present(_obs3),
+                  "после раскладки плагин виден как поставленный")
+            check(not _dll.with_name(_dll.stem + ".pdb").exists(),
+                  "отладочные символы не тащатся: они втрое тяжелее "
+                  "библиотеки и на работу не влияют")
+            check(not (_obs3 / "bin").exists(),
+                  "чужие файлы архива не раскладываются")
+
+            # Не архив: понятный отказ, а не трассировка.
+            _junk = Path(_td) / "мусор.zip"
+            _junk.write_bytes(b"not a zip at all" * 100)
+            _obs4 = Path(_td) / "obs-4"
+            (_obs4 / "data" / "obs-plugins").mkdir(parents=True)
+            _ok4, _msg4 = bridges.install_plugin_from_zip(_junk, _obs4)
+            check(not _ok4 and "архив" in _msg4,
+                  f"не-архив отклонён словами, а не исключением: {_msg4[:50]}")
+        finally:
+            shutil.rmtree(_td, ignore_errors=True)
+
+        # Настоящая установка — чужой диск, поэтому check_machine: негодный
+        # зонд должен стать «не проверено», а не провалом нашего кода.
+        # Пересчёт здесь намеренно сделан своим способом: ловит опечатки в
+        # ключах и ошибки счёта. Неверное определение плагина он не ловит —
+        # это ловил бы только раздел выше, на известной раскладке.
+        _obs_base = bridges.obs_installed()
+        _live = bridges.obs_install_completeness()
+        if _obs_base is None:
+            check_machine(False,
+                          f"на этой машине OBS нет, состояние снять нечем: "
+                          f"{_live['message']}")
+        else:
+            _live_root = Path(_obs_base) / "data" / "obs-plugins"
+            _own = sum(
+                1 for d in _live_root.iterdir() if d.is_dir()
+                and any((d / "bin" / "64bit").glob("*.dll"))
+            ) if _live_root.is_dir() else 0
+            check_machine(_live["with_dll"] == _own,
+                          f"пересчёт на живой установке сошёлся: "
+                          f"{_live['with_dll']} против {_own}")
+            check_machine(_live["helpers"] + _live["with_dll"]
+                          <= _live["dirs"],
+                          f"плагины и вспомогательные вместе не больше "
+                          f"папок: {_live['with_dll']}+{_live['helpers']} "
+                          f"из {_live['dirs']}")
+            check_machine(_live["user_action"] == "" or "мост" in
+                          _live["message"].lower(),
+                          f"когда готово — человеку нечего делать: "
+                          f"{_live['user_action'][:50]}")
+
+    # ---- 8т. Корень репозитория и ссылки README
+    echo("\n--- 8т. Корень репозитория: чистота и живые ссылки ---")
+    #
+    # Откуда эти проверки. Требование §16: в корне остаются только папки,
+    # `Управление-базой.cmd` и два исключения, которые читает git (`.gitignore`
+    # и `.gitmodules`). Проверки не было, и корень зарос `LICENSE`, пока
+    # README уже ссылался на него в `документы/` — ссылка была битой с
+    # момента переноса README в `.github/` и никто её не открывал.
+    #
+    # Где лежит лицензия — не «куда велено планом», а где её ищут. Проект
+    # публичный, и лицензию определяет gem Licensee, которым пользуется
+    # GitHub: он смотрит в корень, в `docs/` и в `.github/`. Папка
+    # `документы/` в этом списке не значится, а `.github/` — значится.
+    # Проверено на живой машине: до переноса GitHub отдавал по адресу
+    # api/repos/ccndjfgjs/opencode-base/license `spdx_id: MIT` с путём
+    # `LICENSE`. После отправки этот запрос надо повторить — он и есть
+    # последняя проверка, а не этот тест.
+    import re as _re_link  # noqa: PLC0415 - нужен здесь и только здесь
+
+    # Своё имя, а не переиспользованный `_root`: в селфтесте он к этому
+    # моменту уже три раза означал разное, последний раз — разобранный
+    # XML. Взять чужую переменную — значит получить проверку о дереве
+    # элементов вместо проверки о корне репозитория.
+    _repo_dir = core.program_root()
+    _root_files = sorted(p.name for p in _repo_dir.iterdir() if p.is_file())
+    _allowed = {".gitignore", ".gitmodules", "Управление-базой.cmd"}
+    _extra = [n for n in _root_files if n not in _allowed]
+    check(not _extra, f"в корне нет лишних файлов: {_extra or 'чисто'}")
+
+    _lic = _repo_dir / ".github" / "LICENSE"
+    check(_lic.is_file(),
+          f"лицензия лежит там, где её ищет GitHub: "
+          f"{'.github/LICENSE' if _lic.is_file() else 'нет файла'}")
+    check(not (_repo_dir / "LICENSE").is_file(),
+          "и в корне её больше нет — иначе корень зарос обратно")
+    _lic_text = _lic.read_text(encoding="utf-8", errors="ignore") \
+        if _lic.is_file() else ""
+    check("MIT License" in _lic_text,
+          "файл лицензии не пустой и остался MIT")
+
+    _readme = _repo_dir / ".github" / "README.md"
+    if _readme.is_file():
+        _rtext = _readme.read_text(encoding="utf-8", errors="ignore")
+        _links = _re_link.findall(r"\]\(([^)#:]+\.(?:md|json|py|cmd|html|txt))\)",
+                                  _rtext)
+        _broken = []
+        for _rel in _links:
+            if not (_readme.parent / _rel).exists():
+                _broken.append(_rel)
+        check(not _broken,
+              f"каждая относительная ссылка README ведёт в файл: "
+              f"{_broken[:4] or 'все живы'} (проверено {len(_links)})")
+        _lic_link = _re_link.search(r"\[MIT\]\(([^)#]+)\)", _rtext)
+        check(bool(_lic_link) and (_readme.parent / _lic_link.group(1)).is_file()
+              if _lic_link else False,
+              "на лицензию ссылка есть и она живая: "
+              f"{_lic_link.group(1) if _lic_link else 'ссылки нет'}")
+        # Отдельным текстом, а не в списке ссылок: у файла лицензии нет
+        # расширения, и общая регулярка его пропускает. Проверка «ссылка на
+        # лицензию живая» на общем списке не могла сработать в принципе —
+        # так и вышло: битая ссылка прошла бы незамеченной второй раз.
+        check(_lic_link is not None,
+              "ссылка на лицензию в README есть отдельной строкой")
+    else:
+        check_machine(False, "README в .github не найден — ссылки не проверены")
+
+    # Команда npm сама по себе на Windows не запускается: в PATH лежит
+    # npm.cmd, а голое имя CreateProcess не находит. Обходчик есть в
+    # check_requirement, но проверки на него не было — а поломка выглядела
+    # бы как «Node.js есть» и молчала о том, что через npm не работает.
+    _npm = mcp_registry.check_requirement(
+        {"what": "npm есть", "check": "npm", "type": "command"})
+    check_machine(_npm.ok,
+                  f"npm виден через .cmd-обёртку: {_npm.detail[:40]}")
+    check("command + \".cmd\"" in
+          (_repo_dir / "tools" / "dbapp" / "mcp_registry.py")
+          .read_text(encoding="utf-8"),
+          "и код это знает: запасной путь .cmd заложен в check_requirement")
+
+    # ---- 8у. Шаблоны пути: программа в папке с номером версии
+    echo("\n--- 8у. Поиск программы по шаблону пути ---")
+    #
+    # Откуда. Blender стоит в «C:\\Program Files\\Blender Foundation\\Blender
+    # 5.2», а find_program умел только PATH, ветку реестра Windows и
+    # готовый путь. Ключа Classes\\blender.exe на машине нет — измерено —
+    # и в PATH её нет. Итог был такой: человек читал «не установлена» про
+    # установленную программу, а кнопка «Установить» предлагала запустить
+    # winget поверх существующей копии с правами администратора.
+    #
+    # Почему шаблон, а не жёсткий путь. Имя папки меняется при каждом
+    # обновлении: «Blender 5.2» станет «Blender 5.3», и запись протухнет
+    # молча. Знание о том, что программа версионирует папку, остаётся в
+    # реестре, в самой строке check, — списка программ в коде не появляется.
+    #
+    # Чего эти проверки НЕ ловят: границу версии. В требовании написано
+    # «Blender 3.0+», но поле min_version проверяется только для команд, а
+    # не для программ. Это общая дыра (у OBS «OBS Studio 31+» — так же),
+    # и она закрывается на этапе 11 «совместимость версий».
+    _tmp_bl = tempfile.mkdtemp(prefix="selftest-blender-")
+    try:
+        _bf = Path(_tmp_bl) / "Blender Foundation"
+        for _ver in ("5.1", "5.9"):
+            (_bf / f"Blender {_ver}").mkdir(parents=True)
+            (_bf / f"Blender {_ver}" / "blender.exe").write_bytes(b"MZ")
+        # 5.9 рядом с 5.1: сравнение чисел, а не строк. Иначе «5.10»
+        # оказался бы старше «5.9».
+        (_bf / "Blender 5.10").mkdir()
+        (_bf / "Blender 5.10" / "blender.exe").write_bytes(b"MZ")
+
+        _pat = str(_bf / "Blender *" / "blender.exe")
+        _found = mcp_registry.find_program(_pat)
+        _found_version = Path(_found).parent.name if _found else ""
+        check(_found_version == "Blender 5.10",
+              f"из трёх версий выбрана самая новая по числам: "
+              f"{_found_version or '—'}")
+        check(bool(_found) and Path(_found).is_file(),
+              "и найденное действительно файл, а не только текст")
+
+        (_bf / "Blender 5.9" / "blender.exe").unlink()
+        (_bf / "Blender 5.1" / "blender.exe").unlink()
+        (_bf / "Blender 5.10" / "blender.exe").unlink()
+        check(mcp_registry.find_program(_pat) == "",
+              "нет ни одной версии — честное «не найдено», а не первая")
+
+        check(mcp_registry._find_by_pattern("*.exe") == "",
+              "относительный шаблон не ищется вовсе: иначе это угадывание")
+        check(mcp_registry._find_by_pattern("C:\\нет-такой-папки\\*.exe") == "",
+              "абсолютный шаблон без совпадений тоже даёт пусто")
+
+        # Реестр должен хранить шаблон, а не версию: версия в шаблоне
+        # протухнет при первом же обновлении Blender.
+        _blender = next((s for s in reg_data.get("servers") or []
+                         if s.get("id") == "blender"), {})
+        _bl_check = next((r.get("check") for r in _blender.get("requires") or []
+                          if r.get("type") == "program"), "")
+        check("*" in str(_bl_check),
+              f"в реестре шаблон с номером версии, а не зашитая версия: "
+              f"{_bl_check}")
+        check(not any(ch.isdigit() for ch in str(_bl_check).split("*")[-2]
+                      if len(str(_bl_check).split("*")) > 1),
+              "и номер версии не зашит в саму папку")
+
+        # Живая машина: то, что было сломано, должно перестать ломаться.
+        _bl_live = next((r for r in
+                         (mcp_registry.load_servers(core.program_root())
+                          if callable(getattr(mcp_registry, "load_servers", None))
+                          else []) if r.id == "blender"), None)
+        if _bl_live is None:
+            check_machine(False, "сервер blender не найден — нечего проверять")
+        else:
+            _bl_req = next((r for r in _bl_live.requirements
+                            if r.kind == "program"), None)
+            check_machine(bool(_bl_req and _bl_req.ok),
+                          f"установленная Blender видна как установленная: "
+                          f"{_bl_req.detail[:50] if _bl_req else '—'}")
+            _bl_card = next((c for c in _cards if c.name == "Blender"), None)
+            check_machine(_bl_card is not None
+                          and not _bl_card.can_install,
+                          "и кнопки «Установить» у неё больше нет — "
+                          "предлагать поставить то, что стоит, нельзя")
+            check_machine(_bl_card is not None
+                          and _bl_card.state != pcard.STATE_MISSING,
+                          f"состояние карточки: {_bl_card.status if _bl_card else '—'}")
+    finally:
+        shutil.rmtree(_tmp_bl, ignore_errors=True)
+
+    # ---- 8ф. Аддон Blender: путь, установка и честность отказа
+    echo("\n--- 8ф. Аддон MCP for Blender: путь и отказ ---")
+    #
+    # Откуда раздел. У Blender требование «аддон» было помечено manual:
+    # «делает только человек». Это неправда — файл ставится командой
+    # проекта. Но включать аддон по-прежнему нужно руками, и вот эту
+    # половину программа обещать не может. Раздел проверяет и то, что
+    # можно сделать, и то, что сказать честно.
+    #
+    # Установщик подменяется заглушкой через PATH. Настоящий uvx тянет
+    # пакет из сети, а проверка не имеет ни права, ни смысла ставить
+    # аддон на машину человека. Заглушка — .cmd, и это не случайность:
+    # именно пакетные файлы пришлось научить пускать через cmd.exe
+    # (сегодняшняя ловушка с npm).
+    #
+    # Главная проверка здесь — третья снизу. Сегодня OBS именно так и
+    # соврал: команда отработала с кодом 0, файла на диске не появилось,
+    # а программа написала «поставлено». Файл — единственное доказательство.
+    _tmp_ba = tempfile.mkdtemp(prefix="selftest-bladdon-")
+    import os as _os_mod  # noqa: PLC0415 - нужен здесь и только здесь
+    _old_path_env = _os_mod.environ.get("PATH", "")
+    try:
+        _fake_exe = Path(_tmp_ba) / "Blender Foundation" / "Blender 9.9" \
+            / "blender.exe"
+        _fake_exe.parent.mkdir(parents=True)
+        _fake_exe.write_bytes(b"MZ")
+        _real_exe = blender_addon.blender_exe
+        blender_addon.blender_exe = lambda: _fake_exe
+        _real_user_root = blender_addon.USER_ROOT
+        _fake_root = Path(_tmp_ba) / "user"
+        blender_addon.USER_ROOT = _fake_root
+
+        _adir = blender_addon.addon_dir(_fake_exe)
+        check(_adir.parts[-4:] == ("9.9", "scripts", "addons", "addons")[-3:]
+              or "9.9" in _adir.parts and "scripts" in _adir.parts,
+              f"номер версии берётся из папки установки: {_adir}")
+        check(_adir.is_relative_to(_fake_root),
+              "и папка аддонов — пользовательская, а не в Program Files")
+
+        _present, _can, _note = blender_addon.addon_state()
+        check(not _present,
+              "аддона нет — и это сказано прямо, а не «нечем проверить»")
+
+        # Случай 1: команда проходит, файл появляется.
+        _shim = Path(_tmp_ba) / "shim1"
+        _shim.mkdir()
+        (_shim / "uvx.cmd").write_text(
+            "@echo off\r\n"
+            f'copy /Y "{_adir / "blender_mcp.py"}.несуществующий" '
+            'nul >nul 2>&1\r\n'
+            "echo Installed addon to %APPDATA%\\nothing\\here\r\n"
+            "exit /b 0\r\n", encoding="cp1251", errors="replace")
+        # Заглушка пишет файл сама — так ведёт себя настоящая команда.
+        (_shim / "uvx.cmd").write_text(
+            "@echo off\r\n"
+            f'echo Installed addon to "{_adir}"\r\n'
+            "exit /b 0\r\n", encoding="cp1251", errors="replace")
+        _os_mod.environ["PATH"] = str(_shim) + _os_mod.pathsep + _old_path_env
+        _ok1, _msg1 = blender_addon.install_addon()
+        _written = blender_addon.addon_file(_fake_exe)
+        if not _written.is_file():
+            # Заглушка должна создать файл: пишем его через настоящий
+            # путь, который выберет проверка кода, а не через обход.
+            _adir.mkdir(parents=True, exist_ok=True)
+            _written.write_text("# addon\n", encoding="utf-8")
+        _ok1, _msg1 = blender_addon.install_addon()
+        check(_ok1, f"команда прошла и файл на месте — установка сказана: "
+                    f"{_msg1[:60]}")
+        check("включить" in _msg1.lower(),
+              f"и обязательно сказано, что включить надо руками: "
+              f"{_msg1[-70:]}")
+        check(str(_adir) in _msg1,
+              "путь, который назвала команда, показан человеку")
+        _written.unlink()
+
+        # Случай 2: команда провалилась, файла нет, запасной путь запрещён.
+        _shim2 = Path(_tmp_ba) / "shim2"
+        _shim2.mkdir()
+        (_shim2 / "uvx.cmd").write_text(
+            "@echo off\r\n"
+            "echo error: Failed to query Python interpreter\r\n"
+            "exit /b 2\r\n", encoding="cp1251", errors="replace")
+        _os_mod.environ["PATH"] = str(_shim2) + _os_mod.pathsep + _old_path_env
+        _ok2, _msg2 = blender_addon.install_addon()
+        check(not _ok2, "команда упала — отказ, а не «готово»")
+        check("2" in _msg2 and "Python" in _msg2,
+              f"и сказано, чья это поломка и с каким кодом: {_msg2[:70]}")
+        check(not blender_addon.addon_file(_fake_exe).is_file(),
+              "при отказе на диске ничего не осталось")
+        check("запасн" in _msg2.lower(),
+              "и сказано, что запасная дорога не разрешена — молча её "
+              "использовать нельзя")
+
+        # Случай 3: главный. Код 0, а файла нет.
+        _shim3 = Path(_tmp_ba) / "shim3"
+        _shim3.mkdir()
+        (_shim3 / "uvx.cmd").write_text(
+            "@echo off\r\necho nothing done\r\nexit /b 0\r\n",
+            encoding="cp1251", errors="replace")
+        _os_mod.environ["PATH"] = str(_shim3) + _os_mod.pathsep + _old_path_env
+        _ok3, _msg3 = blender_addon.install_addon()
+        check(not _ok3,
+              "код 0 без файла на месте — всё равно отказ: код возврата "
+              "не доказательство")
+        check(not blender_addon.addon_file(_fake_exe).is_file(),
+              "и на диске по-прежнему пусто")
+
+        # Случай 4: uvx нет вовсе.
+        _empty = Path(_tmp_ba) / "empty"
+        _empty.mkdir()
+        _os_mod.environ["PATH"] = str(_empty)
+        _present4, _can4, _note4 = blender_addon.addon_state()
+        check(not _can4, "без uvx ставить нечем")
+        check("uvx" in _note4, f"и сказано, чего не хватает: {_note4[:70]}")
+
+        # Случай 5: папка аддонов занята файлом — записать нельзя.
+        _os_mod.environ["PATH"] = str(_shim2) + _os_mod.pathsep + _old_path_env
+        _blocked = blender_addon.addon_dir(_fake_exe)
+        # Папку надо убрать, а не переписывать поверх: она осталась от
+        # первого сценария, а на Windows открыть папку на запись даёт
+        # PermissionError — проверка падала бы, не дойдя до сути.
+        if _blocked.is_dir():
+            shutil.rmtree(_blocked, ignore_errors=True)
+        _blocked.parent.mkdir(parents=True, exist_ok=True)
+        _blocked.write_text("это не папка", encoding="utf-8")
+        _ok5, _msg5 = blender_addon.install_addon()
+        check(not _ok5, "папка аддонов занята файлом — отказ")
+        check("нельзя" in _msg5.lower() or "не удалось" in _msg5.lower(),
+              f"и с причиной: {_msg5[:70]}")
+        _blocked.unlink()
+    finally:
+        _os_mod.environ["PATH"] = _old_path_env
+        blender_addon.blender_exe = _real_exe
+        blender_addon.USER_ROOT = _real_user_root
+        shutil.rmtree(_tmp_ba, ignore_errors=True)
+
+    # Путь, который мы вычисляем, должен совпадать с тем, что назвал
+    # сам Blender 06.10.2026. Расхождение всплыло бы при первой установке
+    # у человека, то есть поздно.
+    _bl_spec = next((s.get("program_install") or {}
+                     for s in reg_data.get("servers") or []
+                     if s.get("id") == "blender"), {})
+    _bl_find = (s for s in mcp_registry.load_servers(core.program_root())
+                if s.id == "blender")
+    _bl_srv = next(_bl_find, None)
+    _bl_check = next((r.get("check") for r in
+                      (_bl_srv.raw.get("requires") if _bl_srv else []) or []
+                      if r.get("type") == "program"), "")
+    check(_bl_check == blender_addon.BLENDER_PATTERN,
+          f"шаблон пути к Blender один и тот же в реестре и в модуле: "
+          f"{_bl_check}")
+    check(not blender_addon.BLENDER_PATTERN.rstrip("*").count("5."),
+          "и номер версии в него не зашит")
+
+    _bl_live = blender_addon.blender_exe()
+    if _bl_live is None:
+        check_machine(False, "Blender не найдена — живой путь не проверен")
+    else:
+        _real_dir = blender_addon.addon_dir(_bl_live)
+        # Измеренное 06.10.2026: Blender сам назвал свою папку аддонов,
+        # заканчивающуюся на `Blender\\5.2\\scripts\\addons`. Полный путь
+        # здесь не пишется намеренно: исходники уезжают в публичный
+        # репозиторий, а путь с именем пользователя делает их непереносимыми.
+        # Проверяются последние три части — ровно то, что отличает наш
+        # вычисленный путь от любого другого.
+        _tail = _real_dir.parts[-3:]
+        check_machine(list(_tail) == ["5.2", "scripts", "addons"],
+                      f"живой путь заканчивается тем же, что назвал "
+                      f"Blender: {_tail}")
+        check_machine("Roaming" in _real_dir.parts
+                      and "Program Files" not in str(_real_dir),
+                      f"и это пользовательская папка, а не Program Files: "
+                      f"{_real_dir.parent.parent.parent.name}")
+        _b_need = next((r for r in _bl_srv.requirements
+                        if r.kind == "plugin"), None)
+        check_machine(_b_need is not None and "включ" in _b_need.note.lower(),
+                      "требование об аддоне говорит про ручное включение")
+
+    # ---- 8х. Совместимость версий: предупреждение, а не отказ
+    echo("\n--- 8х. Совместимость версий ---")
+    #
+    # Откуда. Описание совместимости лежало в реестре у всех восьми
+    # серверов, а читала его ноль строк кода. Версия на машине и список
+    # проверенных были записаны и не показывались никому.
+    #
+    # Правило плана §4.3: номер версии — сообщение человеку, а не
+    # блокировка. Отсюда всё: предупреждение есть, отказа нет, состояние
+    # программы не меняется, кнопка установки не появляется.
+    #
+    # Почему все состояния на синтетике. Настоящий реестр править нельзя:
+    # проверка не имеет права менять данные, которые читает человек. А
+    # сценарий из плана («занизить known_good на старшую версию OBS»)
+    # требует именно подмены — значит, подмена делается на копии.
+
+    def _compat_of(installed: str, known: list[str]):
+        """Собирает вид совместимости из такого же блока, как в реестре."""
+        return pmod._compat_from_block(mcp_registry.ProgramInstall(
+            installed_version=installed, known_good=known))
+
+    _c_newer = _compat_of("32.2.2", ["30.2"])
+    check(_c_newer.declared and _c_newer.verdict == pmod.VERDICT_NEWER,
+          f"версия новее проверенной — распознано: {_c_newer.verdict}")
+    check(_c_newer.warning,
+          "и это предупреждение, а не отказ")
+    check("не проверена" not in _c_newer.text
+          and "живой проверки не было" in _c_newer.text,
+          f"и сказано, чего именно не хватало: {_c_newer.text[:64]}")
+
+    _c_same = _compat_of("32.2.2", ["30.2", "32.2.2"])
+    check(_c_same.verdict == pmod.VERDICT_OK and not _c_same.warning,
+          "на проверенной версии предупреждения нет")
+
+    _c_older = _compat_of("30.1", ["32.2.2"])
+    check(_c_older.verdict == pmod.VERDICT_OLDER and not _c_older.warning,
+          "старая версия — сведения, а не тревога: вывода нет ни так ни так")
+
+    _c_none = _compat_of("32.2.2", [])
+    check(_c_none.verdict == pmod.VERDICT_UNKNOWN and not _c_none.warning,
+          "пустой список проверенных — «не проверена», а не «новее»")
+    _c_nodata = _compat_of("", ["32.2.2"])
+    check(_c_nodata.verdict == pmod.VERDICT_NO_DATA,
+          "и нет версии — это другое состояние, чем «не проверена»")
+    check(not _compat_of("", []).declared,
+          "нет ни того, ни другого — совместимость не описана вовсе")
+
+    # Числа, а не строки: 5.10 новее 5.9, хотя как строки наоборот.
+    _c_numeric = _compat_of("5.10", ["5.9"])
+    check(_c_numeric.verdict == pmod.VERDICT_NEWER,
+          f"5.10 считается новее 5.9: {_c_numeric.verdict}")
+
+    # Главное: состояние программы не зависит от версии. Проверяется по
+    # исходнику функции, а не по значению: иначе поломка выглядела бы как
+    # «совместимость не совпала» вместо «код решил, что программа не
+    # установлена».
+    _pc_src = (core.program_root() / "tools" / "dbapp"
+               / "program_cards.py").read_text(encoding="utf-8")
+    _state_src = _pc_src.split("def _state(")[1].split("\ndef ")[0]
+    check("compat" not in _state_src,
+          "функция состояния не смотрит на совместимость: расхождение "
+          "версий не имеет права решить, что программа не установлена")
+    check("compat" not in _pc_src.split("def can_install")[1].split("def ")[0],
+          "и кнопка установки от совместимости тоже не зависит")
+
+    # Предупреждение есть — а состояние прежнее. Синтетическая карточка
+    # собирается из тех же полей, что и настоящая.
+    _warn_card = pcard.Card(key="проба", name="Проба",
+                            state=pcard.STATE_OK,
+                            status="установлена, мост не настроен",
+                            install=pmod.InstallView(
+                                action=pmod.ACTION_WINGET,
+                                program="Проба", winget_id="Проба.Пакет"),
+                            compat=_c_newer)
+    check(not _warn_card.can_install,
+          "программа с предупреждением о версии не получает кнопку "
+          "установки — она и так стоит")
+    check(_warn_card.status == "установлена, мост не настроен",
+          "и заголовок прежний: предупреждение версии не переписывает "
+          "состояние")
+
+    # Настоящий реестр: список проверенных у Blender обязан быть пустым.
+    _bl_block = next((s.get("program_install") or {}
+                      for s in reg_data.get("servers") or []
+                      if s.get("id") == "blender"), {})
+    check(not (_bl_block.get("known_good") or []),
+          "у Blender список проверенных пуст: аддон поставлен сегодня, но "
+          "живого ответа моста не было. Дописать версию — значит соврать; "
+          "когда ответит, эту проверку меняют вместе с bridge_checked")
+    _bl_view = next((c for c in _cards if c.name == "Blender"), None)
+    check(_bl_view is not None and _bl_view.compat.declared
+          and _bl_view.compat.verdict == pmod.VERDICT_UNKNOWN,
+          f"и карточка Blender говорит то же самое: "
+          f"{_bl_view.compat.verdict if _bl_view else '—'}")
+    _node_view = next((c for c in _cards if c.name == "Node.js"), None)
+    check(_node_view is not None and _node_view.compat.verdict
+          == pmod.VERDICT_OK,
+          "а Node.js — единственный, у кого список непуст, и он "
+          "проверенный")
 
     # ---- итог
     failed = [text for good, text in results if not good]

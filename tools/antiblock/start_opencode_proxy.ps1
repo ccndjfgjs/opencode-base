@@ -4,12 +4,92 @@ param(
     [string]$OpenCodePath = "$env:LOCALAPPDATA\Programs\@opencode-aidesktop\OpenCode.exe",
     [string]$PoolFile,
     [int]$XrayPort = 10900,
+    [int]$FacadeDefaultPort = 17890,
     [switch]$NoXray
 )
 
 $ErrorActionPreference = "Stop"
+
+# Порт фасада берётся из настроек программы, а не из константы в коде:
+# ключ facade_port в <папка программы>\config\preferences.json.
+# Функция ниже объясняет, откуда стартер знает путь к папке программы.
+function Get-FacadePort {
+    # Порт фасада — настройка программы, лежит в файле
+    # <папка программы>\config\preferences.json, ключ facade_port.
+    #
+    # Где лежит папка программы, стартер узнаёт из манифеста набора
+    # (.opencode-base-caps.json, ключ antiblock_base) — он лежит рядом с
+    # папкой стартеров, на уровень выше. Запасной путь — подъём вверх от
+    # $PSScriptRoot: он работает для копии стартера внутри папки программы
+    # и не работает для рабочей копии (это другое дерево, до Downloads
+    # подъём не доходит), поэтому он именно запасной.
+    #
+    # Молча откатываться на дефолт нельзя: человек правил настройку и
+    # должен увидеть, что она не учтена.
+    param([int]$Default, [int]$XrayPort)
+
+    $prefs = ""
+    $capsDir = Split-Path -Parent $PSScriptRoot
+    $manifest = Join-Path $capsDir ".opencode-base-caps.json"
+    if (Test-Path -LiteralPath $manifest) {
+        try {
+            $caps = Get-Content -LiteralPath $manifest -Raw -Encoding UTF8 | ConvertFrom-Json
+            $base = $caps.antiblock_base
+            if ($base) {
+                $candidate = Join-Path ([string]$base) "config\preferences.json"
+                if (Test-Path -LiteralPath $candidate) {
+                    $prefs = $candidate
+                }
+                else {
+                    Write-Host ("Путь к программе из манифеста не подошёл: {0}" -f $candidate)
+                }
+            }
+        }
+        catch {
+            Write-Host ("Манифест набора не прочитан: {0}" -f $_.Exception.Message)
+        }
+    }
+    if (-not $prefs) {
+        $dir = $PSScriptRoot
+        while ($dir) {
+            $candidate = Join-Path $dir "config\preferences.json"
+            if (Test-Path -LiteralPath $candidate) { $prefs = $candidate; break }
+            $parent = Split-Path -Parent $dir
+            if (-not $parent -or $parent -eq $dir) { break }
+            $dir = $parent
+        }
+    }
+    if (-not $prefs) {
+        Write-Host ("Файл настроек не найден ни в манифесте, ни выше по дереву. Взят порт {0}." -f $Default)
+        return $Default
+    }
+    try {
+        $data = Get-Content -LiteralPath $prefs -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+    catch {
+        Write-Host ("Файл настроек {0} не прочитан: {1}. Взят порт {2}." -f $prefs, $_.Exception.Message, $Default)
+        return $Default
+    }
+    if ($null -eq $data -or $null -eq $data.facade_port) { return $Default }
+    $raw = $data.facade_port
+    if (-not ($raw -is [int] -or $raw -is [long])) {
+        Write-Host ("Порт в настройке не целое число: {0}. Взят {1}." -f $raw, $Default)
+        return $Default
+    }
+    $value = [int]$raw
+    if ($value -lt 1024 -or $value -gt 65535) {
+        Write-Host ("Порт {0} вне 1024-65535. Взят {1}." -f $value, $Default)
+        return $Default
+    }
+    if ($value -eq $XrayPort) {
+        Write-Host ("Порт {0} занят каналом xray. Взят {1}." -f $value, $Default)
+        return $Default
+    }
+    return $value
+}
+
 $listenHost = "127.0.0.1"
-$listenPort = 17890
+$listenPort = Get-FacadePort -Default $FacadeDefaultPort -XrayPort $XrayPort
 $facadeScript = Join-Path $PSScriptRoot "http_facade.py"
 if ([string]::IsNullOrWhiteSpace($PoolFile)) {
     # Живой список — появляется после обновления (кнопка "Обновить" или

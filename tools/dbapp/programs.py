@@ -150,6 +150,255 @@ class BridgeView:
 
 
 @dataclass
+class PluginView:
+    """Плагин программы: что реестр описал и что лежит на диске.
+
+    Поля делятся на два разных происхождения, и путать их нельзя.
+
+    * `declared`, `finder`, `name`, `button`, `hint`, `unavailable` —
+      из реестра. Это знание о конкретной чужой программе: что нужно,
+      как называется кнопка, почему её может не быть.
+    * `present`, `can_write`, `note` — с диска, на каждый рисунок
+      карточек. Из памяти эти поля протухают за час до нажатия, и карточка
+      начинает обещать то, чего уже нет.
+    """
+
+    declared: bool = False
+    finder: str = ""
+    name: str = ""
+    button: str = ""
+    hint: str = ""
+    unavailable: str = ""
+    present: bool = False
+    can_write: bool = False
+    use_fallback: bool = False
+    note: str = ""
+
+
+@dataclass
+class CompatView:
+    """Совместимость версии — и что из этого следует для человека.
+
+    Пять состояний, и они различаются потому, что человек должен знать,
+    что именно проверено, а не только «да» или «нет»:
+
+    * **проверенная** — стоит ровно та версия, на которой мост отвечал;
+    * **новее проверенной** — мост может работать, но на этой версии
+      живой проверки не было. Это **предупреждение**, а не отказ: план
+      §4.3 требует прямо, чтобы номер версии был сообщением человеку;
+    * **старее проверенной** — проверяли на более новой, отсюда вывода
+      нет никакого;
+    * **не проверялась** — списка проверенных нет вовсе;
+    * **версия не записана** — снимать нечего, и это не то же самое,
+      что «не проверялась»: первое — данные, второе — вывод.
+
+    Ни одно из этих состояний **не меняет** состояние программы и не
+    убирает кнопку установки. Расхождение версий не имеет права сделать
+    вид, что программа не установлена.
+    """
+
+    declared: bool = False
+    installed: str = ""
+    known_good: list[str] = field(default_factory=list)
+    bridge_checked: bool = False
+    measured: str = ""
+    verdict: str = ""              # проверенная | новее | старее | не проверена
+    warning: bool = False          # это сообщение человеку, а не отказ
+    text: str = ""
+
+
+#: Почему кнопка обновления не нажата.
+REASON_NO_WINGET = "у программы нет идентификатора winget — обновлять нечем"
+REASON_NOT_INSTALLED = "программа не установлена — обновлять нечего"
+REASON_SAME = "записанная версия совпадает с версией в каталоге"
+REASON_NO_INSTALLED = "установленная версия не записана — судить не о чем"
+REASON_CATALOG_NEWER_THAN_INSTALLED = ("версия каталога старее записанной: "
+                                      "источник откатился, обновлять некуда")
+
+#: Почему кнопка отката не нажата.
+REASON_NO_HISTORY = "откатываться нечем: прежняя версия не записана"
+REASON_NO_VERSION = "записать нечего: версия не названа"
+
+
+@dataclass
+class UpdateView:
+    """Обновление и откат — что предложить и чем отговориться.
+
+    Поле `declared` отвечает на вопрос «описано ли это в реестре вовсе».
+    Оно нужно, чтобы молчание карточки означало «нечего предложить», а не
+    «кто-то забыл описать».
+    """
+
+    declared: bool = False
+    installed: str = ""              # что стоит, по реестру
+    available: str = ""              # что обещает каталог, по реестру
+    previous: list[str] = field(default_factory=list)
+    update_available: bool = False
+    can_update: bool = False
+    update_reason: str = ""          # почему нельзя — молчать нельзя
+    can_rollback: bool = False
+    rollback_reason: str = ""
+    text: str = ""
+
+    @property
+    def can_change(self) -> bool:
+        """Есть ли хоть одно действие. Обе кнопки выключены — карточке
+        незачем про обновление говорить вовсе."""
+        return self.can_update or self.can_rollback
+
+
+def _has_digit(text: str) -> bool:
+    """Есть ли в версии хоть одна цифра. Нет — версию с чем сравнивать нельзя.
+
+    Отдельная проверка, а не `version_tuple(...)`: та для строки без цифр
+    отдаёт ноль, а ноль — валидная версия, и молча превращает «бета» в
+    «0.0.0», то есть в самую старую. Сравнив с ней, программа предложила
+    бы обновление на основании цифры, которой никогда не было.
+    """
+    return any(ch.isdigit() for ch in str(text or ""))
+
+
+def _update_from_block(block: mcp_registry.ProgramInstall | None) -> UpdateView:
+    """Что реестр знает про обновление и откат.
+
+    Сравнение версий числовое, а не строковое: 5.10 новее 5.9 по числам и
+    старее по строкам, и строковое сравнение предложило бы откатиться не
+    туда либо, наоборот, спрятало бы обновление.
+    """
+    if block is None or not block.winget_id:
+        if block is None:
+            return UpdateView()
+        return UpdateView(declared=True, update_reason=REASON_NO_WINGET,
+                          text=REASON_NO_WINGET)
+    if not block.installed_version:
+        # Установленная версия не записана — судить не о чем. Это не то же
+        # самое, что «обновлений нет»: первое — нет данных, второе — вывод.
+        return UpdateView(
+            declared=True,
+            installed="",
+            available=str(block.catalog_version or "").strip(),
+            previous=list(block.previous_versions),
+            update_reason=REASON_NO_INSTALLED,
+            rollback_reason=(REASON_NO_HISTORY if not block.previous_versions
+                             else ""),
+            can_rollback=bool(block.previous_versions),
+            text=REASON_NO_INSTALLED,
+        )
+
+    import versions as _vs  # noqa: PLC0415 — лёгкий модуль, нужен здесь
+
+    view = UpdateView(
+        declared=True,
+        installed=str(block.installed_version).strip(),
+        available=str(block.catalog_version or "").strip(),
+        previous=list(block.previous_versions),
+    )
+    if view.previous:
+        view.can_rollback = True
+    else:
+        view.rollback_reason = REASON_NO_HISTORY
+
+    if not _has_digit(view.installed) or not _has_digit(view.available):
+        # Версия без цифр — «бета», «nightly», «dev». Такую не с чем
+        # сравнивать: `version_tuple` отдаёт для неё ноль, а ноль —
+        # валидная версия, и «бета» молча считалась бы самой старой, и
+        # обновление предлагалось бы вслепую. Обещать обновление тому,
+        # чью версию мы не разобрали, нельзя.
+        view.update_reason = REASON_NO_INSTALLED
+        view.text = ("версия не разбирается как числа — судить, есть ли "
+                     "обновление, не по чему. Нажми «Проверить»: программа "
+                     "спросит источник живьём и покажет, что он называет")
+        return view
+
+    if not view.available:
+        view.update_reason = REASON_NO_INSTALLED
+        view.text = ("обновление не проверялось: версия в каталоге не "
+                     "записана. Нажми «Проверить» — программа спросит "
+                     "источник живьём")
+        return view
+
+    here = _vs.version_tuple(view.installed)
+    there = _vs.version_tuple(view.available)
+    if not here or not there:
+        view.update_reason = REASON_NO_INSTALLED
+        view.text = ("версии не сравнить: одна из них не разобралась как "
+                     "числа. Нажми «Проверить» — программа спросит "
+                     "источник живьём")
+        return view
+    if there > here:
+        view.update_available = True
+        view.can_update = True
+        view.text = (f"доступна версия {view.available}, стоит {view.installed}. "
+                     f"Перед обновлением текущая версия будет записана, "
+                     f"чтобы возврат был возможен")
+    elif there == here:
+        view.update_reason = REASON_SAME
+        view.text = f"стоит {view.installed}, это и есть версия в каталоге"
+    else:
+        view.update_reason = REASON_CATALOG_NEWER_THAN_INSTALLED
+        view.text = (f"в каталоге {view.available}, а стоит {view.installed} — "
+                     f"источник откатился, обновлять некуда")
+    return view
+
+
+#: Состояния, при которых версия расходится с проверенной.
+VERDICT_NEWER = "новее проверенной"
+VERDICT_OLDER = "старее проверенной"
+VERDICT_OK = "проверенная"
+VERDICT_UNKNOWN = "не проверена"
+VERDICT_NO_DATA = "версия не записана"
+
+
+def _compat_from_block(block: mcp_registry.ProgramInstall | None) -> CompatView:
+    """Что известно о версии программы, и что из этого следует.
+
+    Сравнение версий числовое, а не строковое. Иначе «5.10» оказался бы
+    старее «5.9», и карточка предупредила бы о несовместимости там, где
+    её нет. Такая ошибка выглядит правдоподобно, и её никто не замечает.
+    """
+    if block is None or not (block.installed_version or block.known_good):
+        return CompatView()
+    import versions as _vs  # noqa: PLC0415 - лёгкий модуль, нужен здесь
+
+    view = CompatView(
+        declared=True,
+        installed=str(block.installed_version or "").strip(),
+        known_good=list(block.known_good),
+        bridge_checked=bool(block.bridge_checked),
+        measured=str(block.version_measured or "").strip(),
+    )
+    if not view.installed:
+        view.verdict = VERDICT_NO_DATA
+        view.text = ("версия на этой машине не записана — судить о "
+                     "совместимости не по чему")
+        return view
+    if not view.known_good:
+        view.verdict = VERDICT_UNKNOWN
+        view.text = ("совместимость не проверялась: список проверенных версий "
+                     "пуст, живой запрос моста не проходил")
+        return view
+
+    installed = _vs.version_tuple(view.installed)
+    best_text = max(view.known_good, key=lambda v: _vs.version_tuple(v) or ())
+    best = _vs.version_tuple(best_text)
+    if installed == best:
+        view.verdict = VERDICT_OK
+        view.text = f"проверенная версия: {view.installed}"
+        return view
+    if installed > best:
+        view.verdict = VERDICT_NEWER
+        view.warning = True
+        view.text = (f"версия {view.installed} новее проверенной {best_text}: "
+                     f"мост, скорее всего, работает, но на этой версии живой "
+                     f"проверки не было. Это сообщение, а не отказ")
+        return view
+    view.verdict = VERDICT_OLDER
+    view.text = (f"версия {view.installed} старее проверенной {best_text}: "
+                 f"вывода нет ни в ту, ни в другую сторону")
+    return view
+
+
+@dataclass
 class ProgramView:
     """Всё по одной программе — для карточки вкладки."""
 
@@ -159,6 +408,9 @@ class ProgramView:
     install: InstallView = field(default_factory=InstallView)
     verify: VerifyView = field(default_factory=VerifyView)
     bridge: BridgeView = field(default_factory=BridgeView)
+    plugin: PluginView = field(default_factory=PluginView)
+    compat: CompatView = field(default_factory=CompatView)
+    update: UpdateView = field(default_factory=UpdateView)
 
 
 # --------------------------------------------------------------------- разделы
@@ -203,6 +455,28 @@ def _install_from_block(block: mcp_registry.ProgramInstall | None) -> InstallVie
         publisher_trusted=block.publisher_trusted,
         reason=reason,
         alternatives=list(block.alternatives),
+    )
+
+
+def _plugin_from_block(block: mcp_registry.ProgramInstall | None) -> PluginView:
+    """Плагин из блока установки. Блока или описания нет — плагина нет.
+
+    Отличать «плагина не описано» и «описание сломано» не требуется: и то
+    и другое означает одно — кнопки не будет. Но если описание есть, а
+    имя неизвестно коду, карточка обязана это сказать, а не молчать:
+    тихое отсутствие кнопки выглядит как «здесь ничего не нужно».
+    """
+    spec = getattr(block, "plugin", None) if block is not None else None
+    if spec is None or not str(spec.finder or "").strip():
+        return PluginView()
+    return PluginView(
+        declared=True,
+        finder=str(spec.finder),
+        name=str(spec.name),
+        button=str(spec.button),
+        hint=str(spec.hint),
+        unavailable=str(spec.unavailable),
+        use_fallback=bool(str(spec.fallback).strip()),
     )
 
 
@@ -301,6 +575,9 @@ def server_view(server: mcp_registry.Server) -> ProgramView:
         install=_install_from_block(block),
         verify=_verify_from_block(block),
         bridge=_bridge_from_block(block),
+        plugin=_plugin_from_block(block),
+        compat=_compat_from_block(block),
+        update=_update_from_block(block),
     )
 
 

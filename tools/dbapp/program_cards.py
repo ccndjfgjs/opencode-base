@@ -46,9 +46,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 try:
+    import blender_addon  # type: ignore[import-not-found]
+    import bridges  # type: ignore[import-not-found]
     import mcp_registry  # type: ignore[import-not-found]
     import programs  # type: ignore[import-not-found]
 except ImportError:  # pragma: no cover - запуск как пакет
+    from . import blender_addon  # type: ignore[no-redef]
+    from . import bridges  # type: ignore[no-redef]
     from . import mcp_registry  # type: ignore[no-redef]
     from . import programs  # type: ignore[no-redef]
 
@@ -65,6 +69,20 @@ BTN_CHECK = "check"
 BTN_INSTALL = "install"
 BTN_FOLDER = "folder"
 BTN_PAGE = "page"
+#: Докачать плагин чужой программы. Отдельный код, а не BTN_INSTALL:
+#: установка ставит программу целиком, здесь кладётся одна её часть в
+#: уже установленную. Смешав их, кнопка установки начала бы обещать то,
+#: чего не делает.
+BTN_FETCH = "fetch"
+#: Обновить стоящую программу до версии из каталога. Отдельный код, а не
+#: переиспользование BTN_INSTALL: установка ставит программу целиком,
+#: обновление меняет версию стоящей, и последствия разные.
+BTN_UPDATE = "update"
+#: Вернуть прежнюю версию. Показывается всегда, когда программа описана,
+#: даже когда откатываться нечем: причина уходит в подсказку, кнопка
+#: выключается. Спрятать её нельзя — человек, только что обновившийся и
+#: сломавший мост, не должен гадать, появится ли возврат.
+BTN_ROLLBACK = "rollback"
 
 #: Метод реестра, при котором у варианта программы есть своя кнопка
 #: установки. Константа, а не строковое сравнение в разных местах:
@@ -87,6 +105,9 @@ class Card:
     install: programs.InstallView = field(default_factory=programs.InstallView)
     verify: programs.VerifyView = field(default_factory=programs.VerifyView)
     bridge: programs.BridgeView = field(default_factory=programs.BridgeView)
+    plugin: programs.PluginView = field(default_factory=programs.PluginView)
+    compat: programs.CompatView = field(default_factory=programs.CompatView)
+    update: programs.UpdateView = field(default_factory=programs.UpdateView)
     alternatives: list[dict] = field(default_factory=list)
     exe_path: str = ""             # что открывать кнопкой «Открыть папку»
 
@@ -140,6 +161,42 @@ class Card:
             return False
         return self.state != STATE_OK
 
+    @property
+    def can_fetch(self) -> bool:
+        """Есть ли смысл нажимать «докачать плагин».
+
+        Три причины отказа, и все три настоящие: плагин в реестре не
+        описан, плагин уже стоит, папка закрыта от записи. Третья — самая
+        частая и самая неожиданная: папка принадлежит установщику Windows,
+        и права администратора тут не помогают. Именно её раньше
+        обещали решить словами «запустите от администратора» — а она от
+        слов не зависит вовсе.
+        """
+        return bool(self.plugin.declared and not self.plugin.present
+                    and self.plugin.can_write)
+
+    @property
+    def rollback_target(self) -> str:
+        """Версия, к которой возвращаемся. Пустая — возвращаться нечем.
+
+        Берётся первая в списке: это последняя стоявшая. Взять «любую»
+        нельзя — в списке могут быть версии, которые уже ушли из источника,
+        и возврат к такой закончился бы отказом вместо возврата.
+        """
+        return self.update.previous[0] if self.update.previous else ""
+
+    @property
+    def can_update(self) -> bool:
+        """Показывать ли обновление активной кнопкой."""
+        return bool(self.update.declared and self.update.can_update
+                    and self.install.winget_id)
+
+    @property
+    def can_rollback(self) -> bool:
+        """Показывать ли возврат активной кнопкой."""
+        return bool(self.update.declared and self.update.can_rollback
+                    and self.install.winget_id and self.rollback_target)
+
     def buttons(self) -> list[tuple[str, str, str]]:
         """Какие кнопки показать: (код, надпись, подсказка)."""
         out: list[tuple[str, str, str]] = [
@@ -156,6 +213,42 @@ class Card:
         elif self.state == STATE_MISSING:
             reason = self.install.reason or "установка не описана в реестре"
             out.append((BTN_INSTALL, "Установить", f"недоступно: {reason}"))
+        if self.plugin.declared and not self.plugin.present:
+            # Кнопка остаётся видимой и при отказе: человек пришёл за
+            # плагином, и молчание выглядело бы как «здесь ничего не
+            # нужно». Выключена она с причиной в подсказке.
+            hint = self.plugin.hint if self.can_fetch else "недоступно: " + (
+                self.plugin.unavailable
+                or "почему недоступно, в реестре не написано")
+            out.append((BTN_FETCH, self.plugin.button or "Докачать плагин",
+                        hint))
+        # Только у установленной программы. У отсутствующей обновлять
+        # нечего, и рядом уже есть «Установить», которая объясняет, что
+        # на самом деле нужно. При этом записанная версия может у стоящей
+        # программы отсутствовать — тогда кнопка нужна, поэтому мерим по
+        # состоянию карточки, а не по данным реестра.
+        if (self.state == STATE_OK and self.update.declared
+                and (self.update.can_update or self.update.can_rollback
+                     or self.update.rollback_reason)):
+            # Кнопка обновления активна только когда есть что обновлять,
+            # но строка всё равно говорит: записанная версия может протухнуть,
+            # и источник спросит живым запросом при нажатии.
+            if self.can_update:
+                label = f"Обновить до {self.update.available}"
+                hint = ("Поставит winget. Текущая версия "
+                        f"{self.update.installed} будет записана ДО "
+                        "обновления, чтобы возврат был возможен")
+                out.append((BTN_UPDATE, label, hint))
+            elif self.update.text:
+                out.append((BTN_UPDATE, "Обновить",
+                            f"недоступно: {self.update.update_reason or self.update.text}"))
+            if self.rollback_target:
+                out.append((BTN_ROLLBACK,
+                            f"Вернуть {self.rollback_target}",
+                            "Поставит winget указанную версию"))
+            elif self.update.rollback_reason:
+                out.append((BTN_ROLLBACK, "Вернуть прежнюю версию",
+                            "недоступно: " + self.update.rollback_reason))
         if self.exe_path:
             out.append((BTN_FOLDER, "Открыть папку", self.exe_path))
         if self.install.official_url:
@@ -222,6 +315,9 @@ class _Draft:
     install: programs.InstallView = field(default_factory=programs.InstallView)
     verify: programs.VerifyView = field(default_factory=programs.VerifyView)
     bridge: programs.BridgeView = field(default_factory=programs.BridgeView)
+    plugin: programs.PluginView = field(default_factory=programs.PluginView)
+    compat: programs.CompatView = field(default_factory=programs.CompatView)
+    update: programs.UpdateView = field(default_factory=programs.UpdateView)
 
 
 def _drafts(base: Path) -> list[_Draft]:
@@ -248,6 +344,15 @@ def _drafts(base: Path) -> list[_Draft]:
             draft.verify = view.verify
         if view.bridge.bundled and not draft.bridge.bundled:
             draft.bridge = view.bridge
+        # Плагин берём у первого источника, который его описал: у OBS он
+        # один, а склеивать два описания тут нечего.
+        if view.plugin.declared and not draft.plugin.declared:
+            draft.plugin = view.plugin
+        draft.compat = view.compat
+        # Обновление и откат — из того же источника, что и совместимость.
+        # Склеивать два описания тут нечего: у одной программы один блок
+        # program_install, и второй сервер того же блока не меняет.
+        draft.update = view.update
 
     for need in programs.bridge_needs(base):
         draft = slot(need.program)
@@ -273,6 +378,65 @@ def _drafts(base: Path) -> list[_Draft]:
             detail="программа вне списка серверов MCP")
 
     return list(out.values())
+
+
+def _plugin_handler(finder: str):
+    """Чем говорить о плагине этой программы. None — код не умеет.
+
+    Не список программ, а расшифровка короткого имени `finder` из
+    реестра. Программу называет реестр: без записи о плагине кнопки не
+    будет вовсе, и неизвестное имя честно обрывается отказом, а не
+    ошибкой при первом нажатии.
+    """
+    if finder == "obs" and bridges is not None:
+        # Флаг принимается всеми обработчиками одинаково, иначе первая
+        # же отрисовка падает на том плагине, чей обработчик написан
+        # раньше остальных. OBS запасной дороги не имеет и не может:
+        # файла-аддона там нет, а библиотека лежит в папке программы.
+        def state(use_fallback: bool = False):
+            return bridges.obs_plugin_state()
+
+        return state, bridges.ensure_plugin
+    if finder == "blender-addon" and blender_addon is not None:
+        # use_fallback приходит из реестра, а не из кода: разрешение на
+        # запасную дорогу — решение человека о том, можно ли класть файл
+        # из сети в обход официальной команды.
+        def state(use_fallback: bool = False):
+            return blender_addon.addon_state(use_fallback)
+
+        def fetch(use_fallback: bool = False, progress=None):
+            return blender_addon.install_addon(use_fallback, progress=progress)
+
+        return state, fetch
+    return None
+
+
+def _fill_plugin(card: Card) -> None:
+    """Дополняет карточку живым состоянием плагина.
+
+    Тексты — из реестра, состояние — с диска. Одно без другого врёт:
+    текст из памяти протухает за час до нажатия, а состояние без текста
+    бесполезно — человек не знает, куда смотреть.
+
+    Строка состояния плагина попадает в `bridge_pending`, а не в
+    `status`. Это разные вещи: `status` — про саму программу (стоит или
+    нет), а плагин — часть моста. OBS у нас стоит, и сказать «не
+    установлена» было бы неправдой; сказать «установлена» и промолчать про
+    плагины — тоже.
+    """
+    view = card.plugin
+    if not view.declared:
+        return
+    handler = _plugin_handler(view.finder)
+    if handler is None:
+        view.note = (f"реестр просит плагин «{view.name or view.finder}», "
+                     f"а код такого не умеет: кнопки не будет — и это отказ, "
+                     f"а не молчание")
+        return
+    state, _fetch = handler
+    view.present, view.can_write, view.note = state(view.use_fallback)
+    if not view.present and view.note:
+        card.bridge_pending.append(view.note)
 
 
 # ------------------------------------------------------- состояние программы
@@ -406,7 +570,7 @@ def cards(base: Path) -> list[Card]:
     out: list[Card] = []
     for draft in _drafts(base):
         state = _state(draft, servers_by_id)
-        out.append(Card(
+        card = Card(
             key=_fold(draft.name),
             name=draft.name,
             servers=list(draft.servers),
@@ -417,9 +581,14 @@ def cards(base: Path) -> list[Card]:
             install=draft.install,
             verify=draft.verify,
             bridge=draft.bridge,
+            plugin=draft.plugin,
+            compat=draft.compat,
+            update=draft.update,
             alternatives=list(draft.install.alternatives),
             exe_path=state.exe,
-        ))
+        )
+        _fill_plugin(card)
+        out.append(card)
     return out
 
 

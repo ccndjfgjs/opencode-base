@@ -47,6 +47,7 @@ from PyQt6.QtWidgets import (
     QRadioButton,
     QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -2386,9 +2387,13 @@ class CapsTab(ScrollPage):
                 wrap=True,
             )
         )
+        import antiblock as _ab  # noqa: PLC0415 — рядом лежит, круга нет
+
         self.achecks: dict[str, QCheckBox] = {}
         for key, title in (
-            ("facade", "Переводчик и запуск (фасад 127.0.0.1:17890 + ярлык-запуск)"),
+            ("facade",
+             f"Переводчик и запуск (фасад 127.0.0.1:{_ab.facade_port()} "
+             "+ ярлык-запуск)"),
             ("lists", "Бесплатные списки (SOCKS5-пул + VLESS-подписки + автообновление раз в сутки)"),
             ("dns", "Защищённый DNS (DoH: Google/Cloudflare/Quad9/AdGuard) — запасной способ обхода"),
             ("command", "Команда /обход внутри OpenCode"),
@@ -2411,6 +2416,20 @@ class CapsTab(ScrollPage):
         # через чужие машины. Молчание тут врёт.
         self.lbl_ab_state = ui.label("Обход: проверяю...", kind="dim", wrap=True)
         ab_layout.addWidget(self.lbl_ab_state)
+        row_port = QHBoxLayout()
+        row_port.addWidget(ui.label("Порт фасада:", kind="dim"))
+        self.spin_ab_port = QSpinBox()
+        self.spin_ab_port.setRange(_ab.PORT_MIN, _ab.PORT_MAX)
+        self.spin_ab_port.setValue(_ab.facade_port())
+        self.spin_ab_port.setToolTip(
+            "Порт, на котором фасад принимает соединения. Меняйте, если "
+            f"дефолтный {_ab.FACADE_PORT} занят. Стартер прочитает это сам."
+        )
+        row_port.addWidget(self.spin_ab_port)
+        self.btn_ab_save = QPushButton("Сохранить")
+        row_port.addWidget(self.btn_ab_save)
+        row_port.addStretch(1)
+        ab_layout.addLayout(row_port)
         self._refresh_ab_state()
         outer.addWidget(box_ab)
 
@@ -2560,6 +2579,7 @@ class CapsTab(ScrollPage):
         self.dest_edit.textChanged.connect(self._refresh)
         self.btn_ab_check.clicked.connect(self._check_antiblock)
         self.btn_ab_dns.clicked.connect(self._check_dns)
+        self.btn_ab_save.clicked.connect(self._save_ab_port)
         self.btn_skills_all.clicked.connect(lambda: self._set_all_caps_skills(True))
         self.btn_skills_none.clicked.connect(lambda: self._set_all_caps_skills(False))
         self.btn_skills_reload.clicked.connect(lambda: self._fill_caps_skills())
@@ -3058,6 +3078,39 @@ class CapsTab(ScrollPage):
         item.setText(f"Обход: {text}")
         item.setStyleSheet(f"color: {color};")
 
+    def _save_ab_port(self) -> None:
+        """Кнопка «Сохранить»: записать порт фасада.
+
+        Занятый порт не сохраняем. Иначе настройка останется в файле и
+        обнаружится только при следующем запуске обхода — когда фасад не
+        поднимется. Здесь человек ещё может выбрать другой.
+        """
+        import antiblock as _ab  # noqa: PLC0415 — рядом лежит
+
+        value = self.spin_ab_port.value()
+        why = _ab.port_error(value)
+        if why:
+            self.log.add(f"Порт не сохранён: {why}.", "warn")
+            return
+        if _ab._port_listening(_ab.FACADE_HOST, value):
+            owner = _ab.who_listens(value) or "неизвестным процессом"
+            free = _ab.suggest_free_port(value)
+            tip = (f"Свободный рядом: {free}. Впишите его и сохраните ещё раз."
+                   if free else "Свободного порта рядом не нашлось.")
+            self.log.add(
+                f"Порт {value} занят ({owner}). Не сохранён. {tip}", "warn")
+            return
+        previous = _ab.facade_port()
+        ok, msg = _ab.set_facade_port(value)
+        self.log.add(msg, "ok" if ok else "warn")
+        if ok and previous != value and _ab._port_listening(
+                _ab.FACADE_HOST, previous):
+            self.log.add(
+                f"Фасад сейчас работает на {previous}. Новый порт вступит в "
+                "силу после перезапуска обхода.", "warn")
+        self.spin_ab_port.setValue(_ab.facade_port())
+        self._refresh_ab_state()
+
     def _check_antiblock(self) -> None:
         """Кнопка «Проверить подключение»: слушает ли фасад свой порт."""
         try:
@@ -3487,6 +3540,15 @@ class ProgramsTab(ScrollPage):
         if pending:
             layout.addWidget(ui.label(pending, kind="dim", wrap=True))
 
+        # Совместимость версии — только строка. Ни state, ни can_install,
+        # ни ready от неё не зависят: номер версии это сообщение человеку,
+        # а не основание объявить программу неустановленной. Проверка на
+        # это стоит в селфтесте отдельным пунктом.
+        if card.compat.declared and card.compat.text:
+            layout.addWidget(ui.label(card.compat.text,
+                                      kind="warn" if card.compat.warning
+                                      else "dim", wrap=True))
+
         if card.bridge.bundled:
             layout.addWidget(ui.label("Мост лежит внутри программы — отдельно "
                                       "ставить не нужно.", kind="dim", wrap=True))
@@ -3512,6 +3574,20 @@ class ProgramsTab(ScrollPage):
             elif code == program_cards.BTN_INSTALL:
                 btn.clicked.connect(lambda _=False, c=card: self._install_card(c))
                 if not card.can_install:
+                    btn.setEnabled(False)
+            elif code == program_cards.BTN_FETCH:
+                btn.clicked.connect(lambda _=False, c=card: self._fetch_card(c))
+                if not card.can_fetch:
+                    btn.setEnabled(False)
+            elif code == program_cards.BTN_UPDATE:
+                btn.clicked.connect(
+                    lambda _=False, c=card: self._update_card(c))
+                if not card.can_update:
+                    btn.setEnabled(False)
+            elif code == program_cards.BTN_ROLLBACK:
+                btn.clicked.connect(
+                    lambda _=False, c=card: self._rollback_card(c))
+                if not card.can_rollback:
                     btn.setEnabled(False)
             elif code == program_cards.BTN_FOLDER:
                 btn.clicked.connect(lambda _=False, p=card.exe_path: self._open_folder(p))
@@ -3638,6 +3714,60 @@ class ProgramsTab(ScrollPage):
         self._worker = worker
         worker.start()
 
+    def _fetch_card(self, card: program_cards.Card) -> None:
+        """Докачать плагин моста. Молчание тут недопустимо.
+
+        Качается файл из сети и раскладывается в папку чужой программы,
+        поэтому человек должен знать до нажатия три вещи: что именно
+        скачается, сколько это весит и куда попадёт. Все три — в вопросе.
+        """
+        path = bridges.obs_installed()
+        if path is None:
+            self._set_result(card.key,
+                             "OBS не установлена — докачивать некуда.")
+            return
+        if self._worker is not None and self._worker.isRunning():
+            self._set_result(card.key, "Уже идёт работа — дождись её.")
+            return
+        if not self._ask_fetch(card):
+            self._set_result(card.key, "Отказался — ничего не качаю.")
+            return
+        self._set_busy(card.key, True)
+        self._set_result(card.key, "Запускаю…")
+        worker = Worker(
+            lambda progress: bridges.ensure_plugin(Path(path), progress=progress),
+            self,
+        )
+        worker.line.connect(
+            lambda text, _kind, k=card.key: self._set_result(k, text))
+        worker.finished.connect(lambda k=card.key, w=worker: self._fetch_done(k, w))
+        self._worker = worker
+        worker.start()
+
+    def _ask_fetch(self, card: program_cards.Card) -> bool:
+        """Спросить перед докачкой. Всегда, даже если кнопка активна."""
+        lines = [f"Докачать плагин «{card.plugin.name}»?",
+                 f"Как это будет: {card.plugin.hint}",
+                 "Плагин кладётся в папку плагинов самой программы. "
+                 "Ничего извне не ставится и ничего не удаляется."]
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("Докачать плагин")
+        box.setText("\n\n".join(lines))
+        box.setStandardButtons(QMessageBox.StandardButton.Yes
+                               | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        return box.exec() == QMessageBox.StandardButton.Yes
+
+    def _fetch_done(self, key: str, worker: Worker) -> None:
+        result = worker.result
+        if isinstance(result, tuple) and len(result) == 2:
+            text = str(result[1])
+        else:
+            text = f"Докачка не закончилась: {result if result else 'неизвестно'}"
+        self.reload()
+        self._set_result(key, text)
+
     def _ask_install(self, card: program_cards.Card) -> bool:
         """Спросить перед установкой. Всегда, а не только при правах.
 
@@ -3687,6 +3817,221 @@ class ProgramsTab(ScrollPage):
         # доказывает, что программа появилась.
         self.reload()
 
+    # ------------------------------------------------- обновление и откат
+
+    def _record_before_update(self, card: program_cards.Card) -> str:
+        """Запомнить текущую версию ДО обновления.
+
+        Вынесено отдельно, чтобы порядок был виден: вызов обязан стоять
+        выше `worker.start()`, и это проверяется сравнением номеров строк в
+        селфтесте. Возвращает пустую строку, если записать нечего.
+        """
+        base = self._base()
+        current = card.update.installed
+        if not base or not current or not card.servers:
+            return ""
+        said: list[str] = []
+        for server_id in card.servers:
+            ok, note = mcp_registry.remember_version(base, server_id, current)
+            if not ok:
+                said.append(note)
+        return " ".join(said)
+
+    def _update_card(self, card: program_cards.Card) -> None:
+        """Кнопка «Обновить». Сначала живой вопрос источнику."""
+        if not card.install.winget_id:
+            self._set_result(card.key, "В реестре нет идентификатора winget — "
+                                       "обновлять нечем.")
+            return
+        if self._worker is not None and self._worker.isRunning():
+            self._set_result(card.key, "Уже идёт работа — дождись её.")
+            return
+
+        self._set_busy(card.key, True)
+        self._set_result(card.key, "Спрашиваю источник…")
+        state = winget_install.remote_state(card.install.winget_id)
+        self._set_busy(card.key, False)
+        if not state.seen:
+            self._set_result(card.key, "Обновить не вышло: "
+                                       + (state.note or "источник не ответил"))
+            return
+        if not state.update_available:
+            if state.installed and not state.available:
+                self._set_result(card.key, f"Обновлений нет: стоит "
+                                           f"{state.installed}")
+            elif state.installed and state.available:
+                self._set_result(card.key,
+                                 f"Обновлений нет: стоит {state.installed}, "
+                                 f"в источнике {state.available}")
+            else:
+                self._set_result(card.key, "Обновлений нет, но версия "
+                                           "источником не названа")
+            return
+        if not self._ask_update(card, state):
+            self._set_result(card.key, "Отказался — ничего не обновляю.")
+            return
+
+        self._set_busy(card.key, True)
+        # ПОРЯДОК ВАЖЕН: запись прежней версии идёт ДО запуска обновления.
+        warning = self._record_before_update(card)
+        if warning:
+            self._set_result(card.key, "Прежнюю версию записать не удалось: "
+                                       + warning + ". Обновляю, но возврат "
+                                       "может не получиться.")
+        else:
+            self._set_result(card.key, f"Запомнил версию {state.installed}. "
+                                       "Обновляю…")
+        worker = Worker(
+            lambda progress, pkg=card.install.winget_id:
+                winget_install.upgrade(pkg, progress),
+            self,
+        )
+        worker.line.connect(
+            lambda text, _kind, k=card.key: self._set_result(k, text))
+        worker.finished.connect(
+            lambda k=card.key, w=worker, s=state: self._update_done(k, w, s))
+        self._worker = worker
+        worker.start()
+
+    def _ask_update(self, card: program_cards.Card,
+                    state: winget_install.RemoteState) -> bool:
+        """Спросить перед обновлением. Всегда, даже если кнопка активна."""
+        lines = [f"Обновить {card.install.program or card.name}?",
+                 f"Идентификатор: {card.install.winget_id}",
+                 f"Сейчас стоит: {state.installed}",
+                 f"Источник предлагает: {state.available}"]
+        if card.needs_admin:
+            lines.append("Установщик может запросить права администратора — "
+                         "появится окно Windows с вопросом.")
+        lines.append("Прежняя версия будет записана ДО обновления, чтобы "
+                     "возврат к ней был возможен.")
+        lines.append("Если после обновления мост перестанет отвечать, верни "
+                     "прежнюю версию кнопкой «Вернуть» в этой же карточке.")
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("Обновить программу")
+        box.setText("\n\n".join(lines))
+        box.setStandardButtons(QMessageBox.StandardButton.Yes
+                               | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        return box.exec() == QMessageBox.StandardButton.Yes
+
+    def _update_done(self, key: str, worker: Worker,
+                     state: winget_install.RemoteState) -> None:
+        """Итог обновления. Версия записывается ПОСЕ — отдельной функцией."""
+        result = worker.result
+        self._set_busy(key, False)
+        if not isinstance(result, winget_install.InstallResult):
+            self._set_result(key, "Обновление не закончилось: "
+                                  f"{result if result else 'неизвестно'}")
+            self.reload()
+            return
+        text = result.describe()
+        if result.needs_rights:
+            text += ("\n winget упёрся в права. Запусти сам, от "
+                     "администратора.")
+        if result.ok and not result.already and state.available:
+            # Что стоит ПОСЛЕ — проверяется живым запросом, а не берётся из
+            # того, что обещал источник до обновления.
+            after = winget_install.remote_state(self._winget_id_of(key))
+            base = self._base()
+            if base and after.seen and after.installed:
+                ok, note = mcp_registry.set_installed_version(
+                    base, self._server_id_of(key), after.installed,
+                    note="снято живым `winget list` после обновления")
+                text += f"\n {note}" if ok else f"\n версию записать не вышло: {note}"
+            else:
+                text += "\n новую версию снять не удалось — нажми «Проверить»"
+        self._set_result(key, text)
+        self.reload()
+
+    def _rollback_card(self, card: program_cards.Card) -> None:
+        """Кнопка «Вернуть прежнюю версию»."""
+        target = card.rollback_target
+        if not target:
+            self._set_result(card.key, "Откатываться нечем: прежняя версия "
+                                       "не записана.")
+            return
+        if not card.install.winget_id:
+            self._set_result(card.key, "В реестре нет идентификатора winget — "
+                                       "возвращаться некуда.")
+            return
+        if self._worker is not None and self._worker.isRunning():
+            self._set_result(card.key, "Уже идёт работа — дождись её.")
+            return
+        self._set_busy(card.key, True)
+        self._set_result(card.key, "Спрашиваю источник, есть ли эта версия…")
+        offered = winget_install.version_offered(card.install.winget_id, target)
+        self._set_busy(card.key, False)
+        if not offered:
+            self._set_result(card.key, f"Версии {target} больше нет в "
+                                       "источнике: вернуться к ней не "
+                                       "получится. Нажми «Проверить», чтобы "
+                                       "увидеть, что доступно.")
+            return
+        if not self._ask_rollback(card, target):
+            self._set_result(card.key, "Отказался — ничего не меняю.")
+            return
+        self._set_busy(card.key, True)
+        self._set_result(card.key, f"Возвращаю {target}…")
+        worker = Worker(
+            lambda progress, pkg=card.install.winget_id, want=target:
+                winget_install.install_version(pkg, want, progress),
+            self,
+        )
+        worker.line.connect(
+            lambda text, _kind, k=card.key: self._set_result(k, text))
+        worker.finished.connect(
+            lambda k=card.key, w=worker, want=target: self._rollback_done(k, w,
+                                                                           want))
+        self._worker = worker
+        worker.start()
+
+    def _ask_rollback(self, card: program_cards.Card, target: str) -> bool:
+        """Спросить перед возвратом к прежней версии."""
+        lines = [f"Вернуть {card.install.program or card.name} "
+                 f"к версии {target}?",
+                 f"Идентификатор: {card.install.winget_id}",
+                 f"Сейчас стоит: {card.update.installed or 'не записана'}",
+                 f"Источник эту версию предлагает — проверено только что.",
+                 "Установщик может запросить права администратора."]
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("Вернуть прежнюю версию")
+        box.setText("\n\n".join(lines))
+        box.setStandardButtons(QMessageBox.StandardButton.Yes
+                               | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        return box.exec() == QMessageBox.StandardButton.Yes
+
+    def _rollback_done(self, key: str, worker: Worker, target: str) -> None:
+        """Итог возврата. Версия записывается ПОСЕ."""
+        result = worker.result
+        self._set_busy(key, False)
+        if not isinstance(result, winget_install.InstallResult):
+            self._set_result(key, "Возврат не закончился: "
+                                  f"{result if result else 'неизвестно'}")
+            self.reload()
+            return
+        text = result.describe()
+        if result.ok and not result.already:
+            base = self._base()
+            ok, note = mcp_registry.set_installed_version(
+                base, self._server_id_of(key), target,
+                note=f"записано после возврата к версии {target}")
+            text += f"\n {note}" if ok else f"\n версию записать не вышл: {note}"
+        self._set_result(key, text)
+        self.reload()
+
+    def _server_id_of(self, key: str) -> str:
+        """Первый сервер карточки. Версии пишутся ему — по одному."""
+        card = self._cards.get(key)
+        return card.servers[0] if card and card.servers else ""
+
+    def _winget_id_of(self, key: str) -> str:
+        card = self._cards.get(key)
+        return card.install.winget_id if card else ""
+
     def _set_busy(self, key: str, busy: bool) -> None:
         """Гасить кнопки на время работы.
 
@@ -3705,6 +4050,11 @@ class ProgramsTab(ScrollPage):
                 btn.setEnabled(False)
             elif code == program_cards.BTN_INSTALL:
                 btn.setEnabled(bool(card and card.can_install))
+            elif code == program_cards.BTN_FETCH:
+                # Возврат после работы — по решению карточки, а не всегда
+                # «включено»: кнопка докачки выключена там, где папка
+                # закрыта, и после работы её включить нельзя.
+                btn.setEnabled(bool(card and card.can_fetch))
             else:
                 btn.setEnabled(True)
 

@@ -1116,6 +1116,40 @@ def install_plugin_from_zip(archive: Path,
                   + (f", языков {langs}" if langs > 0 else ""))
 
 
+def obs_plugin_state() -> tuple[bool, bool, str]:
+    """Что с плагином OBS: стоит ли, можно ли докачать, что сказать.
+
+    Три ответа, а не один, потому что человек должен получить все три ДО
+    нажатия на кнопку: стоит ли уже, можно ли поставить, а если нельзя —
+    почему. Кнопка без причины хуже отсутствующей кнопки: человек жмёт
+    её второй раз и злится на программу, хотя поломка в чужой
+    установке.
+
+    Порядок проверки: сначала стоит ли, потом можно ли. Иначе на машине
+    без OBS пришлось бы рассуждать о праве на запись в папку, которой
+    ещё нет.
+    """
+    base = obs_installed()
+    if base is None:
+        return False, False, "OBS не установлена — плагин ставить некуда"
+    if plugin_present(base):
+        return True, False, "плагин obs-websocket на месте"
+
+    full = obs_install_completeness()
+    can_write = bool(full["can_write"])
+    if full["with_dll"] == 0 and full["dirs"]:
+        why = (f"в папке плагинов {full['dirs']} папок, а библиотеки нет "
+               f"ни в одной: OBS стоит без плагинов, и мост не поднимется")
+    else:
+        why = "плагин obs-websocket не найден"
+    if can_write:
+        return False, True, why + ". Докачать можно"
+    return False, False, (why + ". Докачать нельзя: папка плагинов "
+                          "принадлежит установщику Windows, повышение прав "
+                          "не помогает — нужна переустановка OBS с полным "
+                          "набором компонентов")
+
+
 def fetch_plugin(obs_path: Path, progress=None) -> tuple[bool, str]:
     """Качает и ставит плагин. Возвращает (получилось ли, сообщение)."""
 
