@@ -2571,6 +2571,50 @@ def main() -> int:
     ok_conn, _text_conn = antiblock.check_connection(port=_free_port())
     check(ok_conn is False, "проверка честно говорит: фасад не запущен (свободный порт)")
 
+    # Настройка порта фасада: файл настроек, дефолт и отказ на негодном.
+    _pf = Path(tempfile.mkdtemp(prefix="selftest-prefs-"))
+    (_pf / "config").mkdir(parents=True, exist_ok=True)
+    _prefs_file = _pf / "config" / "preferences.json"
+    check(antiblock.facade_port(_pf) == antiblock.FACADE_PORT,
+          "без файла настроек берётся порт по умолчанию")
+    _prefs_file.write_text(json.dumps({"чужой": 1}), encoding="utf-8")
+    check(antiblock.facade_port(_pf) == antiblock.FACADE_PORT,
+          "файл есть, ключа нет — тоже порт по умолчанию")
+    _prefs_file.write_text(json.dumps(["не словарь"]), encoding="utf-8")
+    check(antiblock.facade_port(_pf) == antiblock.FACADE_PORT,
+          "файл не словарь — тоже порт по умолчанию")
+    _prefs_file.write_text(json.dumps({"facade_port": 17891}), encoding="utf-8")
+    check(antiblock.facade_port(_pf) == 17891,
+          "порт читается из файла настроек")
+    _prefs_file.write_text(json.dumps({"чужой": 1, "facade_port": 17891}),
+                           encoding="utf-8")
+    _ok_prefs, _msg_prefs = antiblock.set_facade_port(17900, _pf)
+    _saved_prefs = json.loads(_prefs_file.read_text(encoding="utf-8"))
+    check(_ok_prefs is True, f"порт записывается: {_msg_prefs}")
+    check(_saved_prefs.get("чужой") == 1,
+          "запись настройки не съедает чужие ключи файла")
+    check(_saved_prefs.get("facade_port") == 17900,
+          "и записывает свой")
+    _bad_ok, _bad_msg = antiblock.set_facade_port(antiblock.XRAY_PORT, _pf)
+    check(_bad_ok is False, f"порт xray не сохраняется: {_bad_msg}")
+    _prefs_file.write_text("{битый", encoding="utf-8")
+    _warn_box: list[str] = []
+    _fallback = antiblock.facade_port(_pf, warning=_warn_box)
+    check(_fallback == antiblock.FACADE_PORT,
+          "битый файл настроек даёт порт по умолчанию")
+    check(bool(_warn_box), f"и предупреждение, а не молчание: {_warn_box}")
+    check(_prefs_file.read_text(encoding="utf-8") == "{битый",
+          "битый файл не переписывается молча")
+    for _bad_val in (0, 1023, 70000, "восемь", None, True):
+        check(bool(antiblock.port_error(_bad_val)),
+              f"значение {_bad_val!r} не годится")
+    check(antiblock.port_error(antiblock.XRAY_PORT) != "",
+          "порт xray не годится для фасада")
+    check(antiblock.port_error(antiblock.PORT_MIN) == "",
+          "нижняя граница допустима")
+    check(antiblock.port_error(antiblock.PORT_MAX) == "",
+          "верхняя граница допустима")
+
     # Строка состояния обхода. Проверяется на настоящих слушающих сокетах:
     # закрытый локальный порт падает с отказом сразу, а не по таймауту,
     # поэтому поднимки мгновенные и проверка не ждёт.

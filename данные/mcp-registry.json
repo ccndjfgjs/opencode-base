@@ -74,7 +74,14 @@
         "publisher_trusted": true,
         "bridge": "",
         "instructions": "Node.js — жёсткое требование сервера: в реестре он записан как «Node.js 18+» с проверкой командой node, и без него сервер не запустится. Ставится одной кнопкой через winget, без входа. На этой машине уже стоит v24.18.0 в C:\\Program Files\\nodejs, каталог предлагает 24.19.0 из ветки LTS — это обычное обновление вперёд. Берётся LTS, а не текущая ветка OpenJS.NodeJS (26.7.0): серверу нужен рантайм, и подсовывать скачок через два мажора без спроса нельзя. npx приезжает вместе с Node.js, отдельно ставить нечего. PowerShell входит в состав Windows. Права администратора — ручное требование, программа проверяет их сама. Внимание: npx на Windows лежит npx.ps1, а PowerShell может блокировать запуск .ps1 политикой выполнения; код это уже обходит, пробуя npx.cmd.",
-        "checked": "2026-10-03"
+        "checked": "2026-10-03",
+        "installed_version": "24.18.0",
+        "version_measured": "2026-10-06",
+        "bridge_checked": true,
+        "known_good": [
+          "24.18.0"
+        ],
+        "version_note": "node --version отдал v24.18.0. Живой запуск, проверка прошла. От него зависят мосты OBS, эмулятора и Blender."
       },
       "connection": {
         "kind": "local",
@@ -157,7 +164,12 @@
         "publisher_trusted": true,
         "bridge": "",
         "instructions": "Excel 2016 стоит и работает с мостом — ставить ничего не нужно. Microsoft 365 в winget отсутствует, но предлагать переход на него вкладка НЕ будет: это другой продукт, разовая покупка против подписки, со сменой лицензии и входом в аккаунт. Решение человека 03.10.2026, план раздел 2.4. Кнопки «установить» нет не потому, что программа уже стоит, а потому что winget её не умеет, и причина должна называться. Отдельно нужно включить «Доверять доступ к проектам VBA» в настройках Excel, иначе сервер откажет: см. поле requires.",
-        "checked": "2026-10-03"
+        "checked": "2026-10-03",
+        "installed_version": "16.0.4266.1001",
+        "version_measured": "2026-10-06",
+        "bridge_checked": false,
+        "known_good": [],
+        "version_note": "Стоит Microsoft Office профессиональный плюс 2016; Excel входит в комплект, отдельно в winget не значится."
       },
       "connection": {
         "kind": "local",
@@ -234,7 +246,12 @@
         "publisher_trusted": true,
         "bridge": "",
         "instructions": "Ставится одной кнопкой через winget, без входа и без подписки. После установки аддон ставится отдельно: uvx mcp-for-blender install-addon, затем включить его в настройках аддонов Blender. Пока аддон не включён, сервер формально подключается, но не отвечает.",
-        "checked": "2026-10-03"
+        "checked": "2026-10-03",
+        "installed_version": "5.2.2",
+        "version_measured": "2026-10-06",
+        "bridge_checked": false,
+        "known_good": [],
+        "version_note": "Стоит. Мост не проверялся."
       },
       "connection": {
         "kind": "local",
@@ -295,7 +312,12 @@
         "publisher_trusted": true,
         "bridge": "",
         "instructions": "Клиент Creative Cloud ставится одной кнопкой через winget, вход ему не нужен. Photoshop, Premiere и Illustrator ставятся уже из клиента — после входа в аккаунт и оплаты подписки. До этого места программа доводит и передаёт тебе, потому что дальше нужны твой пароль и платёжные данные, а их у неё нет и быть не должно.",
-        "checked": "2026-10-03"
+        "checked": "2026-10-03",
+        "installed_version": "",
+        "version_measured": "2026-10-06",
+        "bridge_checked": false,
+        "known_good": [],
+        "version_note": "Не установлен: в winget не значится. Проверять нечего."
       },
       "connection": {
         "kind": "remote",
@@ -345,7 +367,12 @@
         "publisher_trusted": true,
         "bridge": "bundled",
         "instructions": "Студия ставится одной кнопкой через winget. Мост уже лежит в программе: сборки разложены по tools/thirdparty/android-studio, указатель index.json. Устанавливать и качать ничего не нужно, сеть не требуется — маркетплейс JetBrains из-за блокировок часто недоступен. Настройки студии правятся только при закрытой студии.",
-        "checked": "2026-10-03"
+        "checked": "2026-10-03",
+        "installed_version": "2026.1",
+        "version_measured": "2026-10-06",
+        "bridge_checked": false,
+        "known_good": [],
+        "version_note": "Стоит. Мост не проверялся."
       },
       "connection": {
         "kind": "remote",
@@ -422,7 +449,12 @@
         "publisher_trusted": true,
         "bridge": "bundled",
         "instructions": "OBS ставится одной кнопкой через winget. Мост obs-mcp уже лежит в программе (tools/thirdparty/obs-mcp-node), ставить ничего не нужно. WebSocket-сервер встроен в OBS с версии 28 и включается руками: Настройки → Веб-сервер. Отдельный obs-websocket уже не нужен.",
-        "checked": "2026-10-03"
+        "checked": "2026-10-03",
+        "installed_version": "32.2.2",
+        "version_measured": "2026-10-06",
+        "bridge_checked": false,
+        "known_good": [],
+        "version_note": "Стоит, но не грузится: Failed to load locale, при этом en-US.ini на месте и читается, права штатные, Defender остановлен. Мост не проверен и проверен быть не может, пока OBS не стартует."
       },
       "connection": {
         "kind": "local",
@@ -559,7 +591,12 @@
             "hand_over": false,
             "note": "В winget нет. Официальная страница и команда в буфер."
           }
-        ]
+        ],
+        "installed_version": "",
+        "version_measured": "2026-10-06",
+        "bridge_checked": false,
+        "known_good": [],
+        "version_note": "В winget не значится отдельной записью; эмуляторов много, выбирать за пользователя нельзя. LDPlayer стоит, проверяется как отдельный сервер."
       },
       "connection": {
         "kind": "local",
@@ -631,7 +668,12 @@
         "publisher_trusted": true,
         "bridge": "bundled",
         "instructions": "В winget нет (проверено 03.10.2026), поэтому кнопки «установить» не будет: официальная страница и готовая команда в буфер обмена. На этой машине LDPlayer уже стоит, и стоит не через winget. Мост mcp-ldplayer лежит в программе, внешних зависимостей нет, ставить ничего не нужно.",
-        "checked": "2026-10-03"
+        "checked": "2026-10-03",
+        "installed_version": "9.5.6.0",
+        "version_measured": "2026-10-06",
+        "bridge_checked": false,
+        "known_good": [],
+        "version_note": "Стоит. Мост не проверялся. В winget две записи: 9.5.6.0 и 3.130 — взята старшая как основная."
       },
       "connection": {
         "kind": "local",

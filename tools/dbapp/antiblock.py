@@ -83,6 +83,15 @@ OPENCODE_EXE_HINTS = (
 FACADE_HOST = "127.0.0.1"
 FACADE_PORT = 17890
 
+#: Куда кладутся машинные настройки. Путь взят из .gitignore (строка 37):
+#: он был зарезервирован под настройки задолго до этой задачи.
+PREFS_REL = ("config", "preferences.json")
+FACADE_PORT_KEY = "facade_port"
+
+#: Границы порта. Нижняя — 1024, выше системных служб; верхняя — 65535.
+PORT_MIN = 1024
+PORT_MAX = 65535
+
 #: Порт своего канала: SOCKS5 от xray. Тот же порт и в стартерах
 #: (`$XrayPort = 10900`), и в самом раннере (`XRAY_DEFAULT_PORT`), и
 #: начало жизни обходчика: «свой Xray слушает 10900 — не трогаю».
@@ -473,6 +482,91 @@ def channel_state(
         f"ни фасада ({host}:{facade_port}). Запусти OpenCode через "
         "ярлык «OpenCode (обход)»."
     )
+
+
+def _prefs_path(base: Path) -> Path:
+    return Path(base).joinpath(*PREFS_REL)
+
+
+def _program_base() -> Path:
+    """Папка программы. Через core, а не вычислением от __file__: путь к
+    программе должен знать один модуль, а не четыре."""
+    from core import program_root  # noqa: PLC0415 — рядом лежит, круга нет
+    return program_root()
+
+
+def load_prefs(base: Path | None = None) -> tuple[dict, str]:
+    """Прочитать настройки. Возвращает (словарь, предупреждение).
+
+    Предупреждение непустое, когда файл есть, но прочитать его нельзя.
+    Такой случай обязан быть виден: молчаливый откат на дефолт выглядел
+    бы как «настройка не работает» без всякой причины.
+    """
+    path = _prefs_path(base or _program_base())
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}, ""
+    except (OSError, UnicodeDecodeError) as exc:
+        return {}, f"Файл настроек {path.name} не прочитан: {exc}"
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return {}, f"Файл настроек {path.name} битый: {exc}"
+    if not isinstance(data, dict):
+        return {}, (f"Файл настроек {path.name} не словарь — "
+                    "взят порт по умолчанию.")
+    return data, ""
+
+
+def port_error(value: object) -> str:
+    """Почему значение не годится. Пустая строка — годится."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return "порт должен быть целым числом"
+    if not (PORT_MIN <= value <= PORT_MAX):
+        return f"порт должен быть от {PORT_MIN} до {PORT_MAX}, а не {value}"
+    if value == XRAY_PORT:
+        return f"{value} — это порт канала xray, его менять нельзя"
+    return ""
+
+
+def facade_port(base: Path | None = None,
+                warning: list[str] | None = None) -> int:
+    """Порт фасада из настроек. Нет файла или ключа — дефолт.
+
+    Кэша нет намеренно: правка файла руками должна подхватываться сразу,
+    а не после перезапуска окна.
+    """
+    prefs, warn = load_prefs(base)
+    if warn and warning is not None:
+        warning.append(warn)
+    value = prefs.get(FACADE_PORT_KEY, FACADE_PORT)
+    return FACADE_PORT if port_error(value) else value
+
+
+def set_facade_port(value: int,
+                    base: Path | None = None) -> tuple[bool, str]:
+    """Записать порт фасада. Возвращает (получилось, текст).
+
+    Пишется только свой ключ: чужие настройки в том же файле не трогаем.
+    """
+    why = port_error(value)
+    if why:
+        return False, f"Порт не сохранён: {why}."
+    root = base or _program_base()
+    path = _prefs_path(root)
+    prefs, _warn = load_prefs(root)
+    prefs[FACADE_PORT_KEY] = int(value)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(prefs, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        return False, (f"Порт не сохранён: {path} — {exc}. В силе остался "
+                       f"{prefs.get(FACADE_PORT_KEY, FACADE_PORT)}.")
+    return True, f"Порт фасада сохранён: {value}."
 
 
 def check_connection(port: int = FACADE_PORT) -> tuple[bool, str]:
