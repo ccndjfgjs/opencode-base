@@ -31,9 +31,12 @@ import json
 import os
 import re
 import secrets
+import shutil
 import subprocess
+import tempfile
 import urllib.error
 import urllib.request
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -95,6 +98,122 @@ HERE = Path(__file__).resolve().parent.parent
 def obs_config_path() -> Path:
     appdata = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
     return Path(appdata) / OBS_CONFIG_RELATIVE
+
+
+def obs_plugin_scan(root: Path) -> dict:
+    """Считает плагины в папке плагинов OBS.
+
+    Отдельная функция с параметром-папкой не для красоты: настоящая папка
+    в Program Files закрыта для записи, и сломанный счётчик на ней не
+    отличить от рабочего — он всё равно вернёт те же числа. Искусственное
+    дерево проходит по тем же строкам кода, поэтому поломку видно.
+
+    Возвращает:
+        dirs     сколько папок создал установщик
+        plugins  сколько из них настоящие плагины
+        helpers  сколько содержат только вспомогательные модули
+        bridge   есть ли библиотека вебсокета
+
+    Почему плагин — это bin/64bit, а не любая .dll. Захват экрана и
+    виртуальная камера кладут свои модули прямо в папку плагина:
+    `win-capture/graphics-hook64.dll`, `win-dshow/obs-virtualcam-module64.dll`.
+    Это не плагины OBS. Первая версия проверки считала их плагинами и
+    выдавала «из 25 плагинов с библиотекой 2» при OBS без единого
+    плагина — враньё в сторону «всё почти работает».
+    """
+    root = Path(root)
+    if not root.is_dir():
+        return {"dirs": 0, "plugins": 0, "helpers": 0, "bridge": False}
+    dirs = [d for d in root.iterdir() if d.is_dir()]
+    plugins = [d for d in dirs if any((d / "bin" / "64bit").glob("*.dll"))]
+    helpers = [d for d in dirs if d not in plugins
+               and any(f.suffix.lower() == ".dll" for f in d.rglob("*.dll"))]
+    return {"dirs": len(dirs), "plugins": len(plugins),
+            "helpers": len(helpers),
+            "bridge": (root / WANTED_DIR / Path(*PLUGIN_DLL)).is_file()}
+
+
+def obs_install_completeness(base=None, root=None) -> dict:
+    """Что на самом деле с установкой OBS. Возвращает честный статус.
+
+    Ключи:
+        installed     OBS найдена
+        dirs          сколько папок плагинов создал установщик
+        with_dll      сколько из них настоящие плагины с библиотекой
+        helpers       сколько содержат только вспомогательные модули
+        complete      плагины на месте и вебсокет есть
+        bridge_ready  есть ли библиотека, без которой не поднимется мост
+        can_write     можно ли докачать плагин прямо в папку; None —
+                      папка подставлена снаружи, проба не делалась
+        message       человекочитаемый вывод
+        user_action   что человеку делать, если не готово
+
+    Про base и root. Их можно подставить: настоящая папка закрыта для
+    записи, и поломку этой проверки на ней не увидеть. Свои пути нужны,
+    чтобы проверить саму проверку.
+    """
+    own = base is None and root is None
+    if base is None:
+        base = obs_installed()
+    out = {"installed": base is not None, "dirs": 0, "with_dll": 0,
+           "helpers": 0, "complete": False, "bridge_ready": False,
+           "can_write": None, "message": "", "user_action": ""}
+    if base is None and root is None:
+        out["message"] = "OBS не установлена"
+        out["user_action"] = "Установите OBS Studio, потом мост"
+        return out
+
+    if root is None:
+        root = Path(base) / "data" / "obs-plugins"
+    if not Path(root).is_dir():
+        out["message"] = "OBS установлена, но папки плагинов нет"
+        out["user_action"] = ("Переустановите OBS с полным набором "
+                              "компонентов")
+        return out
+
+    scan = obs_plugin_scan(root)
+    out["dirs"] = scan["dirs"]
+    out["with_dll"] = scan["plugins"]
+    out["helpers"] = scan["helpers"]
+    out["bridge_ready"] = scan["bridge"]
+    if own:
+        # Проба записи делается только на своей машине: подставленная
+        # папка трогать нельзя, а «можно ли тут писать» к ней не имеет
+        # отношения.
+        out["can_write"] = can_write_here(Path(base))[0]
+
+    if out["bridge_ready"] and out["with_dll"]:
+        out["complete"] = True
+        out["message"] = (f"установка полная: плагинов с библиотекой "
+                          f"{out['with_dll']} из {out['dirs']}")
+        return out
+
+    if out["with_dll"] == 0:
+        out["message"] = (f"OBS запустится, но плагинов нет: папок "
+                          f"{out['dirs']}, библиотеки нет ни в одной")
+    else:
+        out["message"] = (f"часть плагинов на месте: {out['with_dll']} "
+                          f"из {out['dirs']}")
+    if out["helpers"]:
+        out["message"] += f", из них вспомогательных модулей {out['helpers']}"
+    if out["with_dll"] == 0:
+        out["message"] += (". Не работает ни запись экрана, ни "
+                           "браузерный источник, ни вебсокет")
+    out["message"] += (". Мост поднимется" if out["bridge_ready"]
+                       else ". Мост не поднимется")
+
+    if out["bridge_ready"]:
+        return out
+    if out["can_write"] is True:
+        out["user_action"] = ("Докачайте плагин obs-websocket — без него "
+                              "мост не поднимется")
+    elif out["can_write"] is False:
+        out["user_action"] = ("Докачать не выйдет: папка плагинов "
+                              "принадлежит установщику Windows, запись "
+                              "запрещена даже с повышенными правами. "
+                              "Переустановите OBS с полным набором "
+                              "компонентов.")
+    return out
 
 
 def obs_installed() -> Path | None:
@@ -792,6 +911,289 @@ def auto_setup_obs(dest: Path, server, password: str = "",
         # «Перезапусти opencode» уже сказано при вписывании блока.
         messages.append("Готово: мост OBS подключён.")
     return messages, errors
+
+
+# ------------------------------------------------------- докачка плагина OBS
+#
+# Мост OBS говорит с программой через вебсокет, а его даёт плагин
+# obs-websocket. Проверено 06.10.2026: OBS 32.2.2 стоит, папок
+# плагинов двадцать пять, а библиотеки нет ни в одной — студия
+# из-за этого не грузит локаль и не поднимает вебсокет. Чинить
+# вручную нечем: obs-websocket.dll нет нигде на машине.
+
+#: Официальный адрес релиза. Собирается из версии, чтобы нельзя было
+#: увести загрузку на чужой домен.
+RELEASE_URL = ("https://github.com/obsproject/obs-studio/releases/download/"
+               "{version}/OBS-Studio-{version}-Windows-x64.zip")
+
+#: Что именно нужно вытащить из архива. Остальное не трогаем: лишние
+#: плагины OBS не требуются, а распаковывать всё — значит менять
+#: установленную программу целиком.
+WANTED_DIR = "obs-websocket"
+
+#: На что смотрим, чтобы сказать «плагин стоит», а не «папка на месте».
+PLUGIN_DLL = ("bin", "64bit", "obs-websocket.dll")
+
+# Только ASCII: заголовки HTTP кодируются в latin-1, и кириллица в
+# User-Agent обрывает попытку ещё до отправки. Первая версия писала здесь
+# по-русски — и падала на ровном месте, не дойдя до сети.
+UA = "opencode-base/1.0 (obs plugin fetch)"
+
+#: Ограничение: официальный архив около 180 МБ, но качать вообще всё
+#: нельзя — иначе это уже не докачка плагина, а скачивание программы.
+MAX_BYTES = 400 * 1024 * 1024
+
+
+def plugin_dir(obs_path: Path) -> Path:
+    return Path(obs_path) / "data" / "obs-plugins" / WANTED_DIR
+
+
+def plugin_installed_in(root: Path) -> bool:
+    """Есть ли библиотека вебсокета в папке плагинов.
+
+    Отдельной функцией, потому что проверка полноты установки считает по
+    самой папке и не знает, где OBS стоит. Держать одно правило в двух
+    местах — значит рано или поздно разойтись.
+    """
+    return (Path(root) / WANTED_DIR / Path(*PLUGIN_DLL)).is_file()
+
+
+def plugin_present(obs_path: Path) -> bool:
+    """Стоит ли плагин. Проверяется библиотека, а не папка: папка
+    создаётся установщиком даже тогда, когда библиотеки нет."""
+    return plugin_installed_in(plugin_dir(obs_path).parent)
+
+
+def _obs_version() -> str:
+    """Версия OBS из установки: она нужна для адреса архива.
+
+    Берётся из имени папки плагинов, где лежит версия: `obs-websocket.dll`
+    живёт рядом с текстовым файлом версии. Если версию узнать не удалось,
+    качать нельзя — подставлять «последнюю» значит скачать не то.
+    """
+    for folder in (Path("C:/Program Files/obs-studio"),
+                   Path("C:/Program Files (x86)/obs-studio")):
+        ini = folder / "data" / "obs-studio" / "version.ini"
+        if ini.is_file():
+            for line in ini.read_text(encoding="utf-8",
+                                      errors="replace").splitlines():
+                if line.lower().startswith("version_info"):
+                    return line.split("=", 1)[1].strip()
+        dll = folder / "bin" / "64bit" / "obs64.exe"
+        if dll.is_file():
+            # Запасной путь: версию сообщит сам файл.
+            return _version_from_binary(dll)
+    return ""
+
+
+def _version_from_binary(exe: Path) -> str:
+    """Читает версию из числового ресурса файла.
+
+    Ресурс хранит четыре числа: `MS` — старшие два (старшая, младшая),
+    `LS` — младшие два (сборка, патч). Измерено 06.10.2026 на obs64.exe:
+    MS = 0x00200002, LS = 0x00020000, то есть 32.2.2 — патч нулевой, а
+    пара dec ─�� разбор берёт патч вместо сборки и выдаёт 32.2.0. Поэтому
+    сборка — это `LS >> 16`, а не `LS & 0xFFFF`.
+
+    Строковое поле «32.2.2» надёжнее, но `pywin32` на этой машине его не
+    отдаёт: `VarFileInfo` пуст. Поэтому берём числовой ресурс и разбираем
+    его правильно, а не подгоняем под ожидаемое число.
+    """
+    try:
+        import win32api  # type: ignore
+    except ImportError:
+        return ""
+    try:
+        info = win32api.GetFileVersionInfo(str(exe), "\\")
+        ms = info["FileVersionMS"]
+        ls = info["FileVersionLS"]
+        return "%d.%d.%d" % (ms >> 16, ms & 0xFFFF, ls >> 16)
+    except Exception:
+        return ""
+
+
+def can_write_here(obs_path: Path) -> tuple[bool, str]:
+    """Можно ли писать в папку плагинов. Проверяется настоящей записью.
+
+    Зачем пробовать запись, а не смотреть права. Разрешения на папку и
+    фактическая возможность записи — разные вещи: права могут быть
+    выданы, а политика безопасности запрет, или наоборот. Надёжна
+    только попытка.
+
+    Зачем это до скачивания. Первая версия качала архив на 179 МБ и
+    только потом упиралась в запрет — время и место потрачены впустую.
+    Проверка права стоит миллисекунды и честно отвечает заранее.
+    """
+    probe_dir = plugin_dir(obs_path)
+    try:
+        probe_dir.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        return False, ("в папку плагинов не записать: она принадлежит "
+                       "установщику Windows, и повышение прав не помогает. "
+                       "Такую установку лечит переустановка OBS.")
+    except OSError as exc:
+        return False, f"в папку плагинов не записать: {exc}"
+    probe = probe_dir / ".проба-записи"
+    try:
+        probe.write_bytes(b"")
+        return True, ""
+    except PermissionError:
+        return False, ("файл в папке плагинов создать нельзя: папка "
+                       "принадлежит установщику Windows, повышение прав "
+                       "не помогает. Нужна переустановка OBS.")
+    except OSError as exc:
+        return False, f"в папке плагинов не записать: {exc}"
+    finally:
+        try:
+            if probe.exists():
+                probe.unlink()
+        except OSError:
+            # Проба не удалилась — это само по себе неприятно, но не
+            # повод выдавать запись за успешную.
+            pass
+
+
+def install_plugin_from_zip(archive: Path,
+                            obs_path: Path) -> tuple[bool, str]:
+    """Кладёт плагин из уже скачанного архива.
+
+    Отдельная функция не для порядка в коде: сетевую часть не проверить
+    без 179 МБ и без сети, а разбор архива — можно, на маленьком файле,
+    собранном руками. На настоящем архиве проверять нечего: он меняется
+    с каждой версией OBS, и любое измерение устареет к следующему
+    релизу.
+
+    Раскладка измерена на архиве OBS 32.2.2:
+        obs-plugins/64bit/obs-websocket.dll        библиотека
+        data/obs-plugins/obs-websocket/locale/*.ini языки
+    Первый вариант искал библиотеку по `obs-plugins/<имя>/bin/64bit/` —
+    такого пути в архиве нет: там лежали только языки, докачка раскладывала
+    57 файлов и рапортовала об успехе.
+    """
+    lib_entry = f"obs-plugins/64bit/{WANTED_DIR}.dll"
+    loc_prefix = f"data/obs-plugins/{WANTED_DIR}/locale/"
+    dest = plugin_dir(obs_path)
+    files = 0
+
+    try:
+        with zipfile.ZipFile(archive) as zf:
+            names = [i.filename.replace("\\", "/") for i in zf.infolist()]
+            # Библиотеку ищем ДО того, как что-то пишем. Записи идут по
+            # алфавиту, `data/...` читается раньше `obs-plugins/...`, и за
+            # один проход функция успевала разложить 57 языковых файлов и
+            # только потом сказать, что библиотеки нет. Правило: пока
+            # нужного файла в архиве нет, на диск не пишем ничего.
+            # Проверка идёт по каталогу архива и ничего не распаковывает.
+            if lib_entry not in names:
+                return False, (f"в архиве нет библиотеки {lib_entry} — "
+                               f"плагин собран иначе, ставьте его из "
+                               f"установщика OBS с полным набором "
+                               f"компонентов")
+            for name in names:
+                # Запись с косой чертой на конце — каталог, а не файл. Без
+                # этой проверки на месте папки появляется файл-заглушка,
+                # и следующая папка уже не создаётся: так и вышло с
+                # `locale`, он оказался файлом в 0 байт.
+                if name.endswith("/"):
+                    continue
+                if name == lib_entry:
+                    target = dest / Path(*PLUGIN_DLL)
+                elif name.startswith(loc_prefix):
+                    target = dest / "locale" / name[len(loc_prefix):]
+                else:
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(name) as src, target.open("wb") as out:
+                    shutil.copyfileobj(src, out)
+                files += 1
+    except zipfile.BadZipFile as exc:
+        return False, f"скачалось не архив: {exc}"
+    except OSError as exc:
+        return False, f"не получилось разложить архив: {exc}"
+
+    langs = files - 1
+    return True, (f"плагин {WANTED_DIR} поставлен"
+                  + (f", языков {langs}" if langs > 0 else ""))
+
+
+def fetch_plugin(obs_path: Path, progress=None) -> tuple[bool, str]:
+    """Качает и ставит плагин. Возвращает (получилось ли, сообщение)."""
+
+    def say(text: str) -> None:
+        if progress:
+            progress(text)
+
+    if plugin_present(obs_path):
+        return True, "плагин уже стоит"
+
+    version = _obs_version()
+    if not version:
+        return False, ("версию OBS узнать не удалось: качать нечего. "
+                       "Плагин ставят вручную — из установщика OBS с "
+                       "полным набором компонентов.")
+
+    # Права проверяются ДО скачивания: сначала спросить, можно ли
+    # положить файл, и только потом тратить 179 МБ. Первая версия делала
+    # наоборот — качала, упиралась в запрет и отдавала это как ошибку
+    # сети, хотя сеть была ни при чём.
+    can_write, why = can_write_here(obs_path)
+    if not can_write:
+        return False, why
+
+    url = RELEASE_URL.format(version=version)
+    say(f"качаю официальный архив OBS {version}, это большой файл")
+
+    tmp = Path(tempfile.mkdtemp(prefix="obs-plugin-"))
+    archive = tmp / f"OBS-Studio-{version}-Windows-x64.zip"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=120) as resp, \
+                archive.open("wb") as fh:
+            got = 0
+            while True:
+                chunk = resp.read(1024 * 256)
+                if not chunk:
+                    break
+                got += len(chunk)
+                if got > MAX_BYTES:
+                    return False, ("архив больше ожидаемого — загрузка "
+                                   "остановлена, чтобы не съесть место")
+                fh.write(chunk)
+        ok, msg = install_plugin_from_zip(archive, obs_path)
+        if not ok:
+            return False, msg
+    except urllib.error.HTTPError as exc:
+        return False, f"сервер ответил {exc.code}: {exc.reason}"
+    except urllib.error.URLError as exc:
+        return False, f"сеть не ответила: {exc.reason}"
+    except zipfile.BadZipFile as exc:
+        return False, f"скачалось не то: {exc}"
+    except OSError as exc:
+        # Сюда попадает и UnicodeEncodeError: адрес или заголовок с
+        # нелатинскими символами. Отдельный except не нужен — причина
+        # одна: обмен с сетью не состоялся.
+        return False, f"не получилось: {exc}"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    if not plugin_present(obs_path):
+        return False, ("файл разложили, но библиотеки на месте нет — "
+                       "в архиве она лежит не там, где ищет OBS")
+    return True, f"плагин {WANTED_DIR} поставлен"
+
+
+def ensure_plugin(obs_path: Path, progress=None) -> tuple[bool, str]:
+    """Проверяет и при необходимости докачивает."""
+    try:
+        base = Path(obs_path)
+    except TypeError:
+        return False, "путь к OBS не передан"
+    if not base.is_dir():
+        return False, (f"OBS не установлена: {base} нет. Докачивать плагин "
+                       f"некуда — ставьте OBS, потом плагин.")
+    if plugin_present(base):
+        return True, "плагин уже стоит"
+    return fetch_plugin(base, progress=progress)
 
 
 def auto_setup_emulator(dest: Path, server, progress=None
