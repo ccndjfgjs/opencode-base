@@ -798,6 +798,33 @@ def main() -> int:
             core.refresh_knowledge_indexes = _spy_make
             try:
                 core.create_base(plan2)
+                # Проверка на содержимое, а не на папки. Папки девяти областей
+                # создаёт create_base сам, из списка KNOWLEDGE_AREAS, и создавал
+                # всегда. А вот файлы приносит _copy_ref_files, и без него девять
+                # папок есть, а все пустые. Старая проверка смотрела на папки и
+                # потому проходила даже со снесённой правкой.
+                _src_area = core.app_root() / "знания"
+                _tgt_zn = plan2.target / "знания"
+                _empty = []
+                for _a in sorted(p for p in _src_area.iterdir() if p.is_dir()):
+                    _files = [f for f in _a.rglob("*.md")
+                              if "Безопасность" not in f.parts]
+                    if not _files:
+                        continue
+                    # Заготовки create_base кладёт в каждую область сам,
+                    # поэтому область никогда не пуста. Считать их
+                    # содержимым нельзя — иначе проверка зелёная всегда.
+                    _got = [f for f in (_tgt_zn / _a.name).rglob("*.md")
+                            if not f.name.startswith("_")]
+                    _src_n = [f for f in _files if not f.name.startswith("_")]
+                    if not _src_n:
+                        continue
+                    if not _got:
+                        _empty.append(_a.name)
+                check(not _empty,
+                      f"содержимое всех областей "
+                      f"знаний доехало в новую "
+                      f"базу: пустые {_empty}")
             finally:
                 core.refresh_knowledge_indexes = _orig_make
             check(bool(_born),
