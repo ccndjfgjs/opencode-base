@@ -78,3 +78,16 @@ projects/
 библиотека/АКТИВНАЯ-ПАМЯТЬ.md
 библиотека/КАТАЛОГ.md
 библиотека/index.json
+
+# Рабочее состояние обхода - не программа.
+#   xray.exe              - 34 МБ, качается сам; в репозиторий или сноса не попадет.
+#   public_socks5.local.txt - список узлов проверки под своим машины;
+#     на другой машине список другой.
+#   nodes.local.json      - рабочее состояние фасада.
+#   *.bak-*.txt           - старые списки при обновлении.
+# Без этого коммит унес бы штаток или 30 мегабайта мусора
+# в историю навсегда.
+tools/antiblock/xray.exe
+tools/antiblock/public_socks5.local.txt
+tools/antiblock/nodes.local.json
+tools/antiblock/*.bak-*.txt
