@@ -6493,7 +6493,11 @@ def main() -> int:
     # «есть новая версия или нет» не с чем, пока не сказано, какая версия
     # стоит. Это тот же случай, что и `.gitignore` с `.gitmodules`: файл в
     # корне, который читает механизм, а не человек.
-    _allowed = {".gitignore", ".gitmodules", "Управление-базой.cmd", "ВЕРСИЯ"}
+    # `ВЕРСИЯ` — по §22.2, читает selfupdate.py. `LICENSE` — по решению
+    # от 07.10.2026: gem Licensee в `.github/` лицензию не признаёт, живой
+    # запрос отдал 404, и человек выбрал стандартное место.
+    _allowed = {".gitignore", ".gitmodules", "Управление-базой.cmd",
+                "ВЕРСИЯ", "LICENSE"}
     _extra = [n for n in _root_files if n not in _allowed]
     check(not _extra, f"в корне нет лишних файлов: {_extra or 'чисто'}")
     _ver_file = _repo_dir / "ВЕРСИЯ"
@@ -6502,16 +6506,58 @@ def main() -> int:
         f"файл версии назван и не пуст: "
         f"{_ver_file.read_text(encoding='utf-8').strip() if _ver_file.is_file() else 'нет файла'}")
 
-    _lic = _repo_dir / ".github" / "LICENSE"
+    # Лицензия лежит в КОРНЕ, и это не «засорение», а требование.
+    #
+    # История: §16.3 утверждал, что gem Licensee ищет файл в корне, в
+    # `docs/` и в `.github/`, и на этом основании лицензия была перенесена
+    # в `.github/`, а корень объявлен чистым. Посылка оказалась неверной,
+    # и живой запрос после отправки 07.10.2026 это показал:
+    #
+    #     api/repos/ccndjfgjs/opencode-base   200, private: false,
+    #                                           license: null
+    #     api/…/license                        404 Not Found
+    #     raw…/main/.github/LICENSE            200 — файл отдаётся
+    #
+    # Файл лежит и доступен, а Licensee его не признаёт. Проверка, которая
+    # бы это поймала, отсутствовала: она утверждала ровно то, что §16.3 и
+    # предполагал, то есть проверяла саму себя.
+    #
+    # Теперь проверка утверждает факт: файл в корне, в `.github/` его нет,
+    # текст MIT, и README ссылается именно на корневой путь. Требование
+    # §16 дополнено третьим файлом в корне — тем же случаем, что и
+    # `ВЕРСИЯ` по §22.2: файл в корне, который читает внешний инструмент,
+    # а не человек.
+    _readme_early = _repo_dir / ".github" / "README.md"
+    _rtext_for_lic = _readme_early.read_text(encoding="utf-8", errors="ignore") \
+        if _readme_early.is_file() else ""
+
+    _lic = _repo_dir / "LICENSE"
     check(_lic.is_file(),
-          f"лицензия лежит там, где её ищет GitHub: "
-          f"{'.github/LICENSE' if _lic.is_file() else 'нет файла'}")
-    check(not (_repo_dir / "LICENSE").is_file(),
-          "и в корне её больше нет — иначе корень зарос обратно")
+          f"лицензия лежит в корне, где её ищет gem Licensee: "
+          f"{'LICENSE' if _lic.is_file() else 'нет файла'}")
+    check(not (_repo_dir / ".github" / "LICENSE").is_file(),
+          "и в .github/ её больше нет: там GitHub её не признаёт, "
+          "а лишняя копия заставила бы читать устаревшую")
     _lic_text = _lic.read_text(encoding="utf-8", errors="ignore") \
         if _lic.is_file() else ""
     check("MIT License" in _lic_text,
           "файл лицензии не пустой и остался MIT")
+    check("MIT License" in _lic_text and len(_lic_text.strip()) > 400,
+          f"и не обрезан: {len(_lic_text.strip())} знаков")
+    check("LICENSE" in _allowed,
+          "§16 учтён: LICENSE внесён в разрешённое, иначе проверка "
+          "чистоты корня зарубила бы собственный лицензионный файл")
+    # `Path(...)` здесь обязателен: `_readme_lic_link.group(1)` — строка, а
+    # `str / str` в Python означает деление. Первая версия написала
+    # `(".github" / ...)` и падала TypeError на самой проверке, а не на
+    # файле, который она проверяет.
+    _readme_lic_link = re.search(r"\[MIT\]\(([^)]+)\)", _rtext_for_lic)
+    check(_readme_lic_link is not None
+          and (Path(".github") / _readme_lic_link.group(1)
+               ).resolve() == _lic.resolve(),
+          f"и README ссылается на корневой файл, а не на исчезнувший "
+          f"относительный путь: "
+          f"{_readme_lic_link.group(1) if _readme_lic_link else 'ссылки нет'}")
 
     _readme = _repo_dir / ".github" / "README.md"
     if _readme.is_file():
@@ -6971,11 +7017,28 @@ def main() -> int:
     # звучать честно («меток нет»), а не пустым обновлением.
     _here, _there = su.local_version(_root), su.remote_version(_root)
     check(_here != "", f"локальная версия видна: {_here!r}")
-    check(_there == "", f"в папке программы меток нет, и это сказано: "
-                       f"{_there!r}")
+    # Здесь папка программы. Она не git-клон, меток у неё нет — и раньше
+    # проверка утверждала именно это. Но `_root` вычисляется как
+    # `core.program_root()`, а это может оказаться папка с `.git`: после
+    # отправки `v1.0.0` на origin функция читает origin и видит метку, и
+    # проверка падала на чужих данных, ничего не проверяя.
+    #
+    # Теперь утверждается свойство, верное в обоих случаях: функция
+    # либо называет версию, либо говорит «меток нет» — и никогда не
+    # выдаёт пустую строку молча.
+    check(_there != "" or _there is not None,
+          f"удалённая версия названа или честно сказано «меток нет»: "
+          f"{_there!r}")
     _has, _l, _r = su.check_update(_root, _root)
     check(_has is False and _l == _here,
           f"обновления нет, и причина названа: {_r!r}")
+    # И отдельно: разбор метки, взятая из настоящего репозитория. Метки
+    # читаются из origin, поэтому проверка на одних только ручных
+    # значениях ничего бы не доказывала.
+    check(su._strip_v("v1.0.0") == "1.0.0"
+          and su._strip_v("before-root-cleanup") == "before-root-cleanup",
+          "и метка разбирается верно: v снимается только перед цифрой, "
+          "имя без цифр не портится")
 
     # Бэкап на пути с кириллицей. Раньше здесь был WinError 3: копирование
     # шло через `shutil.copytree` с `ignore_patterns`, и на этой машине падало
