@@ -36,6 +36,7 @@ import blender_addon  # noqa: E402
 import bridges  # noqa: E402
 import core  # noqa: E402
 import mcp_registry as _mcp_registry  # noqa: E402
+import selfupdate as _selfupdate  # noqa: E402
 import ui  # noqa: E402
 
 #: Соседние модули селфтеста. Проверка ниже требует, чтобы все они
@@ -49,7 +50,7 @@ import ui  # noqa: E402
 #: PYTHONPATH.
 _SELFTEST_LOCAL_MODULES = (
     "android_studio", "blender_addon", "bridges", "core", "mcp_registry",
-    "ui", "antiblock", "winget_install", "versions",
+    "ui", "antiblock", "winget_install", "versions", "selfupdate",
 )
 
 #: отчёт пишется и на экран, и в файл — в этой оболочке вывод теряется
@@ -5888,9 +5889,35 @@ def main() -> int:
         ]
         check(not _fetch_mismatch,
               f"доступность кнопки докачки совпадает с решением: {_fetch_mismatch}")
+        # Раньше здесь стояло `check(bool(_fetch_rows), "кнопка докачки
+        # дошла до экрана")`. Проверка опиралась на живое состояние: кнопка
+        # обязана была появиться хоть где-нибудь, а появлялась она только
+        # пока плагина нет. 07.10.2026 выяснилось, что плагин на машине
+        # ЕСТЬ, а программа его не видела из-за неверного пути (раздел 8с).
+        # После правки докачивать OBS нечего, кнопки на её карточке нет —
+        # и это правильное поведение, а не поломка. Прежняя проверка
+        # требовала обратного, то есть требовала отсутствия плагина.
+        #
+        # Что утверждается теперь: у карточки, которой нечего докачивать,
+        # кнопки нет; у карточки, которой есть, кнопка есть и выключена с
+        # причиной. Второе проверяется сверкой доступности выше и на
+        # настоящем дереве в разделе 8с.
+        _obs_live = next((c for c in _ptab._cards.values()
+                          if getattr(c, "plugin", None) is not None), None)
+        check(_obs_live is not None,
+              f"карточка, которой про плагин, на месте: "
+              f"{_obs_live.plugin.name if _obs_live else '—'}")
+        _obs_key = next((k for k, c in _ptab._cards.items()
+                         if c is _obs_live), None)
+        if _obs_live is not None:
+            check(not _obs_live.can_fetch,
+                  "и докачивать ей нечего: плагин на месте, а не отсутствует")
+            check(_obs_key is not None and pcard.BTN_FETCH
+                  not in _ptab._rows[_obs_key]["buttons"],
+                  "поэтому кнопки докачки на ней нет вовсе — нечего "
+                  "предлагать человеку")
         _fetch_rows = [row for row in _ptab._rows.values()
                        if pcard.BTN_FETCH in row["buttons"]]
-        check(bool(_fetch_rows), "кнопка докачки дошла до экрана")
         check(all("недоступно" in row["buttons"][pcard.BTN_FETCH].toolTip()
                   for row in _fetch_rows
                   if not _ptab._cards[
@@ -6352,6 +6379,49 @@ def main() -> int:
             check(not (_obs3 / "bin").exists(),
                   "чужие файлы архива не раскладываются")
 
+            # Раскладка установщика OBS. Измерено на живой машине
+            # 07.10.2026: OBS 32.2.2 кладёт свою копию плагина в
+            # `obs-plugins/64bit/`, а не в `data/obs-plugins/<имя>/bin/
+            # 64bit/`. Проверка смотрела только на вторую и потому
+            # **не могла сойтись ни при какой установке**: на машине с
+            # OBS и плагином она рапортовала «в папке плагинов папок, а
+            # библиотеки нет ни в одной», отказывалась докачивать и
+            # называла причиной установщик Windows. Из этого выросли и
+            # запрет докачивать, и несрабатывавшая §15.1.
+            _obs5 = Path(_td) / "obs-5"
+            (_obs5 / "data" / "obs-plugins" / bridges.WANTED_DIR
+             / "locale").mkdir(parents=True)
+            (_obs5 / "data" / "obs-plugins" / bridges.WANTED_DIR / "locale"
+             / "ru-RU.ini").write_text("x\n", encoding="utf-8")
+            (_obs5 / "obs-plugins" / "64bit").mkdir(parents=True)
+            (_obs5 / "obs-plugins" / "64bit"
+             / f"{bridges.WANTED_DIR}.dll").write_bytes(b"\x00")
+            _found5 = bridges.plugin_library(_obs5)
+            check(_found5 is not None and _found5.is_file(),
+                  f"плагин виден в раскладке установщика OBS: {_found5}")
+            check(bridges.plugin_present(_obs5),
+                  "и plugin_present отвечает «есть» — с этой поломкой он "
+                  "отвечал «нет» при полностью установленном OBS")
+            check(bridges.plugin_installed_in(_obs5),
+                  "и plugin_installed_in на том же пути отвечает «есть»")
+            _scan5 = bridges.obs_plugin_scan(
+                _obs5 / "data" / "obs-plugins")
+            check(_scan5["bridge"] is True,
+                  f"obs_plugin_scan тоже видит bridge при плоской раскладке: "
+                  f"{_scan5}")
+
+            # Без плагина обе раскладки пусты — проверка обязана молчать,
+            # иначе она всегда зелёная и ничего не стоит.
+            _obs6 = Path(_td) / "obs-6"
+            (_obs6 / "data" / "obs-plugins" / bridges.WANTED_DIR
+             / "locale").mkdir(parents=True)
+            check(bridges.plugin_library(_obs6) is None
+                  and not bridges.plugin_present(_obs6),
+                  "а без библиотеки в обеих раскладках — «нет»")
+            check(bridges.obs_plugin_scan(
+                _obs6 / "data" / "obs-plugins")["bridge"] is False,
+                  "и obs_plugin_scan без библиотеки молчит")
+
             # Не архив: понятный отказ, а не трассировка.
             _junk = Path(_td) / "мусор.zip"
             _junk.write_bytes(b"not a zip at all" * 100)
@@ -6418,9 +6488,19 @@ def main() -> int:
     # элементов вместо проверки о корне репозитория.
     _repo_dir = core.program_root()
     _root_files = sorted(p.name for p in _repo_dir.iterdir() if p.is_file())
-    _allowed = {".gitignore", ".gitmodules", "Управление-базой.cmd"}
+    # `ВЕРСИЯ` добавлен по §22.2: программа — распакованная копия, а не
+    # git-клон, и обновление приходит файлом, а не `git pull`. Сверять
+    # «есть новая версия или нет» не с чем, пока не сказано, какая версия
+    # стоит. Это тот же случай, что и `.gitignore` с `.gitmodules`: файл в
+    # корне, который читает механизм, а не человек.
+    _allowed = {".gitignore", ".gitmodules", "Управление-базой.cmd", "ВЕРСИЯ"}
     _extra = [n for n in _root_files if n not in _allowed]
     check(not _extra, f"в корне нет лишних файлов: {_extra or 'чисто'}")
+    _ver_file = _repo_dir / "ВЕРСИЯ"
+    check(_ver_file.is_file() and _ver_file.read_text(
+        encoding="utf-8").strip() != "",
+        f"файл версии назван и не пуст: "
+        f"{_ver_file.read_text(encoding='utf-8').strip() if _ver_file.is_file() else 'нет файла'}")
 
     _lic = _repo_dir / ".github" / "LICENSE"
     check(_lic.is_file(),
@@ -6832,10 +6912,194 @@ def main() -> int:
           f"и карточка Blender говорит то же самое: "
           f"{_bl_view.compat.verdict if _bl_view else '—'}")
     _node_view = next((c for c in _cards if c.name == "Node.js"), None)
-    check(_node_view is not None and _node_view.compat.verdict
-          == pmod.VERDICT_OK,
-          "а Node.js — единственный, у кого список непуст, и он "
-          "проверенный")
+    # Node.js обновлён вживую 07.10: 24.18.0 → 24.19.0. Раньше здесь стояло
+    # `verdict == VERDICT_OK`, и проверка была верна, пока стояла 24.18.0 —
+    # единственная, что значится в `known_good`. Теперь стоит 24.19.0, и
+    # правильный вердикт — «новее проверенной»: с этой версией живой ответ
+    # моста не получали. Дописать её в `known_good` было бы враньём, ровно
+    # как с версией Blender в проверке выше. Версия попадёт туда сама, когда
+    # кто-то получит живой ответ моста на 24.19.0, — и тогда проверка ниже
+    # нарочно перестанет проходить и заставит переписать её на VERDICT_OK.
+    _node_block = next((s.get("program_install") or {}
+                        for s in reg_data.get("servers") or []
+                        if s.get("id") == "windows-admin"), {})
+    _node_good = _node_block.get("known_good") or []
+    _node_installed = _node_block.get("installed_version") or ""
+    check(_node_installed not in _node_good,
+          f"у Node.js стоит {_node_installed!r}, а проверен "
+          f"{_node_good or '—'}: непроверенная версия в known_good не попала")
+    check(_node_view is not None and _node_view.compat.declared
+          and _node_view.compat.verdict == pmod.VERDICT_NEWER,
+          f"и карточка честно говорит «новее проверенной»: "
+          f"{_node_view.compat.verdict if _node_view else '—'}")
+    check(_node_view is not None and _node_view.compat.warning,
+          "это предупреждение, а не отказ: программа на месте и состояние "
+          "не переписано")
+    check(_node_view is not None and _node_view.state == pcard.STATE_OK,
+          f"состояние Node.js прежнее: "
+          f"{_node_view.state if _node_view else '—'}")
+
+    # ---- 8ц. Самообновление программы: файл версии, бэкап, замена, откат
+    echo("\n--- 8ц. Самообновление программы ---")
+    su = _selfupdate
+
+    # Имя файла версии одно на обе копии, и оно русское — рядом лежат
+    # папки `данные`, `документы`, `служебное`, и английское выбивалось бы.
+    check(su.VERSION_FILE == "ВЕРСИЯ",
+          f"файл версии называется {su.VERSION_FILE!r}")
+    check(su.BACKUP_DIR == ("служебное", "бэкап-перед-обновлением"),
+          f"бэкап кладётся в {'/'.join(su.BACKUP_DIR)}")
+
+    # Живой корень программы: версия должна называться прямо в нём.
+    _root = HERE.parent.parent
+    check((_root / "ВЕРСИЯ").is_file(),
+          f"в корне программы есть файл версии: "
+          f"{(_root / 'ВЕРСИЯ').is_file()}")
+    check(su.local_version(_root) not in ("", None),
+          f"локальная версия прочитана: {su.local_version(_root)!r}")
+
+    # Снятие `v` с метки: ровно одна и только перед цифрой. `lstrip` снимал
+    # весь набор, и `version-1.2.3` превращался в `ersion-1.2.3`.
+    for _name, _want in (("v1.2.3", "1.2.3"), ("1.2.3", "1.2.3"),
+                         ("version-1.2.3", "version-1.2.3"),
+                         ("vv1.2.3", "vv1.2.3"), ("v", "v"), ("", "")):
+        check(su._strip_v(_name) == _want,
+              f"метка {_name!r} читается как {_want!r} "
+              f"(получилось {su._strip_v(_name)!r})")
+
+    # Путь без `.git` — распакованная копия. Меток там нет, и это должно
+    # звучать честно («меток нет»), а не пустым обновлением.
+    _here, _there = su.local_version(_root), su.remote_version(_root)
+    check(_here != "", f"локальная версия видна: {_here!r}")
+    check(_there == "", f"в папке программы меток нет, и это сказано: "
+                       f"{_there!r}")
+    _has, _l, _r = su.check_update(_root, _root)
+    check(_has is False and _l == _here,
+          f"обновления нет, и причина названа: {_r!r}")
+
+    # Бэкап на пути с кириллицей. Раньше здесь был WinError 3: копирование
+    # шло через `shutil.copytree` с `ignore_patterns`, и на этой машине падало
+    # при первом вызове. Теперь обход явный, с `mkdir` перед записью.
+    _su = Path(tempfile.mkdtemp(prefix="самообновление-"))
+    try:
+        (_su / "ВЕРСИЯ").write_text("1.0.0\n", encoding="utf-8")
+        (_su / "данные" / "внутрь").mkdir(parents=True)
+        (_su / "данные" / "внутрь" / "файл.txt").write_text("глубоко\n",
+                                                            encoding="utf-8")
+        (_su / "служебное").mkdir()
+        (_su / "служебное" / "настройки.json").write_text("{}\n",
+                                                            encoding="utf-8")
+        (_su / "__pycache__").mkdir()
+        (_su / "__pycache__" / "мусор.pyc").write_bytes(b"\x00")
+
+        _ok, _note = su.make_backup(_su)
+        _b = _su / "служебное" / "бэкап-перед-обновлением"
+        check(_ok, f"бэкап сделан на кириллическом пути: {_note}")
+        check(_b.is_dir(), f"папка бэкапа на месте: {_b.is_dir()}")
+        check((_b / "ВЕРСИЯ").is_file(), "файл версии попал в бэкап")
+        check((_b / "данные" / "внутрь" / "файл.txt").is_file(),
+              "вложенный файл попал в бэкап")
+        check(not (_b / "служебное").exists(),
+              "служебное не скопировано в себя же")
+        check(not (_b / "__pycache__").exists(), "__pycache__ не скопирован")
+        _ok2, _note2 = su.make_backup(_su)
+        check(not _ok2, f"повторный бэкап отказал: {_note2}")
+
+        # Применение архива: `writestr`, а не `zf.write` на каталог — последнее
+        # кладёт в архив пустую папку и не заходит внутрь.
+        _arch = _su / "обновление.zip"
+        import zipfile
+        with zipfile.ZipFile(_arch, "w", zipfile.ZIP_DEFLATED) as _zf:
+            _zf.writestr("ВЕРСИЯ", "1.1.0\n")
+            _zf.writestr("данные/новый.txt", "новое\n")
+        _ok3, _note3 = su.apply_update(_arch, _su)
+        check(_ok3, f"обновление применено: {_note3}")
+        check(su.local_version(_su) == "1.1.0", "версия стала 1.1.0")
+        check((_su / "данные" / "новый.txt").is_file(), "новый файл появился")
+        check(not (_su / "данные" / "внутрь").exists(),
+              "старый вложенный файл убран")
+        check((_su / "служебное" / "настройки.json").is_file(),
+              "служебное пережило обновление")
+        _aside = [p for p in (_su / "служебное").iterdir()
+                  if p.name.startswith("бэкап-перед-обновлением-прошлый")]
+        check(len(_aside) == 1 and (_aside[0] / "ВЕРСИЯ").is_file(),
+              f"прошлый бэкап убран в сторону, а не удалён: {len(_aside)} шт.")
+        check((_b / "ВЕРСИЯ").read_text(encoding="utf-8").strip() == "1.0.0",
+              "текущий бэкап снят до замены и держит 1.0.0")
+
+        # Второе обновление поверх первого: раньше невозможно, пока прошлый
+        # бэкап не убрать руками. Теперь прошлый просто уходит в сторону.
+        _arch2 = _su / "обновление2.zip"
+        with zipfile.ZipFile(_arch2, "w", zipfile.ZIP_DEFLATED) as _zf:
+            _zf.writestr("ВЕРСИЯ", "1.2.0\n")
+        _ok3b, _note3b = su.apply_update(_arch2, _su)
+        check(_ok3b, f"второе обновление не заблокировано: {_note3b}")
+        check(su.local_version(_su) == "1.2.0", "версия стала 1.2.0")
+
+        # Откат на свежей папке, чтобы цепочка обновлений не путала ожиданий.
+        _su2 = Path(tempfile.mkdtemp(prefix="откат-"))
+        try:
+            (_su2 / "ВЕРСИЯ").write_text("2.0.0\n", encoding="utf-8")
+            (_su2 / "данные").mkdir()
+            (_su2 / "данные" / "старое.txt").write_text("старое\n",
+                                                        encoding="utf-8")
+            (_su2 / "служебное").mkdir()
+            (_su2 / "служебное" / "настройки.json").write_text('{"b": 2}\n',
+                                                                encoding="utf-8")
+            _a2 = _su2 / "обновление.zip"
+            with zipfile.ZipFile(_a2, "w", zipfile.ZIP_DEFLATED) as _zf:
+                _zf.writestr("ВЕРСИЯ", "2.1.0\n")
+                _zf.writestr("данные/новое.txt", "новое\n")
+            _ok4, _note4 = su.apply_update(_a2, _su2)
+            check(_ok4, f"обновление на свежей папке прошло: {_note4}")
+            check(su.local_version(_su2) == "2.1.0", "версия 2.1.0")
+            check((_su2 / "данные" / "новое.txt").is_file(), "новое на месте")
+            check(not (_su2 / "данные" / "старое.txt").exists(),
+                  "старое убрано")
+            _b2 = _su2 / "служебное" / "бэкап-перед-обновлением"
+            check((_b2 / "ВЕРСИЯ").read_text(encoding="utf-8").strip()
+                  == "2.0.0", "бэкап снят до замены и держит 2.0.0")
+            _ok4b, _note4b = su.rollback(_su2)
+            check(_ok4b, f"откат прошёл: {_note4b}")
+            check(su.local_version(_su2) == "2.0.0",
+                  "версия вернулась к 2.0.0")
+            check((_su2 / "данные" / "старое.txt").is_file(),
+                  "старое вернулось на место")
+            check(not (_su2 / "данные" / "новое.txt").exists(),
+                  "новое исчезло")
+            check((_su2 / "служебное" / "настройки.json").is_file(),
+                  "настройки пережили откат")
+            check(_b2.is_dir(), "бэкап после отката не удалён")
+            _ok5, _note5 = su.drop_backup(_su2)
+            check(_ok5 and not _b2.exists(),
+                  f"бэкап удалён только по прямому вызову: {_note5}")
+            _ok6, _note6 = su.rollback(_su2)
+            check(not _ok6, f"откат без бэкапа отказал: {_note6}")
+            check(su.local_version(_su2) == "2.0.0",
+                  "программа не пострадала от отказа")
+        finally:
+            shutil.rmtree(_su2, ignore_errors=True)
+
+        # Битый архив: программа обязана остаться целой.
+        _bad = _su / "битый.zip"
+        _bad.write_bytes("это не zip".encode("utf-8"))
+        _ok7, _note7 = su.apply_update(_bad, _su)
+        check(not _ok7, f"битый архив отвергнут: {_note7}")
+        check(su.local_version(_su) == "1.2.0", "программа цела после отказа")
+        _ok8, _note8 = su.apply_update(_arch, _su)
+        check(_ok8, f"после неудачи обновление снова возможно: {_note8}")
+    finally:
+        shutil.rmtree(_su, ignore_errors=True)
+
+    # Настоящую программу этот раздел не трогает: архивов тут не было, а
+    # проверка отсутствующего архива должна отказать, ничего не сделав.
+    _ok9, _note9 = su.apply_update(_root / "нет-такого.zip", _root)
+    check(not _ok9, f"отсутствующий архив отвергнут: {_note9}")
+    check(su.local_version(_root) == _here,
+          f"настоящая программа не тронута: {su.local_version(_root)!r}")
+    check(not su._backup_path(_root).exists(),
+          "настоящая программа осталась без бэкапа: бэкап делался только "
+          "во временных папках")
 
     # ---- итог
     failed = [text for good, text in results if not good]

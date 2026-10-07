@@ -100,6 +100,26 @@ def obs_config_path() -> Path:
     return Path(appdata) / OBS_CONFIG_RELATIVE
 
 
+def _bridge_anywhere(plugins_root: Path) -> bool:
+    """Есть ли библиотека вебсокета, если дана папка плагинов OBS.
+
+    `plugins_root` — это `.../data/obs-plugins`. Настоящая установка
+    OBS 32 кладёт библиотеку в `obs-plugins/64bit/` от корня программы,
+    то есть на два уровня выше. Отдельный плагин 5.x лежит в
+    `data/obs-plugins/obs-websocket/bin/64bit/`, то есть на уровень ниже.
+    Проверяются оба места: раньше проверялось только второе, и на машине с
+    полностью установленным OBS ответ был «библиотеки нет ни в одной
+    папке». Считать корнем программы можно только когда структура
+    знакомая — на искусственном дереве проверок её нет, и тогда остаётся
+    проверка отданного пути, как и была.
+    """
+    root = Path(plugins_root)
+    if root.name == "obs-plugins" and root.parent.name == "data":
+        if plugin_library(root.parent.parent) is not None:
+            return True
+    return (root / WANTED_DIR / Path(*PLUGIN_DLL)).is_file()
+
+
 def obs_plugin_scan(root: Path) -> dict:
     """Считает плагины в папке плагинов OBS.
 
@@ -130,7 +150,12 @@ def obs_plugin_scan(root: Path) -> dict:
                and any(f.suffix.lower() == ".dll" for f in d.rglob("*.dll"))]
     return {"dirs": len(dirs), "plugins": len(plugins),
             "helpers": len(helpers),
-            "bridge": (root / WANTED_DIR / Path(*PLUGIN_DLL)).is_file()}
+            # Библиотеку ищем от корня OBS, а не от папки плагинов: при
+            # установке через установщик она лежит в `obs-plugins/64bit/`,
+            # и от папки плагинов этот путь не виден вовсе. Корневая папка
+            # вычисляется по имени — на искусственном дереве проверок её
+            # нет, и тогда остаётся только вторая раскладка, как раньше.
+            "bridge": _bridge_anywhere(root)}
 
 
 def obs_install_completeness(base=None, root=None) -> dict:
@@ -932,7 +957,28 @@ RELEASE_URL = ("https://github.com/obsproject/obs-studio/releases/download/"
 WANTED_DIR = "obs-websocket"
 
 #: На что смотрим, чтобы сказать «плагин стоит», а не «папка на месте».
+#: Это раскладка ОТДЕЛЬНОГО плагина obs-websocket 5.x — туда и
+#: `install_plugin_from_zip` кладёт скачанное, и OBS такую раскладку грузит.
 PLUGIN_DLL = ("bin", "64bit", "obs-websocket.dll")
+
+#: А вот куда кладёт библиотеку САМ установщик OBS. Измерено на живой
+#: OBS 32.2.2 07.10: `C:\Program Files\obs-studio\obs-plugins\64bit\
+#: obs-websocket.dll` существует, OBS её грузит, а плагин в перечне папок
+#: установщика стоит как `obs-websocket` — просто с языками.
+#:
+#: Почему это было поломкой, а не мелочью. Проверка смотрела только на
+#: `PLUGIN_DLL` и потому **не могла сойтись ни при какой установке**:
+#: на машине с OBS и плагином она рапортовала «в папке плагинов папок, а
+#: библиотеки нет ни в одной», отказывалась докачивать и называла
+#: причиной установщик Windows. На деле всё было на месте. Из этого
+#: выросли и запрет докачивать, и несрабатывавшая §15.1.
+BUNDLED_DLL = ("obs-plugins", "64bit", "obs-websocket.dll")
+
+#: Та же библиотека, но положенная отдельным плагином. Путь считается от
+#: корня программы, а не от папки плагина: `PLUGIN_DLL` сам по себе
+#: задаёт только хвост `bin/64bit/…`, и склеенный с корнем OBS он
+#: указывал на `OBS/bin/64bit/`, где лежит всё подряд и ничего похожего.
+STANDALONE_DLL = ("data", "obs-plugins", WANTED_DIR) + PLUGIN_DLL
 
 # Только ASCII: заголовки HTTP кодируются в latin-1, и кириллица в
 # User-Agent обрывает попытку ещё до отправки. Первая версия писала здесь
@@ -948,20 +994,31 @@ def plugin_dir(obs_path: Path) -> Path:
     return Path(obs_path) / "data" / "obs-plugins" / WANTED_DIR
 
 
-def plugin_installed_in(root: Path) -> bool:
-    """Есть ли библиотека вебсокета в папке плагинов.
+def plugin_library(obs_path: Path) -> Path | None:
+    """Где лежит библиотека вебсокета. None — нигде.
 
-    Отдельной функцией, потому что проверка полноты установки считает по
-    самой папке и не знает, где OBS стоит. Держать одно правило в двух
-    местах — значит рано или поздно разойтись.
+    Проверяются обе раскладки, потому что обе настоящие: установщик OBS
+    кладёт плагин в `obs-plugins/64bit/`, а отдельный плагин 5.x — в
+    `data/obs-plugins/obs-websocket/bin/64bit/`. На какой машине какая,
+    неизвестно, и одна проверка на обеих машинах врала в одну сторону.
     """
-    return (Path(root) / WANTED_DIR / Path(*PLUGIN_DLL)).is_file()
+    base = Path(obs_path)
+    for layout in (BUNDLED_DLL, STANDALONE_DLL):
+        candidate = base.joinpath(*layout)
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def plugin_installed_in(root: Path) -> bool:
+    """Есть ли библиотека вебсокета. `root` — корень программы OBS."""
+    return plugin_library(Path(root)) is not None
 
 
 def plugin_present(obs_path: Path) -> bool:
     """Стоит ли плагин. Проверяется библиотека, а не папка: папка
     создаётся установщиком даже тогда, когда библиотеки нет."""
-    return plugin_installed_in(plugin_dir(obs_path).parent)
+    return plugin_library(obs_path) is not None
 
 
 def _obs_version() -> str:
