@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import urllib.error
 import urllib.request
 import zipfile
@@ -114,13 +115,99 @@ def release(source: dict, tag: str, timeout: int = 120) -> dict:
             f"релиз {tag} недоступен. {exc}") from exc
 
 
-def published(source: dict, timeout: int = 180) -> list[dict]:
-    """Опубликованные релизы, новые сверху. Черновики пропущены.
+def rate_left(headers: dict) -> int | None:
+    """Остаток лимита запросов GitHub. None — заголовка не было."""
+    try:
+        return int(headers.get("X-RateLimit-Remaining"))
+    except (TypeError, ValueError, AttributeError):
+        return None
 
-    Именно этот список — источник того, что вообще можно скачать. Список
-    меток для этого не годится: измерено на `obsproject/obs-websocket`
-    07.10.2026, метки дошли до `5.7.5`, а последний опубликованный релиз
-    — `4.9.1-compat`, и описание по `5.7.5` отдало 404.
+
+#: Версия состоит из чисел через точку. Проверяется явно, потому что
+#: простое отрезание шаблона даёт мусор: имя
+#: `opencode-base-1.5.0.zip.sha256` по шаблону `opencode-base-{version}.zip`
+#: превращается в `-1.5.0.zip.sha256` — и это прошло бы как версия.
+#: Из-за этого файл суммы мог бы быть принят за архив, а архив не найден.
+_VERSION_RE = re.compile(r"^\d+(?:\.\d+)*$")
+
+
+def _version_in(source: dict, name: str) -> str:
+    """Версия из имени вложения по шаблону. Пустая строка — не подходит."""
+    pattern = source["asset_pattern"]
+    if "{version}" not in pattern:
+        return ""
+    before, _, after = pattern.partition("{version}")
+    if not name.startswith(before) or not name.endswith(after):
+        return ""
+    if len(after) and len(name) < len(before) + len(after):
+        return ""
+    middle = name[len(before):len(name) - len(after)] if after \
+        else name[len(before):]
+    return middle if _VERSION_RE.fullmatch(middle) else ""
+
+
+def latest_release(source: dict, timeout: int = 180,
+                   allow_prerelease: bool = False
+                   ) -> tuple[str, str, dict]:
+    """Последний релиз ОДНИМ запросом. Возвращает (метка, версия, мета).
+
+    **Почему один запрос, а не три.** Без токена GitHub отдаёт 60 запросов
+    в час на адрес, а адрес у всех за интернетом один: офис, общежитие,
+    мобильный оператор. Четыре запроса на нажатие значили бы, что лимит
+    кончается у всех сразу. `/releases/latest` отдаёт и метку, и список
+    вложений в одном ответе — проверено живьём на
+    `obsproject/obs-websocket`: код 200 и четыре вложения.
+
+    **Что в третьем элементе.** Заголовки: из них берётся остаток лимита,
+    чтобы вкладка показала его человеку, а не молчала.
+
+    **Про пререлизы.** По умолчанию пропускаются: предложить человеку
+    `2.0.0-beta` под видом обновления — значит подсунуть сборку, которую
+    никто не проверял. С флагом возвращаются, и тогда вкладка обязана
+    пометить это в тексте.
+
+    **Про «последний», а не «самый новый».** Измерено: самая свежая
+    метка может быть впереди опубликованных релизов. `/releases/latest`
+    отдаёт последний именно опубликованный.
+    """
+    url = releases_url(source).replace("/releases", "/releases/latest")
+    try:
+        data, headers = _get_json(url, timeout)
+    except DownloadError as exc:
+        raise DownloadError(f"релиз недоступен. {exc}") from exc
+    meta: dict = {"rate_left": rate_left(headers), "headers": headers,
+                  "rate_limit": headers.get("X-RateLimit-Limit")}
+
+    if not isinstance(data, dict) or not data.get("tag_name"):
+        raise DownloadError("ответ без метки релиза.")
+    if data.get("draft"):
+        raise DownloadError("релиз — черновик, его нельзя качать.")
+    prerelease = bool(data.get("prerelease"))
+    meta["prerelease"] = prerelease
+    if prerelease and not allow_prerelease:
+        raise DownloadError(
+            f"последний релиз — предварительный ({data['tag_name']}). "
+            f"Обновление с такой меткой не предлагается.")
+
+    for asset in data.get("assets") or []:
+        version = _version_in(source, str(asset.get("name") or ""))
+        if version:
+            return data["tag_name"], version, meta
+
+    shown = [str(a.get("name") or "") for a in (data.get("assets") or [])][:8]
+    raise DownloadError(
+        f"у релиза {data['tag_name']} нет вложения вида "
+        f"{source['asset_pattern']}."
+        + (f" Что приложено: {', '.join(shown)}" if shown else ""))
+
+
+def published(source: dict, timeout: int = 180) -> list[dict]:
+    """Весь список релизов, новые сверху. Черновики пропущены.
+
+    Запасной путь, а не основной: он стоит одного запроса, но
+    `/releases/latest` стоит одного же и отвечает на тот же вопрос.
+    Разница — только в том, что здесь видны все релизы, а не последний.
+    Нужен там, где последний не подходит: например, при откате.
     """
     url = releases_url(source)
     try:
@@ -139,48 +226,57 @@ def published(source: dict, timeout: int = 180) -> list[dict]:
     return out
 
 
-def downloadable(source: dict, timeout: int = 180) -> tuple[str, str]:
-    """Самый новый релиз, у которого есть нужное вложение.
+def downloadable(source: dict, timeout: int = 180,
+                 installed: str = "") -> tuple[str, str]:
+    """Релиз новее установленного, у которого есть нужное вложение.
 
-    Возвращает (метка, версия). Версия берётся из имени вложения, а не
-    из метки: вложение названо по версии, и метка может быть с буквой,
-    без неё или с собственным форматом. Если вложения нет ни у одного
-    релиза — это не «сеть отвалилась», а «ещё нечего качать», и текст
-    должен говорить именно это.
+    **Про `installed`.** Без него функция отдала бы релиз СТАРШЕ той
+    версии, что стоит, и вкладка предложила бы человеку откат под видом
+    обновления. Это не «лишняя» ошибка, а подмена: человек нажимает
+    «обновить» и получает старую программу. Поэтому релиз сравнивается
+    с установленной версией, и старее неё не предлагается.
+
+    Возвращает (метка, версия) либо поднимает `DownloadError` с текстом,
+    который можно показать человеку.
     """
+    import versions as _vs
+
     releases = published(source, timeout)
     if not releases:
         raise DownloadError(
             "релизов у репозитория нет. Обновление ещё не опубликовано.")
 
-    pattern = source["asset_pattern"]
-    if "{version}" not in pattern:
-        raise DownloadError(
-            f"в шаблоне имени вложения нет подстановки версии: {pattern!r}")
-
-    def версия_из_имени(asset_name: str) -> str:
-        before = pattern.split("{version}", 1)[0]
-        after = pattern.split("{version}", 1)[1]
-        if not asset_name.startswith(before) or not asset_name.endswith(after):
-            return ""
-        return asset_name[len(before):len(asset_name) - len(after)] if after \
-            else asset_name[len(before):]
-
+    found: list[tuple[int, str, str]] = []
     for item in releases:
-        names = [a.get("name") or "" for a in (item.get("assets") or [])]
-        for candidate in names:
-            version = версия_из_имени(candidate)
+        if item.get("prerelease"):
+            continue
+        for asset in item.get("assets") or []:
+            version = _version_in(source, str(asset.get("name") or ""))
             if version:
-                return item["tag_name"], version
+                found.append((_vs.version_tuple(version), item["tag_name"],
+                              version))
 
-    # Ни одного вложения с версией. Показываем, что есть, — иначе
-    # человек гадает, что он приложил не то.
-    shown = sorted({(a.get("name") or "") for item in releases[:5]
-                    for a in (item.get("assets") or [])})[:8]
-    tail = (" Последние вложения: " + ", ".join(shown)) if shown else ""
-    raise DownloadError(
-        "ни у одного релиза нет вложения вида "
-        f"{pattern}.{tail}")
+    if not found:
+        shown = sorted({str(a.get("name") or "") for item in releases[:5]
+                        for a in (item.get("assets") or [])})[:8]
+        tail = (" Что приложено: " + ", ".join(shown)) if shown else ""
+        raise DownloadError(
+            "ни у одного обычного релиза нет вложения вида "
+            f"{source['asset_pattern']}.{tail}")
+
+    if installed:
+        floor = _vs.version_tuple(installed)
+        newer = [row for row in found if row[0] > floor]
+        if not newer:
+            best = max(found)
+            raise DownloadError(
+                f"на простое нет: стоит {installed}, а последний релиз — "
+                f"{best[2]}. Старое под видом обновления не предлагается. "
+                f"Откат — отдельная кнопка.")
+        return max(newer)[1], max(newer)[2]
+
+    best = max(found)
+    return best[1], best[2]
 
 
 class Cancelled(Exception):
