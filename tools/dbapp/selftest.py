@@ -2336,7 +2336,7 @@ def main() -> int:
     # Семь вкладок: создание, подключение, мост NCP, opencode, программы,
     # темы и инструкция. Счётчик стоял на 5, потом на 6 — по числу
     # добавленных вкладок, поэтому написан числом, а не «сколько есть».
-    check(window.tabs.count() == 7, f"вкладок в окне: {window.tabs.count()}")
+    check(window.tabs.count() == 8, f"вкладок в окне: {window.tabs.count()}")
     check(window.tabs.tabText(0) == "Создать новую базу",
           f"первая вкладка — «{window.tabs.tabText(0)}»")
     check(window.tabs.tabText(1) == "Подключить существующую",
@@ -2349,8 +2349,10 @@ def main() -> int:
           f"пятая вкладка — «{window.tabs.tabText(4)}»")
     check(window.tabs.tabText(5) == "Темы",
           f"шестая вкладка — «{window.tabs.tabText(5)}»")
-    check(window.tabs.tabText(6) == "Инструкция",
+    check(window.tabs.tabText(6) == "Обновление",
           f"седьмая вкладка — «{window.tabs.tabText(6)}»")
+    check(window.tabs.tabText(7) == "Инструкция",
+          f"восьмая вкладка — «{window.tabs.tabText(7)}»")
     check(isinstance(btab, app_main.BridgeTab), "вкладка моста собрана")
 
     # Образец лежит внутри базы: значит, уедет на любой компьютер вместе
@@ -7163,6 +7165,99 @@ def main() -> int:
     check(not su._backup_path(_root).exists(),
           "настоящая программа осталась без бэкапа: бэкап делался только "
           "во временных папках")
+
+    # ---- 8ц-9. Вкладка «Обновление» в окне
+    #
+    # Здесь окно уже собрано в разделе 1 и живёт до конца main(), поэтому
+    # новое окно не создаётся: лишнее окно закрывало бы программу
+    # дважды и мешало остальным разделам.
+    echo("\n--- 8ц-9. Вкладка «Обновление» ---")
+    _tab = getattr(window, "update_tab", None)
+    check(_tab is not None, "вкладка «Обновление» есть в окне")
+    if _tab is not None:
+        _titles = [window.tabs.tabText(i) for i in range(window.tabs.count())]
+        check("Обновление" in _titles,
+              f"вкладка называется «Обновление»: {_titles}")
+        if "Обновление" in _titles and "Темы" in _titles:
+            check(_titles.index("Обновление") == _titles.index("Темы") + 1,
+                  "вкладка стоит сразу после «Темы»")
+        check(_tab.lbl_local.text().strip() not in ("", "—"),
+              f"локальная версия названа: {_tab.lbl_local.text()[:44]}")
+        check(not _tab.btn_apply.isEnabled(),
+              "до проверки кнопка применения выключена")
+        check("Проверить обновление" in _tab.btn_apply.toolTip(),
+              f"и в подсказке сказано, что сначала проверить: "
+              f"{_tab.btn_apply.toolTip()[:40]}")
+        # Отсутствие бэкапа — не ошибка, а состояние. Кнопка обязана быть
+        # выключена И с названной причиной, иначе человек гадает.
+        _backup_here = su._backup_path(_root)
+        if not _backup_here.is_dir():
+            check(not _tab.btn_rollback.isEnabled(),
+                  "бэкапа нет — кнопка отката выключена")
+            check("Бэкапа нет" in _tab.lbl_backup.text()
+                  or "откатить нечего" in _tab.lbl_backup.text().lower(),
+                  f"и причина названа в тексте: {_tab.lbl_backup.text()[:40]}")
+        else:
+            check(_tab.btn_rollback.isEnabled(),
+                  "бэкап есть — кнопка отката включена")
+
+        # `_step` обязан брать ВТОРОЙ аргумент. Измерено: PyQt6 отдаёт
+        # приёмнику столько аргументов, сколько тот берёт, и лишние
+        # отбрасывает молча. Приёмник на один аргумент не падает — он
+        # просто теряет вид «error», и ошибка читается как обычный ход
+        # работы. Поэтому проверяем не число аргументов (их всегда два
+        # из-за self), а ИМЯ второго.
+        import inspect as _inspect
+        _params = list(_inspect.signature(type(_tab)._step).parameters)
+        check("kind" in _params,
+              f"приёмник строки потока берёт вид сообщения: {_params}")
+        _got: list[tuple] = []
+        _w = app_main.Worker(lambda progress: "сделанно")
+        _w.line.connect(lambda text, kind: _got.append((text, kind)))
+        _w.line.emit("строка", "error")
+        check(_got == [("строка", "error")],
+              f"вид сообщения доходит до приёмника, а не теряется: {_got}")
+
+        # Закрытие окна обязано останавливать поток. Иначе недокачанный
+        # архив остался бы лежать во временной папке и следующий запуск
+        # принял бы его за годный.
+        check(hasattr(window, "closeEvent"),
+              "у окна есть обработчик закрытия")
+        _close_src = _inspect.getsource(type(window).closeEvent)
+        check("stop()" in _close_src,
+              "закрытие окна останавливает поток вкладки")
+        check("terminate" not in _close_src,
+              "и делает это флагом, а не принудительной остановкой")
+
+        # Метки и версия обязаны запоминаться тем кодом, который и
+        # показывал их человеку. Иначе можно показать одно, а скачать
+        # другое — подмена, которую человек не увидит.
+        class _FakeWorker:
+            def __init__(self, result):
+                self.result = result
+
+        _tab._worker = _FakeWorker(("v9.9.9", "9.9.9", {"prerelease": False},
+                                    "1.0.0"))
+        _tab._check_done()
+        check(_tab.btn_apply.isEnabled(),
+              "найденное новее установленного включает кнопку")
+        check(_tab._pending() == ("v9.9.9", "9.9.9"),
+              f"и метка с версией запомнены тем же кодом: {_tab._pending()}")
+        _tab._worker = _FakeWorker(("v9.9.9", "9.9.9", {"prerelease": True},
+                                    "1.0.0"))
+        _tab._check_done()
+        check("предварительный" in _tab.btn_apply.toolTip().lower(),
+              f"пререлиз помечен в подсказке: {_tab.btn_apply.toolTip()[:40]}")
+        _tab._worker = _FakeWorker(("v0.0.1", "0.0.1", {"prerelease": False},
+                                    "1.0.0"))
+        _tab._check_done()
+        check(not _tab.btn_apply.isEnabled(),
+              "релиз старее установленного не включает кнопку")
+        check("Откат" in _tab.btn_apply.toolTip(),
+              f"и сказано, что откат — отдельная кнопка: "
+              f"{_tab.btn_apply.toolTip()[:40]}")
+        _tab._worker = None
+        _tab.refresh()
 
     # ---- итог
     failed = [text for good, text in results if not good]

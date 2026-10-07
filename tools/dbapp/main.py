@@ -4371,6 +4371,18 @@ class MainWindow(QMainWindow):
         self.caps_tab = CapsTab()
         self.programs_tab = ProgramsTab()
         self.themes_tab = ThemesTab()
+
+        # Импорт вкладки «Обновление» — здесь, а не вверху файла. Вкладка
+        # берёт `ScrollPage` и `Worker` из этого модуля, и импорт наверху
+        # дал бы круг: main не успел бы дойти до определения класса,
+        # а update_tab уже просил бы его. Измеренная ошибка была ровно
+        # такой: «cannot import name 'ScrollPage' from partially
+        # initialized module 'main'». Внутри метода main уже загружен
+        # целиком, и круг разрывается.
+        from update_tab import UpdateTab  # noqa: PLC0415
+
+        self.update_tab = UpdateTab()
+
         self.help_tab = HelpTab()
         tabs.addTab(self.create_tab, "Создать новую базу")
         tabs.addTab(self.import_tab, "Подключить существующую")
@@ -4378,11 +4390,26 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.caps_tab, "opencode")
         tabs.addTab(self.programs_tab, "Программы")
         tabs.addTab(self.themes_tab, "Темы")
+        tabs.addTab(self.update_tab, "Обновление")
         tabs.addTab(self.help_tab, "Инструкция")
         layout.addWidget(tabs, 1)
 
         self.create_tab.base_ready.connect(self._suggest_import)
         self.create_tab.base_ready.connect(self._suggest_bridge)
+
+    def closeEvent(self, event) -> None:  # noqa: N802 — имя из Qt
+        """Окно закрывает человек, а поток скачивания живёт отдельно.
+
+        Здесь выставляется флаг отмены, а поток сам доходит до безопасной
+        точки и убирает недокачанный файл. Принудительная остановка
+        потока здесь не годилась бы: она прервала бы запись посреди
+        файла, и следующий запуск принял бы его за годный архив — он
+        лежит во временной папке под тем же именем.
+        """
+        tab = getattr(self, "update_tab", None)
+        if tab is not None and hasattr(tab, "stop"):
+            tab.stop()
+        super().closeEvent(event)
 
     def _suggest_bridge(self, path: str) -> None:
         """После создания базы предлагает завести мост NCP.
