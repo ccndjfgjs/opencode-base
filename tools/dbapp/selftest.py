@@ -2360,11 +2360,24 @@ def main() -> int:
     # темы и инструкция. Счётчик стоял на 5, потом на 6 — по числу
     # добавленных вкладок, поэтому написан числом, а не «сколько есть».
     check(window.tabs.count() == 8, f"вкладок в окне: {window.tabs.count()}")
-    check(window.tabs.tabText(0) == "Создать новую базу",
+    # Полоса вкладок не должна быть шире окна: восемь длинных подписей
+    # занимали 861 пиксель, и последние вкладки уезжали за правый край —
+    # до них можно было дойти только стрелками. Окно в самопроверке не
+    # показывается, поэтому ширину самой полосы Qt ещё не посчитал: она
+    # равна 100 и проверять против неё бессмысленно. Ширины вкладок
+    # tabRect отдаёт верно даже без показа, а доступно им столько,
+    # сколько останется в окне 880 (так программа открывается) за полями
+    # окна и рамкой панели.
+    _bar = window.tabs.tabBar()
+    _tabs_need = sum(_bar.tabRect(i).width() for i in range(_bar.count()))
+    _avail = 880 - 14 - 14 - 4
+    check(_tabs_need <= _avail,
+          f"вкладки помещаются в окно: нужно {_tabs_need}, есть {_avail}")
+    check(window.tabs.tabText(0) == "Новая база",
           f"первая вкладка — «{window.tabs.tabText(0)}»")
-    check(window.tabs.tabText(1) == "Подключить существующую",
+    check(window.tabs.tabText(1) == "Подключить",
           f"вторая вкладка — «{window.tabs.tabText(1)}»")
-    check(window.tabs.tabText(2) == "Мост NCP — создать",
+    check(window.tabs.tabText(2) == "Мост NCP",
           f"третья вкладка — «{window.tabs.tabText(2)}»")
     check(window.tabs.tabText(3) == "opencode",
           f"четвёртая вкладка — «{window.tabs.tabText(3)}»")

@@ -3581,6 +3581,7 @@ class CapsTab(ScrollPage):
         self.gl_hint = ui.label("", kind="dim", wrap=True)
         gl_layout.addWidget(self.gl_hint)
         row_gl_btns = QHBoxLayout()
+        row_gl_btns2 = QHBoxLayout()
         self.btn_gl_check = QPushButton("Проверить окружение")
         self.btn_gl_check.setToolTip(
             "Проверка без запуска: собран ли greenlight, сходится ли копия "
@@ -3620,11 +3621,19 @@ class CapsTab(ScrollPage):
             "Машинные отчёты прошлых прогонов: лежат рядом с настройками "
             "opencode в папке greenlight-data/отчёты. Ничего не запускает"
         )
-        for button in (self.btn_gl_check, self.btn_gl_build, self.btn_gl_run,
-                       self.btn_gl_dry, self.btn_gl_cloud, self.btn_gl_report):
-            row_gl_btns.addWidget(button)
-        row_gl_btns.addStretch(1)
-        gl_layout.addLayout(row_gl_btns)
+        for row, buttons in (
+            (row_gl_btns, (self.btn_gl_check, self.btn_gl_build, self.btn_gl_run)),
+            (row_gl_btns2, (self.btn_gl_dry, self.btn_gl_cloud, self.btn_gl_report)),
+        ):
+            for button in buttons:
+                row.addWidget(button)
+            row.addStretch(1)
+            gl_layout.addLayout(row)
+        # Шесть кнопок в один ряд занимали 805 пикселей при ширине окна
+        # около 830: ряд не помещался, страница становилась шире видимой
+        # части, и дальние кнопки уезжали за правый край — нажать их
+        # было нельзя. Теперь их два ряда по три, и каждый ряд уже
+        # заведомо уже окна.
         what_layout.addWidget(box_gl)
         # --- qwen-review: второй ревьюер. Не только галочка: сначала
         # развёртывание Qwen Code, потом выбор модели из провайдеров
@@ -3641,15 +3650,21 @@ class CapsTab(ScrollPage):
             kind="dim", wrap=True,
         ))
         row_qw_pick = QHBoxLayout()
+        row_qw_pick2 = QHBoxLayout()
         row_qw_pick.addWidget(QLabel("Провайдер:   "))
         self.qw_provider = QComboBox()
         self.qw_provider.setMinimumWidth(200)
         self.qw_provider.currentIndexChanged.connect(self._qw_provider_changed)
         row_qw_pick.addWidget(self.qw_provider)
-        row_qw_pick.addWidget(QLabel("   Модель:   "))
+        row_qw_pick.addStretch(1)
         self.qw_model = QComboBox()
-        self.qw_model.setMinimumWidth(220)
-        row_qw_pick.addWidget(self.qw_model, 1)
+        # Пока список пуст, его подсказка узкая и бесполезная: имена
+        # моделей появляются позже, и настоящую ширину виджет узнаёт
+        # только после заполнения. Ставим заведомо достаточную ширину,
+        # а точную подгоняем в _qw_fit_model_width после наполнения.
+        self.qw_model.setMinimumWidth(240)
+        row_qw_pick2.addWidget(QLabel("Модель:   "))
+        row_qw_pick2.addWidget(self.qw_model, 1)
         self.btn_qw_save = QPushButton("Сохранить выбор")
         self.btn_qw_save.setToolTip(
             "Запоминает провайдера и модель: программа пишет их в настройки "
@@ -3657,8 +3672,14 @@ class CapsTab(ScrollPage):
             "провайдера сюда не записывается — он уезжает в окружение "
             "процесса при запуске"
         )
-        row_qw_pick.addWidget(self.btn_qw_save)
+        row_qw_pick2.addWidget(self.btn_qw_save)
+        row_qw_pick2.addStretch(1)
+        # Провайдер, модель и кнопка сохранения стояли в один ряд и занимали
+        # 691 пиксель — почти всю ширину окна, а на самом узком окне
+        # список моделей уезжал за правый край вместе с кнопкой. Теперь
+        # провайдер на первой строке, модель и сохранение на второй.
         qw_layout.addLayout(row_qw_pick)
+        qw_layout.addLayout(row_qw_pick2)
         self.qw_hint = ui.label("", kind="dim", wrap=True)
         qw_layout.addWidget(self.qw_hint)
         row_qw_btns = QHBoxLayout()
@@ -3693,6 +3714,7 @@ class CapsTab(ScrollPage):
             "довода и спорный фрагмент, а решает человек"
         )
         row_qw_debate = QHBoxLayout()
+        row_qw_debate2 = QHBoxLayout()
         row_qw_debate.addWidget(self.qw_debate)
         row_qw_debate.addWidget(QLabel("   раундов:   "))
         self.qw_rounds = QSpinBox()
@@ -3703,6 +3725,7 @@ class CapsTab(ScrollPage):
             "предел задан автором режима, поднимать его выше пяти не даём"
         )
         row_qw_debate.addWidget(self.qw_rounds)
+        row_qw_debate.addStretch(1)
         self.btn_qw_reply = QPushButton("Возразить и продолжить…")
         self.btn_qw_reply.setToolTip(
             "Следующий раунд спора: возражение с обоснованием уходит "
@@ -3714,10 +3737,14 @@ class CapsTab(ScrollPage):
             "Сбрасывает счёт раундов и доводы: следующий запуск начнётся "
             "заново. Ни файлы проекта, ни настройки не трогает"
         )
-        row_qw_debate.addWidget(self.btn_qw_reply)
-        row_qw_debate.addWidget(self.btn_qw_forget)
-        row_qw_debate.addStretch(1)
+        row_qw_debate2.addWidget(self.btn_qw_reply)
+        row_qw_debate2.addWidget(self.btn_qw_forget)
+        row_qw_debate2.addStretch(1)
+        # Ряд из галочки, счётчика и двух кнопок занимал 763 пикселя при
+        # ширине окна около 830 и упирался в правый край. Теперь настройка
+        # спора стоит на одной строке, а его действия — на следующей.
         qw_layout.addLayout(row_qw_debate)
+        qw_layout.addLayout(row_qw_debate2)
         what_layout.addWidget(box_qw)
         try:
             nagents = len(list((core.app_root() / "tools" / "agents").glob("*.md")))
@@ -3915,10 +3942,15 @@ class CapsTab(ScrollPage):
         # пустая, измерять нечего.
         for col, minimum in ((0, 150), (1, 200), (2, 110), (3, 90)):
             self.reg_table.setColumnWidth(col, minimum)
-        # Горизонтальная прокрутка в этом блоке не нужна: таблица
-        # узкая, и полоса под ней только мешает.
+        # Прокрутка вбок появляется только когда не помещается. Раньше она
+        # была выключена вовсе, и тогда таблица задавала ширину всей
+        # страницы: колонка «Состояние» растягивается под длинные
+        # тексты, сумма ширин доходила до 775, и на узком окне вместе
+        # с ней за правый край уезжали кнопки этого же блока. Теперь
+        # при обычной ширине полосы нет, а на узком окне прокручивается
+        # только сама таблица, а не вся страница.
         self.reg_table.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
         mcp_layout.addWidget(self.reg_table)
 
@@ -3928,6 +3960,7 @@ class CapsTab(ScrollPage):
         mcp_layout.addWidget(self.reg_detail)
 
         row_mcp = QHBoxLayout()
+        row_mcp2 = QHBoxLayout()
         self.btn_reg_check = QPushButton("Проверить всё")
         self.btn_reg_on = QPushButton("Включить")
         self.btn_reg_auto = QPushButton("Настроить автоматически")
@@ -4039,26 +4072,47 @@ class CapsTab(ScrollPage):
             "config.json моста, а не в настройки opencode"
         )
         self.btn_lm_token.setEnabled(False)
+        # Раньше все восемнадцать кнопок стояли в одном ряду: он занимал
+        # 1870 пикселей, а окно показывает около 830. Страница становилась
+        # вдвое шире видимой части, крайние кнопки уходили за правый край
+        # на 1000 пикселей и до них нельзя было дотянуться: полоса
+        # прокрутки вбок есть только в самом низу страницы, а страница
+        # здесь — четыре тысячи пикселей высотой. Плюс ряд из
+        # восемнадцати одинаковых кнопок без подписей читался как каша:
+        # из «Развернуть» и «Запустить» не было видно, что это про арену.
+        # Теперь ряд на сервер — так и было задумано в комментариях выше.
         row_mcp.addWidget(self.btn_reg_check)
         row_mcp.addWidget(self.btn_reg_on)
-        row_mcp.addWidget(self.btn_reg_auto)
         row_mcp.addWidget(self.btn_reg_off)
-        row_mcp.addWidget(self.btn_reg_src)
-        row_mcp.addWidget(self.btn_db_add)
-        row_mcp.addWidget(self.btn_db_check)
-        row_mcp.addWidget(self.btn_br_choose)
-        row_mcp.addWidget(self.btn_br_check)
-        row_mcp.addWidget(self.btn_or_deploy)
-        row_mcp.addWidget(self.btn_or_start)
-        row_mcp.addWidget(self.btn_or_restart)
-        row_mcp.addWidget(self.btn_or_status)
-        row_mcp.addWidget(self.btn_lm_deploy)
-        row_mcp.addWidget(self.btn_lm_start)
-        row_mcp.addWidget(self.btn_lm_restart)
-        row_mcp.addWidget(self.btn_lm_status)
-        row_mcp.addWidget(self.btn_lm_token)
+        row_mcp2.addWidget(self.btn_reg_auto)
+        row_mcp2.addWidget(self.btn_reg_src)
         row_mcp.addStretch(1)
+        row_mcp2.addStretch(1)
         mcp_layout.addLayout(row_mcp)
+        mcp_layout.addLayout(row_mcp2)
+
+        for owner, buttons in (
+            ("DBHub", (self.btn_db_add, self.btn_db_check)),
+            ("Браузеры", (self.btn_br_choose, self.btn_br_check)),
+            ("OmniRoute", (self.btn_or_deploy, self.btn_or_start,
+                           self.btn_or_restart, self.btn_or_status)),
+            ("LMArena", (self.btn_lm_deploy, self.btn_lm_start,
+                         self.btn_lm_restart, self.btn_lm_status,
+                         self.btn_lm_token)),
+        ):
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            # Подпись сервера — короткая и тусклая: она только говорит,
+            # чьи это кнопки. Подробности живут в подсказках кнопок, а
+            # строка таблицы выше показывает, что выбрано сейчас.
+            name = ui.label(owner, kind="dim")
+            name.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            row.addWidget(name)
+            row.addSpacing(4)
+            for button in buttons:
+                row.addWidget(button)
+            row.addStretch(1)
+            mcp_layout.addLayout(row)
 
         self.reg_hint = ui.label("", kind="dim", wrap=True)
         mcp_layout.addWidget(self.reg_hint)
@@ -5896,6 +5950,20 @@ class CapsTab(ScrollPage):
         index = self.qw_model.findData(want)
         if index >= 0:
             self.qw_model.setCurrentIndex(index)
+        self._qw_fit_model_width()
+
+    def _qw_fit_model_width(self) -> None:
+        """Подгоняет ширину списка моделей под самое длинное имя.
+
+        Список стоит в ряду, который уже не растягивается, поэтому при
+        слишком узком минимуме Qt обрезает подпись модели — имя
+        провайдера читается не до конца и выбрать нельзя. Меряем после
+        заполнения, когда виджет уже знает содержимое, и оставляем
+        запас на стрелку раскрытия.
+        """
+        needed = self.qw_model.sizeHint().width() + 8
+        if needed > self.qw_model.minimumWidth():
+            self.qw_model.setMinimumWidth(needed)
 
     def _qw_provider_changed(self) -> None:
         """Сменился провайдер — перечитать его модели."""
@@ -7180,9 +7248,14 @@ class MainWindow(QMainWindow):
         self.update_tab = UpdateTab()
 
         self.help_tab = HelpTab()
-        tabs.addTab(self.create_tab, "Создать новую базу")
-        tabs.addTab(self.import_tab, "Подключить существующую")
-        tabs.addTab(self.bridge_tab, "Мост NCP — создать")
+        # Подписи вкладок короткие не для красоты: восемь
+        # длинных русских подписей занимали 861 пиксель, а полоса
+        # вкладок при окне 880 показывает около 830 — последние
+        # вкладки уезжали за правый край, и до них можно было дойти
+        # только стрелками у края полосы.
+        tabs.addTab(self.create_tab, "Новая база")
+        tabs.addTab(self.import_tab, "Подключить")
+        tabs.addTab(self.bridge_tab, "Мост NCP")
         tabs.addTab(self.caps_tab, "opencode")
         tabs.addTab(self.programs_tab, "Программы")
         tabs.addTab(self.themes_tab, "Темы")
