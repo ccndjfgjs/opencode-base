@@ -22,21 +22,34 @@ set "APP=%APPDIR%\main.py"
 if not exist "%APP%" goto :noapp
 
 set "PYW="
+set "PYW_FULL_DIR="
+set "PYW_ANY_DIR="
 
-rem 1. Окружение, которое ставит сама программа.
-call :try_dir "%USERPROFILE%\.workbuddy-ai\binaries\python\envs\dbapp\Scripts"
-
-rem 2. Любые другие окружения рядом с профилем.
-for /d %%D in ("%USERPROFILE%\.workbuddy-ai\binaries\python\envs\*") do call :try_dir "%%~fD\Scripts"
-
-rem 3. Python, установленный в систему обычным установщиком.
+rem 1. Python, установленный в систему. Новый установщик кладёт его в
+rem    %LOCALAPPDATA%\Python\pythoncore-*, старый — в Programs\Python.
+rem    Обычно он самый полный: есть и окна, и библиотеки мостов.
+for /d %%D in ("%LOCALAPPDATA%\Python\pythoncore-*") do call :try_dir "%%~fD"
 for /d %%D in ("%LOCALAPPDATA%\Programs\Python\Python*") do call :try_dir "%%~fD"
 for /d %%D in ("%ProgramFiles%\Python*") do call :try_dir "%%~fD"
 
-rem 4. Python, прописанный в PATH.
+rem 2. Окружения, которые ставит сама программа. Они удваивают запуск
+rem    (переадресатор venv поднимает второй процесс) и часто неполные,
+rem    поэтому идут после системного Python.
+for /d %%D in ("%USERPROFILE%\.workbuddy-ai\binaries\python\envs\*") do call :try_dir "%%~fD\Scripts"
+
+rem 3. Python, прописанный в PATH.
 for %%P in (python.exe) do call :try_exe "%%~$PATH:P"
 for %%P in (pythonw.exe) do call :try_exe "%%~$PATH:P"
 
+rem Полный вариант важнее: с ним работает проверка OBS вживую и автор
+rem в цикле улучшения (он берёт тот же Python, что и программа). Но если
+rem полного кандидата нет, программа всё равно должна открыться — тогда
+rem берём любой, у которого есть окна PyQt6.
+if defined PYW_FULL_DIR set "PYWDIR=%PYW_FULL_DIR%"
+if not defined PYWDIR set "PYWDIR=%PYW_ANY_DIR%"
+if not defined PYWDIR goto :nopython
+if exist "%PYWDIR%pythonw.exe" set "PYW=%PYWDIR%pythonw.exe"
+if not defined PYW set "PYW=%PYWDIR%python.exe"
 if not defined PYW goto :nopython
 
 rem --- запуск окна программы -------------------------------------------
@@ -94,28 +107,42 @@ pause
 endlocal & exit /b 1
 
 :try_dir
-rem Проверяет Python в папке: сначала обычный, потом оконный.
-if defined PYW exit /b
+rem Проверяет Python в папке: сначала обычный, потом оконный. Запоминаем
+rem папку целиком, поэтому хватает одной удачной проверки на папку:
+rem python.exe и pythonw.exe всегда лежат рядом и умеют одно и то же.
+if defined PYW_FULL_DIR if defined PYW_ANY_DIR exit /b
 if "%~1"=="" exit /b
+if not exist "%~1" exit /b
 call :try_exe "%~1\python.exe"
+if defined PYW_FULL_DIR exit /b
+if defined PYW_ANY_DIR exit /b
 call :try_exe "%~1\pythonw.exe"
 exit /b
 
 :try_exe
-rem Годится ли этот файл Python: есть ли в нём окна PyQt6.
-rem Заглушку из Microsoft Store пропускаем: она стоит в папке WindowsApps,
+rem Годится ли этот Python. Нужны две вещи: окна PyQt6 — иначе нечего
+rem открывать, и ещё requests с websockets — для проверки OBS вживую и
+rem для автора в цикле улучшения. Сначала ищем того, у кого есть всё;
+rem заглушку из Microsoft Store пропускаем: она лежит в WindowsApps,
 rem ничего не делает и при этом отвечает, что всё хорошо.
-if defined PYW exit /b
+if defined PYW_FULL_DIR if defined PYW_ANY_DIR exit /b
 if "%~1"=="" exit /b
 if not exist "%~1" exit /b
 set "CAND=%~1"
 set "SHORT=%CAND%"
 call set "SHORT=%%SHORT:WindowsApps=%%"
 if not "%SHORT%"=="%CAND%" exit /b
+if defined PYW_FULL_DIR goto :try_any
+"%CAND%" -c "import PyQt6, requests, websockets" >nul 2>&1
+if not errorlevel 1 goto :is_full
+:try_any
+if defined PYW_ANY_DIR exit /b
 "%CAND%" -c "import PyQt6" >nul 2>&1
 if errorlevel 1 exit /b
-set "PYW=%CAND%"
-if exist "%~dp1pythonw.exe" set "PYW=%~dp1pythonw.exe"
+set "PYW_ANY_DIR=%~dp1"
+exit /b
+:is_full
+set "PYW_FULL_DIR=%~dp1"
 exit /b
 
 :nopython
@@ -127,6 +154,10 @@ echo (при установке отметьте галочку "Add Python to P
 echo затем выполните в командной строке:
 echo.
 echo     python -m pip install PyQt6
+echo.
+echo Чтобы работали ещё и мосты, добавьте к этому:
+echo.
+echo     python -m pip install requests websockets
 echo.
 echo После этого запустите этот файл снова.
 echo.
