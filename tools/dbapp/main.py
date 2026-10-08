@@ -3928,7 +3928,10 @@ class CapsTab(ScrollPage):
         self.reg_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.reg_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.reg_table.setMinimumHeight(150)
-        self.reg_table.setMaximumHeight(190)
+        # Потолка высоты больше нет: её считает _reg_fit_table_height по
+        # числу серверов, чтобы в блок влезали все строки. Прежний
+        # предел 190 пикселей показывал половину списка и заставлял
+        # крутить полосу прокрутки внутри самого блока.
         # Ширины заданы явно, потому что Qt по умолчанию распределяет
         # место неудачно: снимок показал обрезанные до «Windo…» имена и
         # обрезанное до «нужно: …» состояние. Имя должно помещаться
@@ -4083,6 +4086,16 @@ class CapsTab(ScrollPage):
         # Теперь ряд на сервер — так и было задумано в комментариях выше.
         row_mcp.addWidget(self.btn_reg_check)
         row_mcp.addWidget(self.btn_reg_on)
+        self.btn_reg_all = QPushButton("Включить все")
+        self.btn_reg_all.setToolTip(
+            "Включить в настройках opencode сразу все серверы, которые "
+            "не требуют вопросов. Те, где нужно что-то выбрать или сначала "
+            "живая проверка (Android Studio, DBHub, LMArena), будут "
+            "перечислены в журнале с указанием, что нажать — молча пропускать "
+            "их нельзя. Повторное нажатие ничего не ломает: запись "
+            "идемпотентна"
+        )
+        row_mcp.addWidget(self.btn_reg_all)
         row_mcp.addWidget(self.btn_reg_off)
         row_mcp2.addWidget(self.btn_reg_auto)
         row_mcp2.addWidget(self.btn_reg_src)
@@ -4144,6 +4157,8 @@ class CapsTab(ScrollPage):
 
         self.log = ui.LogView()
         self.log.setMinimumHeight(170)
+        # Потолок и подсказку пустого журнала ставит сам LogView: пока
+        # отчёта нет, он занимает минимум, а не всю оставшуюся страницу.
         outer.addWidget(self.log)
 
         # Связи — только здесь, когда все элементы уже созданы.
@@ -4158,6 +4173,7 @@ class CapsTab(ScrollPage):
         self.btn_skills_drop.clicked.connect(self._remove_skills)
         self.caps_skills_list.itemChanged.connect(self._caps_skills_changed)
         self.btn_reg_check.clicked.connect(self._reg_check_all)
+        self.btn_reg_all.clicked.connect(self._reg_enable_all)
         self.btn_reg_on.clicked.connect(self._reg_enable)
         self.btn_reg_auto.clicked.connect(self._reg_auto)
         self.btn_reg_off.clicked.connect(self._reg_disable)
@@ -4406,9 +4422,29 @@ class CapsTab(ScrollPage):
             self.reg_table.setItem(row, 2, QTableWidgetItem(server.license))
             self.reg_table.setItem(row, 3, QTableWidgetItem(server.tools_count))
         self._reg_fit_columns()
+        self._reg_fit_table_height()
         if servers and self.reg_table.currentRow() < 0:
             self.reg_table.setCurrentCell(0, 0)
         self._reg_show_detail()
+
+    def _reg_fit_table_height(self) -> None:
+        """Высота таблицы — по числу серверов, чтобы были видны все.
+
+        Раньше высота была ограничена 190 пикселями, и при двенадцати
+        серверах в блок влезало пять с половиной строк: список крутился
+        внутри самого блока, половина серверов не была видна без
+        прокрутки в этом крутике, а сам блок выглядел недоделанным —
+        пустое место под таблицей и обрезанная строка на краю.
+        """
+        table = self.reg_table
+        if table.rowCount() <= 0:
+            return
+        table.resizeRowsToContents()
+        header = table.horizontalHeader().height()
+        body = sum(table.rowHeight(row) for row in range(table.rowCount()))
+        needed = header + body + 2 * table.frameWidth() + 2
+        table.setMinimumHeight(needed)
+        table.setMaximumHeight(needed)
 
     def _reg_current(self) -> mcp_registry.Server | None:
         row = self.reg_table.currentRow()
@@ -4581,6 +4617,117 @@ class CapsTab(ScrollPage):
         lines.append("")
         lines.append(f"Источник: {server.source}")
         self.reg_detail.setPlainText("\n".join(lines))
+        self._reg_fit_detail_height()
+
+    def _reg_fit_detail_height(self) -> None:
+        """Высота поля описания — под сам текст, а не под старый минимум.
+
+        Поле было ограничено 120 пикселями, а описание сервера занимает
+        больше: текст обрывался на полуслове, и последняя строка
+        читалась как «...действия откажут» без конца.
+
+        Высоту текста у Qt здесь взять нечем: document.size() у этого поля
+        отдаёт не пиксели, а число строк, и даже после отрисовки, поэтому
+        перенос меряем сами по метрикам шрифта. Считаем по словам, а не
+        делением длины на ширину, — иначе длинное слово «разъехалось» бы
+        на две строки и поле выросло бы лишнего.
+        """
+        box = self.reg_detail
+        width = box.viewport().width()
+        if width < 50:
+            return
+        metrics = box.fontMetrics()
+        lines = 0
+        for paragraph in box.toPlainText().split("\n"):
+            words = paragraph.split()
+            if not words:
+                lines += 1
+                continue
+            current = 0
+            for word in words:
+                advance = metrics.horizontalAdvance(word)
+                if current and current + 1 + advance > width:
+                    lines += 1
+                    current = advance
+                else:
+                    current += advance + (1 if current else 0)
+            lines += 1
+        # Запас сверх расчёта: наш перенос по словам чуть занижает реальный —
+        # Qt переносит ещё и по границам символов в длинных кусках вроде
+        # команды npm. Лучше лишние двадцать процентов пустоты внизу, чем
+        # обрезанная последняя строка и полоса прокрутки.
+        needed = int(lines * metrics.lineSpacing() * 1.2) + 2 * box.frameWidth() + 10
+        # Нижняя граница: короткое описание не должно оставлять под
+        # собой пустоту — на пустое место в этом блоке и жаловались.
+        needed = max(needed, 150)
+        box.setMinimumHeight(needed)
+        box.setMaximumHeight(needed)
+
+    def _reg_bulk_reason(self, server: mcp_registry.Server) -> str:
+        """Что мешает включить сервер вместе со всеми. Пусто — можно.
+
+        Правила те же, что и у кнопки «Включить» для одной строки: часть
+        серверов перед записью обязана что-то спросить или проверить
+        живьём. Пропускать их молча нельзя — человек потом не поймёт,
+        почему сервер из списка не включился.
+        """
+        if server.manual_setup:
+            return ("нужен выбор — программа спросит его сама, "
+                    "поэтому в общий список он не входит")
+        if server.id == "dbhub":
+            return ("нужна живая проверка связи с базой: выбери его строку "
+                    "и нажми «Включить»")
+        if server.id == "lmarena":
+            return ("нужен токен арены и ответ модели: выбери его строку "
+                    "и нажми «Настроить автоматически»")
+        return ""
+
+    def _reg_enable_all(self) -> None:
+        """Включает вместе все серверы, где для этого не надо ничего спрашивать."""
+        dest = self._reg_dest()
+        if dest is None:
+            self._warn("Не выбрана папка настроек opencode.")
+            return
+        base = self._reg_base()
+        if base is None:
+            self._warn("Не выбрана папка базы с реестром.")
+            return
+
+        def job(progress):
+            servers = mcp_registry.load_servers(base)
+            mcp_registry.mark_installed(servers, dest)
+            self.reg_servers = servers
+            enabled: list[str] = []
+            skipped: list[str] = []
+            errors: list[str] = []
+            for server in servers:
+                reason = self._reg_bulk_reason(server)
+                if reason:
+                    skipped.append(f"пропущен {server.name}: {reason}")
+                    continue
+                try:
+                    _messages, errs = mcp_registry.enable(
+                        dest, server, progress=progress)
+                except Exception as exc:  # noqa: BLE001 — сервер не должен ронять всех
+                    errors.append(f"{server.name}: {exc}")
+                    continue
+                if errs:
+                    errors.append(f"{server.name}: " + "; ".join(errs))
+                    continue
+                if server.installed:
+                    enabled.append(f"{server.name}: уже был включён")
+                else:
+                    enabled.append(f"{server.name}: включён")
+            self._reg_paint()
+            lines = [f"Готово: {len(enabled)} из {len(servers)}."]
+            lines += enabled
+            if skipped:
+                lines.append("Не тронуты (нужно решение человека):")
+                lines += skipped
+            lines.append("Перезапусти opencode, чтобы он подхватил изменения.")
+            return lines, errors
+
+        self._start(job, "registry")
 
     def _reg_check_all(self) -> None:
         """Живая проверка требований. Идёт в фоне: запускает программы."""

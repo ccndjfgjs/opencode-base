@@ -135,7 +135,19 @@ def label(text: str, *, kind: str = "", wrap: bool = False) -> QLabel:
 
 
 class LogView(QPlainTextEdit):
-    """Окошко для отчёта о ходе работы."""
+    """Окошко для отчёта о ходе работы.
+
+    Пока отчёта нет, занимает минимум и показывает подсказку. Раньше у
+    него был задан только минимум, и Qt отдавал ему всё свободное место
+    страницы: под кнопками появлялся огромный пустой ящик во весь экран.
+    Теперь пустой журнал не занимает место, а по первой же записи
+    разворачивается — и остаётся достаточно высоким, чтобы читать.
+    """
+
+    #: Высота пустого журнала и развёрнутого. Развёрнутый не растёт
+    #: бесконечно: длинный вывод прокручивается, но страницу не тянет.
+    EMPTY_HEIGHT = 170
+    OPEN_HEIGHT = 320
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -145,6 +157,10 @@ class LogView(QPlainTextEdit):
         font = QFont("Consolas")
         font.setStyleHint(QFont.StyleHint.Monospace)
         self.setFont(font)
+        self.setPlaceholderText(
+            "Журнал пока пуст — здесь появятся результаты проверок."
+        )
+        self.setMaximumHeight(self.EMPTY_HEIGHT)
 
     def add(self, text: str, tag: str = "info") -> None:
         color = {
@@ -159,11 +175,14 @@ class LogView(QPlainTextEdit):
             .replace("<", "&lt;")
             .replace(">", "&gt;")
         )
+        if not self.toPlainText().strip():
+            self.setMaximumHeight(self.OPEN_HEIGHT)
         self.appendHtml(f'<span style="color:{color}">{safe}</span>')
         self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
 
     def clear_log(self) -> None:
         self.clear()
+        self.setMaximumHeight(self.EMPTY_HEIGHT)
 
 
 def row(*widgets, stretch_last: bool = False) -> QWidget:
