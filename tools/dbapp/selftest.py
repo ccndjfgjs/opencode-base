@@ -176,6 +176,67 @@ def main() -> int:
         ui.apply_dark_theme(app)
         window = app_main.MainWindow()
         check(True, f"окно собрано, размер {window.width()}x{window.height()}")
+        # Окно обязано помещаться в экран. Раньше стоял жёсткий
+        # resize(880, 900), и на экране 1280x720 Windows срезала низ:
+        # измеренное окно выходило 737 px при высоте экрана 720, то
+        # есть нижние кнопки вкладки уезжали за край экрана.
+        _scr = QApplication.primaryScreen()
+        _avail = _scr.availableGeometry() if _scr is not None else None
+        check(
+            _avail is None
+            or (window.width() <= _avail.width()
+                and window.height() <= _avail.height()),
+            "окно помещается в доступную область экрана: "
+            f"{window.width()}x{window.height()} в "
+            f"{_avail.width() if _avail else '?'}x"
+            f"{_avail.height() if _avail else '?'}",
+        )
+        # И лишнее уходит в прокрутку, а не пропадает: содержимое
+        # вкладки не должно сжиматься под окно, иначе подписи
+        # наезжают друг на друга.
+        #
+        # Окно здесь намеренно не показывается: самопроверка работает
+        # без экрана, а window.show() в ней роняет процесс намертво
+        # (проверено: падение без трассировки, ровно как было с
+        # самодельным подклассом QLayout). Вместо показа вызывается
+        # тот же самый refresh_height, что и при показе вкладки.
+        _needs = 0
+        _squeezed: list[str] = []
+        for _i in range(window.tabs.count()):
+            _page = window.tabs.widget(_i)
+            if hasattr(_page, "refresh_height"):
+                _page.refresh_height()
+            for _ in range(3):
+                app.processEvents()
+            if _page.verticalScrollBar().maximum() > 0:
+                _needs += 1
+            if _page._inner.height() < _page._inner.sizeHint().height() - 2:
+                _squeezed.append(window.tabs.tabText(_i))
+        check(not _squeezed,
+              "содержимое вкладок не сжимается под окно"
+              + (f": {', '.join(_squeezed)}" if _squeezed else ""))
+        check(_needs > 0,
+              f"лишнее содержимое уходит в прокрутку, а не за край: {_needs} вкладок")
+
+        # Лаунчер прячет своё окно консоли: при запуске на экране
+        # появлялось чёрное окно, и на записи экрана видно было, как
+        # его заголовок меняется на «npm» — консоль наследуют процессы
+        # мостов от opencode.
+        _cmd_file = core.program_root() / "Управление-базой.cmd"
+        _hide = core.program_root() / "tools" / "dbapp" / "launchers" / "hide_console.ps1"
+        check(_hide.is_file(),
+              "скрытие окна консоли лежит отдельным файлом: hide_console.ps1")
+        _cmd_text = _cmd_file.read_text(encoding="utf-8") if _cmd_file.is_file() else ""
+        check("hide_console.ps1" in _cmd_text,
+              "лаунчер вызывает скрытие окна")
+        check("title OpenCodeBase-zapusk" in _cmd_text,
+              "и перед этим даёт своему окну имя, по которому его находят")
+        # Паузы быть не должно: консоль скрыта, и пауза означала бы
+        # молчаливое зависание лаунчера.
+        check("\npause" not in _cmd_text,
+              "в лаунчере нет паузы: при скрытой консоли она зависла бы молча")
+        check('notepad "%ERRF%"' in _cmd_text,
+              "причину ошибки лаунчер показывает файлом, а не консолью")
         check(len(window.create_tab.program_list) > 0 or
               window.create_tab.program_list.count() > 0,
               f"список программ заполнен: "

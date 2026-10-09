@@ -7390,8 +7390,13 @@ class ThemesTab(ScrollPage):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, splash=None) -> None:
         super().__init__()
+        # Окно загрузки живёт до конца сборки окна, поэтому передаём его
+        # сюда: иначе надпись в нём замирает на весь долгий ход работы.
+        # Шаг — это ровно то, что происходит сейчас, а не общее «загружаем».
+        self._splash_step = (lambda text, percent=0: splash.say(text, percent)) \
+            if splash is not None else (lambda text, percent=0: None)
         self.setWindowTitle("Управление базой")
         # Значок рисуется сам (ui.app_icon): файлов с картинками в
         # программе нет, а значок нужен сразу трём местам — заголовку
@@ -7466,11 +7471,24 @@ class MainWindow(QMainWindow):
 
         tabs = QTabWidget()
         self.tabs = tabs
+        # Шаги загрузки идут прямо здесь, между сборкой вкладок.
+        # Раньше окно загрузки писало «Читаем настройки и список
+        # мостов…» и молчало все десять секунд, пока собиралось
+        # главное окно: на записи экрана это было видно прямо.
+        # Шаг не перескакивает через работу — он и есть описание того,
+        # что происходит сейчас.
+        step = getattr(self, "_splash_step", None)
+        step("Собираем вкладки программы…", 50)
         self.create_tab = CreateTab()
+        step("Вкладка «Новая база»…", 54)
         self.import_tab = ImportTab()
+        step("Вкладка «Подключить»…", 60)
         self.bridge_tab = BridgeTab()
+        step("Вкладка «Мост NCP»…", 66)
         self.caps_tab = CapsTab()
+        step("Вкладка «opencode»: список мостов…", 74)
         self.programs_tab = ProgramsTab()
+        step("Вкладка «Программы»: карточки установленного…", 82)
         self.themes_tab = ThemesTab()
 
         # Импорт вкладки «Обновление» — здесь, а не вверху файла. Вкладка
@@ -7482,9 +7500,12 @@ class MainWindow(QMainWindow):
         # целиком, и круг разрывается.
         from update_tab import UpdateTab  # noqa: PLC0415
 
+        step("Вкладка «Обновление»…", 88)
         self.update_tab = UpdateTab()
 
+        step("Вкладка «Инструкция»…", 92)
         self.help_tab = HelpTab()
+        step("Расставляем вкладки…", 96)
         # Подписи вкладок короткие не для красоты: восемь
         # длинных русских подписей занимали 861 пиксель, а полоса
         # вкладок при окне 880 показывает около 830 — последние
@@ -7914,7 +7935,7 @@ def run() -> int:
         quiet_notes = []
 
     global _SINGLE_WINDOW
-    window = MainWindow()
+    window = MainWindow(splash=splash)
     splash.say("Готово", 100)
     app.processEvents()
     _SINGLE_WINDOW = window

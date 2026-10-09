@@ -15,9 +15,23 @@ rem на ней cmd спотыкается и обрывает работу.
 
 setlocal
 
+rem --- прячем окно консоли ----------------------------------------------
+rem Окно консоли появляется раньше, чем выполняется первая строка этого
+rem файла, поэтому спрятать его можно только отсюда. Окно ищется по имени,
+rem которое мы сами только что поставили: чужие консоли не трогаются.
+rem
+rem Проверено на живых запусках: окно исчезает, потоки программы не
+rem страдают. Если спрятать не вышло - продолжаем молча, лишнее окно
+rem консоли лучше отказа запуска.
+title OpenCodeBase-zapusk
+powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass ^
+  -File "%~dp0tools\dbapp\launchers\hide_console.ps1" -Marker "OpenCodeBase-zapusk"
+
+
 set "DIR=%~dp0"
 set "APPDIR=%DIR%tools\dbapp"
 set "APP=%APPDIR%\main.py"
+set "ERRF=%TEMP%\opencode-base-zapusk-ne-poluchilsya.txt"
 
 if not exist "%APP%" goto :noapp
 
@@ -90,6 +104,7 @@ rem Окно открылось: консоль закрывается, даль
 endlocal & exit /b 0
 
 :no_window
+>"%ERRF%" echo Окно программы не открылось за 20 секунд. Чаще всего это значит, что не запустился Python с окнами PyQt6.
 echo.
 echo Окно программы не открылось за 20 секунд.
 echo Чаще всего это означает, что не запустился Python с окнами PyQt6.
@@ -103,7 +118,9 @@ echo.
 echo Если окно всё-таки открылось - закрой лишние экземпляры и запусти
 echo программу ещё раз: при втором запуске она не откроется заново.
 echo.
-pause
+rem Паузы тут нет намеренно: консоль скрыта, и пауза держала
+rem бы лаунчер молча. Причина и так показана в блокноте.
+notepad "%ERRF%"
 endlocal & exit /b 1
 
 :try_dir
@@ -146,6 +163,7 @@ set "PYW_FULL_DIR=%~dp1"
 exit /b
 
 :nopython
+>"%ERRF%" echo Не найден Python с окнами PyQt6 - без него окно не открыть. Установите Python 3 с сайта python.org и выполните: python -m pip install PyQt6
 echo.
 echo Не найден Python с окнами PyQt6 - без него окно не открыть.
 echo.
@@ -161,15 +179,20 @@ echo     python -m pip install requests websockets
 echo.
 echo После этого запустите этот файл снова.
 echo.
-pause
+rem Паузы тут нет намеренно: консоль скрыта, и пауза держала
+rem бы лаунчер молча. Причина и так показана в блокноте.
+notepad "%ERRF%"
 exit /b 1
 
 :noapp
+>"%ERRF%" echo Не найден файл программы main.py. Проверьте, что папка tools\dbapp есть рядом с этим файлом.
 echo.
 echo Не найден файл программы:
 echo   %APP%
 echo.
 echo Проверьте, что папка tools\dbapp есть рядом с этим файлом.
 echo.
-pause
+rem Паузы тут нет намеренно: консоль скрыта, и пауза держала
+rem бы лаунчер молча. Причина и так показана в блокноте.
+notepad "%ERRF%"
 exit /b 1
