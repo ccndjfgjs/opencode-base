@@ -201,17 +201,23 @@ class TrayIcon(QSystemTrayIcon):
         # правая кнопка перестанет открывать меню вовсе.
         self._menu = QMenu()
         self._menu.setToolTipsVisible(True)
-        # Пункты-разделители помечены, чтобы следующие функции легко
-        # встали в своё место, не переписывая это место целиком.
+        # Меню из трёх пунктов, в том порядке, в котором ими идут:
+        # посмотреть, проверить, выйти. Разделителя между ними нет —
+        # при трёх пунктах он только разрывал список, а служебного
+        # после «Проверить мосты» тут ничего нет.
         self.act_open = self._menu.addAction("Открыть окно")
-        self.act_refresh = self._menu.addAction("Обновить состояние")
-        self.menu_extra = self._menu.addSeparator()
-        self.menu_extra.setText("Дальше — служебное")
-        self.menu_extra.setEnabled(False)
+        self.act_check = self._menu.addAction("Проверить мосты")
         self.act_quit = self._menu.addAction("Закрыть программу")
         self.act_open.triggered.connect(self.show_window)
-        self.act_refresh.triggered.connect(self.refresh_state)
+        self.act_check.triggered.connect(self.check_bridges)
         self.act_quit.triggered.connect(self.quit_program)
+        # Разделитель остаётся на месте для будущих пунктов: add_action
+        # вставляет новые действия перед ним, поэтому «Закрыть программу»
+        # всегда остаётся последним. Сейчас его не видно — добавлять
+        # третий пункт нечего, — но место для следующих функций есть.
+        self.menu_extra = self._menu.addSeparator()
+        self.menu_extra.setText("Дальше — служебное")
+        self.menu_extra.setVisible(False)
         self.setContextMenu(self._menu)
         self.activated.connect(self._on_activated)
         self._hinted = False
@@ -233,12 +239,15 @@ class TrayIcon(QSystemTrayIcon):
     def add_action(self, text: str, handler) -> object:
         """Добавить пункт в меню трея. Для будущих функций.
 
-        Вставляет перед строкой-разделителем, чтобы «Закрыть
-        программу» оставалась последней и всегда на своём месте.
+        Вставляет перед строкой-разделителем и показывает его: пока
+        пунктов для добавления нет, разделитель скрыт, чтобы не
+        разрывать меню из трёх пунктов. С появлением четвёртого он
+        встаёт на место сам.
         """
         action = QAction(text, self._menu)
         action.triggered.connect(handler)
         self._menu.insertAction(self.menu_extra, action)
+        self.menu_extra.setVisible(True)
         return action
 
     def _on_activated(self, reason) -> None:
@@ -257,6 +266,12 @@ class TrayIcon(QSystemTrayIcon):
         self._window.activateWindow()
 
     def refresh_state(self) -> None:
+        """Перечитать состояние без живой проверки.
+
+        Отдельный ход от «Проверить мосты»: он ничего не запускает
+        и потому мгновенный. Оставлен как публичный метод — им пользуется
+        панель и код, который просто хочет освежить список.
+        """
         refresh = getattr(self._window, "refresh_now", None)
         if callable(refresh):
             refresh()
@@ -265,6 +280,18 @@ class TrayIcon(QSystemTrayIcon):
         # прошлый список и выглядела сломанной.
         if self._panel is not None and self._panel.isVisible():
             self._panel.refresh()
+
+    def check_bridges(self) -> None:
+        """Живая проверка мостов и серверов из меню трея.
+
+        Зовёт тот же код, что кнопка «Проверить» в панели, и ждёт конца:
+        до него состояние прежнее, и человек увидел бы «не проверено»
+        сразу после нажатия. Проверка идёт в рабочем потоке и занимает
+        около секунды на этой машине, так что результат стоит дождаться.
+        """
+        from tray_panel import run_check  # локальный импорт: цикл
+
+        run_check(self._window)
 
     def quit_program(self) -> None:
         """Закрыть программу по-настоящему, а не свернуть в трей.

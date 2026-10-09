@@ -200,17 +200,21 @@ def _server_entry(caps, window, server) -> Entry:
     else:
         # Не проверено — вот здесь «Проверить» и делает живую проверку.
         actions.append(("Проверить",
-                        lambda srv=server: _check_all(window, caps)))
+                        lambda: _check_all(window, caps)))
     return Entry(server.name, text, kind, actions)
 
 
-def _check_all(window, caps) -> None:
-    """Живая проверка требований всех серверов.
+def run_check(window) -> None:
+    """Живая проверка требований всех серверов. Точка входа снаружи.
 
-    Зовём готовый метод вкладки: он уже умеет уводить работу в поток,
-    показывать ход дела и перечитывать состояние по факту записи. Свой
-    второй набор проверок означал бы две разные правды об одном сервере.
+    Этим же методом пользуются кнопка «Проверить» в панели и пункт
+    «Проверить мосты» в меню трея. Один вход на оба: две копии этой
+    проверки разошлись бы, и одна из них рано или поздно перестала бы
+    перечитывать состояние по факту.
     """
+    caps = getattr(window, "caps_tab", None)
+    if caps is None:
+        return
     window.showNormal()
     window.raise_()
     for i in range(window.tabs.count()):
@@ -219,6 +223,16 @@ def _check_all(window, caps) -> None:
             break
     caps._reg_check_all()
     _await_check(window, caps)
+
+
+def _check_all(window, caps) -> None:
+    """Обертка кнопки «Проверить» в панели.
+
+    Зовём готовый метод вкладки: он уже умеет уводить работу в поток,
+    показывать ход дела и перечитывать состояние по факту записи. Свой
+    второй набор проверок означал бы две разные правды об одном сервере.
+    """
+    run_check(window)
 
 
 def _await_check(window, caps) -> None:
