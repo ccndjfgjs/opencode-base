@@ -4099,10 +4099,15 @@ def python_works(path: Path) -> bool:
     if "WindowsApps" in text:
         return False
     try:
+        # Проверка идёт при каждом запуске программы, по нескольку
+        # кандидатов, и каждая без этого открывала чёрное окно.
+        # capture_output подставляет трубы явно, поэтому STARTUPINFO
+        # со скрытием окна безопасен и ничего не рвёт.
         done = subprocess.run(
             [text, "-c", "import sys; print(sys.version_info[:2])"],
             capture_output=True,
             timeout=30,
+            startupinfo=hidden_startupinfo(),
         )
     except (OSError, subprocess.SubprocessError):
         return False

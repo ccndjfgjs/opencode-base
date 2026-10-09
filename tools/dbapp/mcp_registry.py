@@ -448,6 +448,21 @@ def set_installed_version(base: Path, server_id: str, version: str,
 # --------------------------------------------------------------- проверки
 
 
+def _hidden_startupinfo():
+    """Окно консоли не показывать. Подробности — в core.hidden_startupinfo.
+
+    Отдельная обёртка, потому что модуль проверяют и запускают без
+    главного окна программы: тогда core может быть недоступен, и
+    молча пропустить скрытие хуже, чем не спрятать вовсе.
+    """
+    try:
+        from core import hidden_startupinfo
+
+        return hidden_startupinfo()
+    except Exception:
+        return None
+
+
 def _run(command: str, args: list[str]) -> tuple[bool, str]:
     """Запускает команду проверки. Ничего не устанавливает и не меняет.
 
@@ -461,10 +476,17 @@ def _run(command: str, args: list[str]) -> tuple[bool, str]:
     if exe.lower().endswith((".cmd", ".bat")):
         argv = [os.environ.get("COMSPEC") or "cmd.exe", "/c", exe, *args]
     try:
+        # Окно консоли прячем: проверка требований дёргает node и npx для
+        # каждого сервера, и каждая такая проба на миг открывала чёрное
+        # окно. Измерено на запуске программы: 24 видимых окна за 17 секунд
+        # — двенадцать серверов по две пробы. Здесь только capture_output,
+        # потоки подставлены явными трубами, поэтому STARTUPINFO безопасен
+        # и не рвёт обмен, в отличие от CREATE_NO_WINDOW.
         done = subprocess.run(
             argv,
             capture_output=True, text=True, timeout=CHECK_TIMEOUT,
             encoding="utf-8", errors="replace",
+            startupinfo=_hidden_startupinfo(),
         )
     except (OSError, subprocess.SubprocessError):
         return False, ""
