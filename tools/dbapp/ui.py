@@ -201,23 +201,24 @@ class TrayIcon(QSystemTrayIcon):
         # правая кнопка перестанет открывать меню вовсе.
         self._menu = QMenu()
         self._menu.setToolTipsVisible(True)
-        # Меню из трёх пунктов, в том порядке, в котором ими идут:
-        # посмотреть, проверить, выйти. Разделителя между ними нет —
-        # при трёх пунктах он только разрывал список, а служебного
-        # после «Проверить мосты» тут ничего нет.
+        # Порядок меню: посмотреть, проверить, открыть панель, выход.
+        #
+        # Разделитель стоит ПЕРЕД «Закрыть программу», а не после неё.
+        # add_action вставляет новые пункты перед разделителем, и стоял
+        # бы он после выхода — все будущие пункты оказались бы ниже
+        # «Закрыть программу», то есть после выхода из программы.
+        # Разделитель отделяет выход от всего остального: это единственное
+        # место в меню, где нажатие необратимо.
         self.act_open = self._menu.addAction("Открыть окно")
         self.act_check = self._menu.addAction("Проверить мосты")
+        self.act_panel = self._menu.addAction("Открыть панель «Подключено»")
+        self.menu_extra = self._menu.addSeparator()
+        self.menu_extra.setText("Дальше — служебное")
         self.act_quit = self._menu.addAction("Закрыть программу")
         self.act_open.triggered.connect(self.show_window)
         self.act_check.triggered.connect(self.check_bridges)
+        self.act_panel.triggered.connect(self.show_panel)
         self.act_quit.triggered.connect(self.quit_program)
-        # Разделитель остаётся на месте для будущих пунктов: add_action
-        # вставляет новые действия перед ним, поэтому «Закрыть программу»
-        # всегда остаётся последним. Сейчас его не видно — добавлять
-        # третий пункт нечего, — но место для следующих функций есть.
-        self.menu_extra = self._menu.addSeparator()
-        self.menu_extra.setText("Дальше — служебное")
-        self.menu_extra.setVisible(False)
         self.setContextMenu(self._menu)
         self.activated.connect(self._on_activated)
         self._hinted = False
@@ -239,16 +240,24 @@ class TrayIcon(QSystemTrayIcon):
     def add_action(self, text: str, handler) -> object:
         """Добавить пункт в меню трея. Для будущих функций.
 
-        Вставляет перед строкой-разделителем и показывает его: пока
-        пунктов для добавления нет, разделитель скрыт, чтобы не
-        разрывать меню из трёх пунктов. С появлением четвёртого он
-        встаёт на место сам.
+        Вставляет перед строкой-разделителем, а значит перед «Закрыть
+        программу»: выход остаётся последним и всегда на своём месте.
         """
         action = QAction(text, self._menu)
         action.triggered.connect(handler)
         self._menu.insertAction(self.menu_extra, action)
-        self.menu_extra.setVisible(True)
         return action
+
+    def show_panel(self) -> None:
+        """Открыть панель «Подключено» из меню.
+
+        Тот же вход, что и левая кнопка по значку: одна и та же панель,
+        одна и та же проверка внутри. Второй способ открыть её нужен
+        потому, что левая кнопка не всегда под рукой: на узком экране
+        значок сворачивается в Overflow, и до него не добраться, не
+        вываливаясь с панели задач.
+        """
+        self.panel.toggle()
 
     def _on_activated(self, reason) -> None:
         # Левая кнопка открывает панель «что подключено». Раньше она
