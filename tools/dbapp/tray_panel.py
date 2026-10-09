@@ -23,7 +23,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtCore import QPoint, Qt, QTimer
 from PyQt6.QtWidgets import (
     QApplication,
     QFrame,
@@ -163,16 +163,28 @@ def _server_entries(caps, window) -> list:
     return result
 
 
+#: Сколько ждать живой проверки, прежде чем смотреть на неё. Проверка
+#: идёт в рабочем потоке и зовёт внешние программы — на 12 серверов уходит
+#: около секунды, но на медленной машине и с медленным Node.js больше.
+CHECK_TIMEOUT_MS = 90_000
+
+
 def _server_entry(caps, window, server) -> Entry:
-    """Состояние и кнопки одного сервера — теми же словами, что таблица."""
+    """Состояние и кнопки одного сервера — теми же словами, что таблица.
+
+    Отдельная оговорка про непроверенное. Слово «не проверено» в таблице
+    означает не «проверять нечем», а «проверка отложена»: при открытии
+    вкладки требования читаются без проверки, иначе окно открывалось бы
+    на минуту дольше — каждая проверка зовёт внешнюю программу. Живая
+    проверка живёт за кнопкой и на программе уже написана.
+    """
+    checked = bool(server.requirements)
     text = caps._reg_state_text(server)
     kind = "dim"
-    if not server.installed:
-        kind = "dim"
-    elif server.missing:
-        kind = "warn"
-    else:
-        kind = "ok"
+    if checked and not server.installed:
+        kind = "warn" if server.missing else "ok"
+    elif server.installed:
+        kind = "warn" if server.missing else "ok"
 
     actions: list = []
     if server.installed:
@@ -181,10 +193,80 @@ def _server_entry(caps, window, server) -> Entry:
     elif server.has_connection:
         actions.append(("Включить",
                         lambda srv=server: _run_server(window, caps, srv, True)))
-    # «Проверить» есть всегда: это единственное действие, которое
-    # говорит правду о том, чего программа не знает.
-    actions.append(("Проверить", lambda srv=server: _open_tab_check(window, srv)))
+    if checked:
+        # Требования уже проверены: повторно звать проверку незачем,
+        # достаточно открыть подробности.
+        actions.append(("Подробнее", lambda srv=server: _open_tab_check(window, srv)))
+    else:
+        # Не проверено — вот здесь «Проверить» и делает живую проверку.
+        actions.append(("Проверить",
+                        lambda srv=server: _check_all(window, caps)))
     return Entry(server.name, text, kind, actions)
+
+
+def _check_all(window, caps) -> None:
+    """Живая проверка требований всех серверов.
+
+    Зовём готовый метод вкладки: он уже умеет уводить работу в поток,
+    показывать ход дела и перечитывать состояние по факту записи. Свой
+    второй набор проверок означал бы две разные правды об одном сервере.
+    """
+    window.showNormal()
+    window.raise_()
+    for i in range(window.tabs.count()):
+        if window.tabs.widget(i) is caps:
+            window.tabs.setCurrentIndex(i)
+            break
+    caps._reg_check_all()
+    _await_check(window, caps)
+
+
+def _await_check(window, caps) -> None:
+    """Дождаться конца проверки и перерисовать панель.
+
+    Проверка идёт в рабочем потоке, поэтому сразу после её запуска
+    состояние ещё прежнее: перерисовав в этот момент, панель показала
+    бы «не проверено» сразу после живой проверки. Пока поток жив — видно
+    «идёт проверка», и кнопки погашены; поток закончился — панель
+    перечитывает состояние по факту.
+
+    Ждём поток, а не время: срок нужен только затем, чтобы при
+    зависшем потоке панель не осталась погашенной навсегда.
+
+    Опрос идёт по таймеру, то есть в главном потоке Qt, а не в рабочем:
+    трогать виджеты из чужого потока нельзя. Таймер каждый раз новый
+    и без повтора, поэтому накопления и утечки нет.
+    """
+    panel = panel_of(window)
+    if panel is not None:
+        panel.mark_checking()
+    waited = [0]
+
+    def poll() -> None:
+        waited[0] += 400
+        if getattr(caps, "_worker", None) is not None and waited[0] < CHECK_TIMEOUT_MS:
+            QTimer.singleShot(400, poll)
+            return
+        if panel is not None:
+            panel.checking_done()
+
+    QTimer.singleShot(400, poll)
+
+
+def panel_of(window):
+    """Панель, если она уже создана. Не создаём её тут.
+
+    Панель вешается на окно, а не ищется через трей: трей появляется не
+    сразу и может быть выключен, а кнопка «Проверить» внутри панели
+    обязана находить саму себя всегда. Иначе кнопка молча ничего не
+    делает — ровно то, что и случилось при первой проверке.
+    """
+    return getattr(window, "_tray_panel", None)
+
+
+def _attach(window, panel) -> None:
+    """Запомнить панель на окне, чтобы её нашла и кнопка, и трей."""
+    window._tray_panel = panel
 
 
 def _run_server(window, caps, server, enable: bool) -> None:
@@ -390,6 +472,10 @@ class TrayPanel(QWidget):
         self.scroll.setWidget(self.body)
 
         self.setFixedWidth(430)
+        self._checking = False
+        # Панель запоминает себя на окне сразу при создании. Ищут её
+        # потом и трей, и кнопка «Проверить» изнутри самой панели.
+        _attach(window, self)
         self.refresh()
 
     # ---- содержимое
@@ -433,6 +519,7 @@ class TrayPanel(QWidget):
             f" color: {ui.TEXT}; background: transparent; border: none;"
             f" font-weight: 600; }}"
             f"QPushButton:hover {{ color: {ui.ACCENT}; }}")
+        head.setToolTip("Нажмите, чтобы раскрыть или свернуть список")
         head.clicked.connect(lambda _=False, s=section: self._toggle(s))
         column.addWidget(head)
 
@@ -479,7 +566,19 @@ class TrayPanel(QWidget):
         name.setToolTip(entry.name)
         top.addWidget(name, 0)
 
-        state = ui.label(entry.state, kind=entry.kind)
+        # Пока идёт проверка, состояние прежнее и показывать его нельзя:
+        # человек увидел бы «не проверено» сразу после нажатия и решил
+        # бы, что кнопка не сработала.
+        pending = self._check_state()
+        if pending is not None:
+            state = ui.label(pending, kind="dim")
+        else:
+            state = ui.label(entry.state, kind=entry.kind)
+            if entry.state == "не проверено":
+                state.setToolTip(
+                    "Требования этого сервера ещё не проверялись на этой "
+                    "машине. Нажмите «Проверить» — программа запустит "
+                    "внешние программы и покажет, чего не хватает.")
         top.addWidget(state, 1)
         column.addLayout(top)
 
@@ -490,6 +589,9 @@ class TrayPanel(QWidget):
                 button = QPushButton(caption)
                 button.setFixedHeight(22)
                 button.setCursor(Qt.CursorShape.PointingHandCursor)
+                # На время проверки кнопки гаснут: дело уже идёт, а
+                # повторное нажатие заставило бы гонять проверку заново.
+                button.setEnabled(pending is None)
                 button.clicked.connect(lambda _=False, fn=handler: self._act(fn))
                 buttons.addWidget(button, 0)
             buttons.addStretch(1)
@@ -507,6 +609,33 @@ class TrayPanel(QWidget):
             handler()
         finally:
             self.refresh()
+
+    def mark_checking(self) -> None:
+        """Показать, что идёт живая проверка, и не врать про результат.
+
+        Проверка требований зовёт внешние программы и идёт в рабочем
+        потоке. До её конца состояние прежнее, и панель показала бы
+        «не проверено» сразу после нажатия «Проверить» — человек решил
+        бы, что кнопка не сработала.
+        """
+        self._checking = True
+        self.refresh()
+
+    def checking_done(self) -> None:
+        """Снять отметку проверки и перечитать состояние по факту.
+
+        Отдельный метод, а не сброс флага на месте: вызывается он из
+        таймера, и панель обязана сама себя привести в порядок —
+        иначе забытый флаг оставил бы её погашенной навсегда.
+        """
+        self._checking = False
+        self.refresh()
+
+    def _check_state(self) -> str | None:
+        """Что показать вместо состояния, пока идёт проверка."""
+        if getattr(self, "_checking", False):
+            return "идёт проверка…"
+        return None
 
     # ---- показ и скрытие
 
