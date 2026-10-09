@@ -33,6 +33,9 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+
+from core import hidden_startupinfo  # noqa: E402 — путь задаётся строкой выше
 #: Своего кода у DBHub в репозитории нет — сервер скачивает npx. Папка всё
 #: равно нужна: это рабочая папка запуска и место для пояснения.
 SERVER_DIR = HERE.parent.parent / "thirdparty" / "dbhub"
@@ -176,6 +179,7 @@ def main() -> int:
         proc = subprocess.Popen(
             argv, cwd=str(cwd), env=env,
             stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr,
+            startupinfo=hidden_startupinfo(),
         )
     except OSError as exc:
         say(f"мост не запустился: {exc}")

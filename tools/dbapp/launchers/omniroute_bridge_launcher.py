@@ -45,6 +45,8 @@ ENTRY = SERVER_DIR / "node_modules" / "omniroute" / "bin" / "omniroute.mjs"
 #: источник правды на программу и лаунчер, чтобы они не разошлись.
 sys.path.insert(0, str(HERE.parent))
 
+from core import hidden_startupinfo  # noqa: E402 — путь задаётся строкой выше
+
 
 def say(text: str) -> None:
     """Журнал только в stderr. stdout занят протоколом MCP."""
@@ -78,6 +80,7 @@ def main() -> int:
         proc = subprocess.Popen(
             [node, str(ENTRY), "--mcp"], cwd=str(SERVER_DIR), env=env,
             stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr,
+            startupinfo=hidden_startupinfo(),
         )
     except OSError as exc:
         say(f"мост не запустился: {exc}")
