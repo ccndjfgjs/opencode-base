@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt, QRectF
-from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPalette, QPixmap
+from PyQt6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPalette, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QFrame,
@@ -150,15 +150,37 @@ class TrayIcon(QSystemTrayIcon):
         super().__init__(parent)
         self._window = window
         self.setIcon(app_icon())
-        self.setToolTip("Управление базой")
-        menu = QMenu()
-        menu.addAction("Показать окно", self.show_window)
-        menu.addAction("Обновить состояние", self.refresh_state)
-        menu.addSeparator()
-        menu.addAction("Выход", self.quit_program)
-        self.setContextMenu(menu)
+        self.setToolTip("OpenCodeBase — правая кнопка открывает меню")
+        # Меню держим в поле: если отдать его только setContextMenu,
+        # сборщик мусора вправе унести объект вместе с пунктами, и
+        # правая кнопка перестанет открывать меню вовсе.
+        self._menu = QMenu()
+        self._menu.setToolTipsVisible(True)
+        # Пункты-разделители помечены, чтобы следующие функции легко
+        # встали в своё место, не переписывая это место целиком.
+        self.act_open = self._menu.addAction("Открыть окно")
+        self.act_refresh = self._menu.addAction("Обновить состояние")
+        self.menu_extra = self._menu.addSeparator()
+        self.menu_extra.setText("Дальше — служебное")
+        self.menu_extra.setEnabled(False)
+        self.act_quit = self._menu.addAction("Закрыть программу")
+        self.act_open.triggered.connect(self.show_window)
+        self.act_refresh.triggered.connect(self.refresh_state)
+        self.act_quit.triggered.connect(self.quit_program)
+        self.setContextMenu(self._menu)
         self.activated.connect(self._on_activated)
         self._hinted = False
+
+    def add_action(self, text: str, handler) -> object:
+        """Добавить пункт в меню трея. Для будущих функций.
+
+        Вставляет перед строкой-разделителем, чтобы «Закрыть
+        программу» оставалась последней и всегда на своём месте.
+        """
+        action = QAction(text, self._menu)
+        action.triggered.connect(handler)
+        self._menu.insertAction(self.menu_extra, action)
+        return action
 
     def _on_activated(self, reason) -> None:
         if reason in (QSystemTrayIcon.ActivationReason.Trigger,
@@ -176,10 +198,23 @@ class TrayIcon(QSystemTrayIcon):
             refresh()
 
     def quit_program(self) -> None:
-        """Выход по-настоящему, а не в трей."""
+        """Закрыть программу по-настоящему, а не свернуть в трей.
+
+        Порядок здесь важен в первую очередь для зависшей программы.
+        Раньше значок трея при этом исчезал: закрыли окно — и на экране
+        не осталось ни окна, ни значка, то есть выключить программу
+        было уже нечем. Именно это и случилось: человек жал крестик и
+        не мог её закрыть. Поэтому значок убираем последним и только
+        если окно действительно закрылось.
+
+        Если окно не закрылось (программа занята и не отвечает) —
+        значок остаётся на месте, и выход есть снова: правая кнопка
+        по нему и «Закрыть программу».
+        """
         self._window.tray_quitting = True
         self._window.close()
-        self.hide()
+        if not self._window.isVisible():
+            self.hide()
 
     def hide_to_tray(self) -> None:
         """Свернуть окно в трей и один раз сказать, как выйти."""

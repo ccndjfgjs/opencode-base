@@ -7500,14 +7500,22 @@ class MainWindow(QMainWindow):
         tab = getattr(self, "update_tab", None)
         if tab is not None and hasattr(tab, "stop"):
             tab.stop()
-        if self.tray is not None:
-            self.tray.hide()
         super().closeEvent(event)
+        # Значок трея намеренно НЕ прячем: он и есть запасной выход.
+        # Прятали — и получалось ровно то, на что жаловались: закрыли
+        # окно, значок исчез, а программа из-за занятого потока не
+        # завершилась. На экране не осталось ничего, и закрыть её было
+        # уже нечем. Оставляем значок на месте всегда, кроме настоящего
+        # выхода через «Закрыть программу» в его меню.
+        if self.tray is not None and not self.tray_quitting:
+            self.tray.show()
         # Закрытие последнего окна намеренно не завершает программу
         # (так мосты переживают закрытие вкладки), поэтому выход
         # вызываем сами. Иначе крестик закрывал бы окно, а процесс
         # оставался бы жить в фоне без единого окна.
-        QApplication.instance().quit()
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
 
     def minimize_to_tray(self) -> None:
         """Свернуть окно в трей — по кнопке, а не вместо закрытия."""
@@ -7844,6 +7852,15 @@ def run() -> int:
     splash.say("Запуск программы…", 5)
     app.processEvents()
 
+    # Импорты здесь, а не в самом блоке ниже. Стоило поставить их там —
+    # и `core` становился локальной переменной на всю функцию: обращение
+    # к core.first_run_done() выше падало с UnboundLocalError, программа
+    # умирала за 0.3 секунды, а лаунчер показывал эту ошибку в консоли.
+    # Выглядело при этом как «программа зависла».
+    import core
+    import mcp_registry
+    import opencode_caps
+
     if not core.first_run_done():
         splash.say("Первый запуск: готовим папку с базами…", 20)
         app.processEvents()
@@ -7863,10 +7880,6 @@ def run() -> int:
     # Переписываем их на запуск без окна, пока окно загрузки видно.
     quiet_notes: list[str] = []
     try:
-        import core
-        import mcp_registry
-        import opencode_caps
-
         _base = core.current_base("opencode")
         if _base is not None:
             quiet_notes, _ = mcp_registry.quiet_migrate(
