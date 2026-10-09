@@ -5,14 +5,18 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QFont, QPalette
+from PyQt6.QtCore import Qt, QRectF
+from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPalette, QPixmap
 from PyQt6.QtWidgets import (
+    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QPlainTextEdit,
+    QProgressBar,
     QSizePolicy,
+    QSystemTrayIcon,
     QVBoxLayout,
     QWidget,
 )
@@ -30,6 +34,164 @@ ACCENT_DIM = "#2f5f9e"
 OK = "#5fbf7f"
 WARN = "#d9a441"
 ERROR = "#e06c75"
+
+
+def app_icon() -> QIcon:
+    """Значок программы — рисуется сам, файлов с картинками в ней нет.
+
+    Рисуем скруглённый квадрат в акцентном цвете с белой полосой
+    «корешка папки»: тот же значок встаёт и в заголовок окна, и в трей,
+    и в уведомления Windows, поэтому выглядит везде одинаково.
+    """
+    icon = QIcon()
+    for size in (16, 24, 32, 48, 64, 128, 256):
+        pixmap = QPixmap(size, size)
+        pixmap.fill(QColor(0, 0, 0, 0))
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        margin = size * 0.08
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(ACCENT))
+        painter.drawRoundedRect(
+            QRectF(margin, margin, size - 2 * margin, size - 2 * margin),
+            size * 0.22, size * 0.22,
+        )
+        # полоса «папки» — единственная деталь, читаемая и в 16 пикселей
+        painter.setBrush(QColor("#ffffff"))
+        left = size * 0.26
+        painter.drawRect(
+            QRectF(left, size * 0.30, size * 0.48, max(1.0, size * 0.10))
+        )
+        painter.drawRect(
+            QRectF(left, size * 0.48, size * 0.34, max(1.0, size * 0.10))
+        )
+        painter.end()
+        icon.addPixmap(pixmap)
+    return icon
+
+
+class SplashWindow(QWidget):
+    """Окно загрузки: пока программа просыпается, видно, что идёт работа.
+
+    Раньше на экране было окно консоли cmd, которое потом исчезало, и
+    человек не понимал, запустилась программа или нет. Теперь вместо
+    него — понятная надпись с названием и текущим шагом.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle("Управление базой")
+        self.setWindowIcon(app_icon())
+        self.setFixedSize(360, 158)
+        # Селектор по имени: иначе стиль окна (фон, рамка) сходит и на
+        # подписи внутри, и те обводятся рамками — выглядит как чертёж.
+        self.setObjectName("splashWindow")
+        self.setStyleSheet(
+            f"QWidget#splashWindow {{ background: {PANEL};"
+            f" border: 1px solid {BORDER}; border-radius: 8px; }}"
+            f"QLabel {{ border: none; background: transparent; }}"
+        )
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 20, 22, 20)
+        layout.setSpacing(10)
+        title = QLabel("Управление базой")
+        title.setStyleSheet(
+            f"QLabel {{ color: {TEXT}; font-size: 15px; font-weight: 600;"
+            " border: none; background: transparent; }"
+        )
+        self.step = QLabel("Запуск…")
+        self.step.setStyleSheet(
+            f"QLabel {{ color: {TEXT_DIM}; font-size: 12px;"
+            " border: none; background: transparent; }"
+        )
+        self.step.setWordWrap(True)
+        # Шкала загрузки. Полоска идёт слева направо и показывает
+        # пройденный путь по шагам: без неё надпись «Запуск…» ничего
+        # не сообщала — непонятно, идёт дело или зависло.
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 100)
+        self.bar.setValue(0)
+        self.bar.setTextVisible(False)
+        self.bar.setFixedHeight(6)
+        self.bar.setStyleSheet(
+            f"QProgressBar {{ background: {PANEL_ALT}; border: none;"
+            f" border-radius: 3px; }}"
+            f"QProgressBar::chunk {{ background: {ACCENT};"
+            " border-radius: 3px; }"
+        )
+        layout.addWidget(title)
+        layout.addStretch(1)
+        layout.addWidget(self.step)
+        layout.addSpacing(2)
+        layout.addWidget(self.bar)
+
+    def say(self, text: str, percent: int | None = None) -> None:
+        """Подписать шаг и сдвинуть шкалу.
+
+        Сборка главного окна идёт в главном потоке, поэтому цикл
+        событий надо прогнать вручную: иначе новая надпись осталась бы
+        на экране только после всей сборки.
+        """
+        self.step.setText(text)
+        if percent is not None:
+            self.bar.setValue(max(0, min(100, int(percent))))
+        QApplication.processEvents()
+
+
+class TrayIcon(QSystemTrayIcon):
+    """Значок в трее: окно сворачивается туда вместо закрытия.
+
+    Закрывать программу крестиком больше нельзя — иначе она исчезает
+    вместе с окном, а мосты, которые она подняла, продолжают работать.
+    Выход — в меню значка, и он единственный.
+    """
+
+    def __init__(self, parent, window) -> None:
+        super().__init__(parent)
+        self._window = window
+        self.setIcon(app_icon())
+        self.setToolTip("Управление базой")
+        menu = QMenu()
+        menu.addAction("Показать окно", self.show_window)
+        menu.addAction("Обновить состояние", self.refresh_state)
+        menu.addSeparator()
+        menu.addAction("Выход", self.quit_program)
+        self.setContextMenu(menu)
+        self.activated.connect(self._on_activated)
+        self._hinted = False
+
+    def _on_activated(self, reason) -> None:
+        if reason in (QSystemTrayIcon.ActivationReason.Trigger,
+                      QSystemTrayIcon.ActivationReason.DoubleClick):
+            self.show_window()
+
+    def show_window(self) -> None:
+        self._window.showNormal()
+        self._window.raise_()
+        self._window.activateWindow()
+
+    def refresh_state(self) -> None:
+        refresh = getattr(self._window, "refresh_now", None)
+        if callable(refresh):
+            refresh()
+
+    def quit_program(self) -> None:
+        """Выход по-настоящему, а не в трей."""
+        self._window.tray_quitting = True
+        self._window.close()
+        self.hide()
+
+    def hide_to_tray(self) -> None:
+        """Свернуть окно в трей и один раз сказать, как выйти."""
+        self._window.hide()
+        if not self._hinted:
+            self._hinted = True
+            self.showMessage(
+                "Управление базой свёрнуто в трей",
+                "Окно вернётся двойным щелчком по значку. "
+                "Закрыть программу: правый клик по значку → «Выход».",
+                QSystemTrayIcon.MessageIcon.Information, 6000,
+            )
 
 
 def apply_dark_theme(app) -> None:

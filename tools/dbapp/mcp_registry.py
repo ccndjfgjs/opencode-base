@@ -845,6 +845,40 @@ def resolve_command(command: list[str]) -> list[str]:
     return out
 
 
+def quiet_command(command: list[str]) -> list[str]:
+    """Оборачивает команду запуска так, чтобы окна консоли не было.
+
+    Зачем. Серверы MCP говорят с opencode через стандартные потоки,
+    поэтому их приходится запускать консольными программами — npx,
+    uvx, python.exe. На каждом таком запуске Windows выделяет консоль,
+    и при старте мостов на экране появляется до десятка чёрных окон
+    cmd, причём они живут вместе с серверами.
+
+    Обёртка — наш лаунчер под оконным Python: он скрывает окно и
+    передаёт потоки ребёнку как есть. Проверено живьём обменом
+    JSON-RPC: три запроса — три верных ответа.
+
+    Повторная обёртка не добавляется: команда, уже ведущая через
+    quiet_launcher, остаётся как есть.
+    """
+    if not command or command[0].lower().endswith(".py"):
+        return list(command)
+    if any("quiet_launcher" in part for part in command):
+        return list(command)
+    from core import find_python, program_root
+    from pathlib import Path
+
+    python = str(find_python() or "python")
+    # pythonw лежит рядом с тем же интерпретатором и не создаёт
+    # консоль вообще. Если его нет — берём обычный python: лаунчер
+    # всё равно скроет окно, но без окна вовсе лучше.
+    pythonw = Path(python).with_name("pythonw.exe")
+    runner = str(pythonw) if pythonw.is_file() else python
+    launcher = (Path(program_root()) / "tools" / "dbapp" / "launchers"
+                / "quiet_launcher.py")
+    return [runner, str(launcher), *command]
+
+
 def build_block(server: Server, manual: dict | None = None) -> str:
     """Кусок JSONC для секции mcp в opencode.jsonc. Пусто, если нечего.
 
@@ -871,7 +905,8 @@ def build_block(server: Server, manual: dict | None = None) -> str:
         )
         if not command:
             return ""
-        body = {"type": "local", "command": command, "enabled": True}
+        body = {"type": "local", "command": quiet_command(command),
+                "enabled": True}
     inner = json.dumps(body, ensure_ascii=False, indent=2).splitlines()
     # Первая строка — «{», последняя — «}». Их не берём: свои скобки мы
     # ставим сами, вместе с именем сервера. Если взять и их, в настройках
@@ -973,6 +1008,135 @@ def warm_up(server: Server, progress=None) -> str:
                     stream.close()
                 except OSError:
                     pass
+
+
+def _replace_command_array(block: str, command: list[str]) -> str | None:
+    """Меняет только массив command внутри нашего блока.
+
+    Зачем так узко. Общая перезапись блока целиком тут не годится: в
+    настройках после наших меток остаются одиночные запятые от прежних
+    правок, и полная перезапись на них ломает файл — проверено, ошибка
+    выходила «после обновления файл не читается — откат», и переписывался
+    один сервер из десяти. Точечная замена массива структуру файла не
+    трогает вовсе.
+
+    None, если массива в блоке нет.
+    """
+    at = block.find('"command"')
+    if at == -1:
+        return None
+    open_at = block.find("[", at)
+    if open_at == -1:
+        return None
+    # Ищем закрывающую скобку, считая вложенность и не считая скобки
+    # внутри строк: в путях Windows скобок нет, но полагаться на это
+    # при разборе чужого файла нельзя.
+    depth = 0
+    close_at = -1
+    in_string = False
+    escaped = False
+    for pos in range(open_at, len(block)):
+        ch = block[pos]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "[{":
+            depth += 1
+        elif ch in "]}":
+            depth -= 1
+            if depth == 0:
+                close_at = pos
+                break
+    if close_at == -1:
+        return None
+
+    # Отступ элементов берём у уже написанных, иначе блок «поедет».
+    indent = ""
+    for line in block[open_at:close_at].splitlines()[1:2]:
+        indent = line[: len(line) - len(line.lstrip())]
+    items = ",\n".join(
+        f"{indent}{json.dumps(part, ensure_ascii=False)}" for part in command
+    )
+    return block[: open_at + 1] + "\n" + items + "\n" + block[close_at:]
+
+
+def quiet_migrate(dest: Path, servers: list[Server]) -> tuple[list[str], str]:
+    """Переписывает наши старые блоки так, чтобы окна не появлялись.
+
+    Зачем. Обёртка в quiet_command попадает в настройки только при
+    включении сервера. Уже включённые серверы остались со старой
+    командой, и opencode по ней запускал npx и python.exe как обычно —
+    то есть окна cmd продолжали открываться. Обёртка при этом
+    добавлена была, просто никто её не применял к уже готовому файлу.
+
+    Переписываются только наши собственные блоки — те, что между
+    метками BEGIN/END. Чужие записи в mcp не трогаются: это не наш
+    файл, а общий настройки пользователя.
+
+    Возвращает (сообщения, что делать дальше). Если ничего менять не
+    пришлось — второй элемент пустой.
+    """
+    from opencode_caps import BEGIN_TPL, END_TPL, check_jsonc
+
+    messages: list[str] = []
+    cfg = Path(dest) / "opencode.jsonc"
+    try:
+        text = cfg.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return [], ""
+
+    changed: list[str] = []
+    for server in servers:
+        begin = BEGIN_TPL.format(name=f"mcp.{server.id}")
+        end = END_TPL.format(name=f"mcp.{server.id}")
+        at = text.find(begin)
+        if at == -1:
+            continue  # блока нет — сервер не включён, трогать нечего
+        stop = text.find(end, at)
+        if stop == -1:
+            continue  # метка не закрыта — лезем руками, а не программой
+        block = text[at:stop + len(end)]
+        if "quiet_launcher" in block:
+            continue  # уже обёрнут
+        raw = server.raw.get("connection") or {}
+        if raw.get("url") or raw.get("manual_config"):
+            continue  # удалённые и ручные настройки не наша забота
+        command = quiet_command(
+            resolve_command([str(part) for part in (raw.get("command") or [])])
+        )
+        if not command:
+            continue
+        new_block = _replace_command_array(block, command)
+        if new_block is None:
+            continue
+        candidate = text[:at] + new_block + text[stop + len(end):]
+        if not check_jsonc(candidate):
+            continue  # после правки файл не читается — не трогаем вовсе
+        text = candidate
+        changed.append(server.name)
+
+    if not changed:
+        return [], ""
+    try:
+        backup = _write_config(dest, text)
+    except OSError as exc:
+        return [f"Не смог сохранить настройки: {exc}"], ""
+    messages.append(
+        "Переписаны на команды без окна консоли: " + ", ".join(changed)
+    )
+    messages.append(f"Прежняя версия сохранена: {backup}")
+    messages.append(
+        "Перезапусти opencode: серверы сейчас работают по старым командам, "
+        "окна кончатся только после перезапуска."
+    )
+    return messages, "restart"
 
 
 def enable(dest: Path, server: Server, progress=None) -> tuple[list[str], list[str]]:

@@ -61,6 +61,7 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSpinBox,
+    QSystemTrayIcon,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -5580,6 +5581,38 @@ class CapsTab(ScrollPage):
         if chosen:
             self.dest_edit.setText(chosen)
 
+    # ---- уведомления Windows о завершении фоновой работы
+
+    #: Что показывать в уведомлении при успехе. Короткое: во всплывающем
+    #: сообщении Windows длинный текст всё равно обрезается.
+    JOBS = {
+        "registry": ("Проверка мостов закончена",
+                     "Проверили серверы MCP — подробности в журнале"),
+        "auto": ("Автоматическая настройка закончена",
+                 "Мосты настроены — подробности в журнале"),
+    }
+
+    def _notify(self, title: str, text: str) -> None:
+        """Отправить уведомление окну программы — оно разошлёт его в трей."""
+        window = self.window()
+        notify = getattr(window, "notify", None)
+        if callable(notify):
+            notify(title, text)
+
+    def _notify_done(self, messages: list[str], errors: list[str]) -> None:
+        """Сообщить, что фоновая работа закончилась.
+
+        Пока идёт проверка или развёртывание, окно обычно свёрнуто. Если
+        сообщения не будет, человек не узнает, что всё готово, и будет
+        ждать впустую.
+        """
+        title, text = self.JOBS.get(self._what, ("Готово", "Работа завершена"))
+        if errors:
+            self._notify(f"{title}: есть замечания",
+                         f"Замечаний: {len(errors)}. Подробности в журнале")
+        elif messages:
+            self._notify(title, str(messages[-1]).strip()[:90] or text)
+
     # ---- запуск работы
 
     def _set_busy(self, busy: bool) -> None:
@@ -5602,6 +5635,7 @@ class CapsTab(ScrollPage):
         result = self._worker.result if self._worker else None
         if isinstance(result, Exception):
             self.log.add(f"Прервано: {result}", "error")
+            self._notify(f"{self._what}: прервано", str(result)[:90])
             return
         messages, errors = result
         for line in messages:
@@ -5612,6 +5646,7 @@ class CapsTab(ScrollPage):
                 self.log.add(f"  {line}", "error")
         else:
             self.log.add("Готово.", "ok")
+        self._notify_done(messages, errors)
         self._refresh()
         # Включение и выключение сервера меняют его состояние в таблице.
         # Перечитываем здесь, в главном потоке: из рабочего потока трогать
@@ -7358,15 +7393,48 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Управление базой")
+        # Значок рисуется сам (ui.app_icon): файлов с картинками в
+        # программе нет, а значок нужен сразу трём местам — заголовку
+        # окна, трею и уведомлениям Windows.
+        self.tray_quitting = False
+        self.setWindowIcon(ui.app_icon())
         self.setMinimumSize(720, 560)
         self.resize(880, 900)
+        # Значок в трее и сворачивание вместо закрытия. Если система не
+        # даёт трей (бывает в самопроверке и на некоторых сборках
+        # Windows), программа работает как раньше: крестик закрывает.
+        self.tray = None
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            self.tray = ui.TrayIcon(self, self)
+            self.tray.show()
 
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(10)
-        layout.addWidget(ui.label("Управление базой", kind="title"))
+        # Шапка: название слева, кнопка трея справа. Кнопка нужна
+        # потому, что крестик закрывает программу как обычно, а трей
+        # стал отдельным действием — раньше он был спрятан вместо
+        # закрытия, и выключить программу было нечем.
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        head.addWidget(ui.label("Управление базой", kind="title"))
+        head.addStretch(1)
+        self.tray_button = QPushButton("Свернуть в трей")
+        self.tray_button.clicked.connect(self._on_tray_clicked)
+        self.tray_button.setToolTip(
+            "Скрыть окно в трей. Программа продолжит работать и придёт "
+            "уведомлением, когда проверка закончится. Закрыть программу "
+            "можно крестиком или через значок в трее."
+        )
+        if self.tray is None:
+            self.tray_button.setEnabled(False)
+            self.tray_button.setToolTip(
+                "Система не даёт трей — окно можно только закрыть."
+            )
+        head.addWidget(self.tray_button)
+        layout.addLayout(head)
         layout.addWidget(
             ui.label(
                 "База — это папка с текстовыми файлами памяти, правил и скиллов.",
@@ -7414,18 +7482,72 @@ class MainWindow(QMainWindow):
         self.create_tab.base_ready.connect(self._suggest_bridge)
 
     def closeEvent(self, event) -> None:  # noqa: N802 — имя из Qt
-        """Окно закрывает человек, а поток скачивания живёт отдельно.
+        """Крестик закрывает программу, как закрывал раньше.
 
-        Здесь выставляется флаг отмены, а поток сам доходит до безопасной
-        точки и убирает недокачанный файл. Принудительная остановка
-        потока здесь не годилась бы: она прервала бы запись посреди
-        файла, и следующий запуск принял бы его за годный архив — он
-        лежит во временной папке под тем же именем.
+        Сначала было сделано наоборот — крестик сворачивал в трей. Не
+        вышло: закрыть программу было нечем, человек жал крестик раз
+        за разом и не мог её выключить. Трей остался, но теперь это
+        отдельное действие — кнопка «Свернуть в трей», а не замена
+        закрытию.
+
+        Здесь же выставляется флаг отмены фоновой загрузки, а поток сам
+        доходит до безопасной точки и убирает недокачанный файл.
+        Принудительная остановка потока здесь не годилась бы: она
+        прервала бы запись посреди файла, и следующий запуск принял бы
+        его за годный архив — он лежит во временной папке под тем же
+        именем.
         """
         tab = getattr(self, "update_tab", None)
         if tab is not None and hasattr(tab, "stop"):
             tab.stop()
+        if self.tray is not None:
+            self.tray.hide()
         super().closeEvent(event)
+        # Закрытие последнего окна намеренно не завершает программу
+        # (так мосты переживают закрытие вкладки), поэтому выход
+        # вызываем сами. Иначе крестик закрывал бы окно, а процесс
+        # оставался бы жить в фоне без единого окна.
+        QApplication.instance().quit()
+
+    def minimize_to_tray(self) -> None:
+        """Свернуть окно в трей — по кнопке, а не вместо закрытия."""
+        if self.tray is None:
+            self.showMinimized()
+            return
+        self.tray.hide_to_tray()
+
+    def _on_tray_clicked(self) -> None:
+        """Кнопка «Свернуть в трей» в шапке окна."""
+        self.minimize_to_tray()
+
+    def notify(self, title: str, text: str = "") -> None:
+        """Уведомление Windows через значок в трее.
+
+        Фоновая работа идёт минуту-другую, а окно человек в это время
+        может свернуть — сообщение о том, что всё готово, должно прийти
+        само. Если трея нет (например, в самопроверке), уведомление
+        просто ничего не делает.
+        """
+        tray = getattr(self, "tray", None)
+        if tray is None:
+            return
+        from PyQt6.QtWidgets import QSystemTrayIcon
+
+        tray.showMessage(
+            title, text or title,
+            QSystemTrayIcon.MessageIcon.Information, 6000,
+        )
+
+    def refresh_now(self) -> None:
+        """Обновить состояние из меню трея."""
+        for tab in (getattr(self, "caps_tab", None),
+                    getattr(self, "programs_tab", None)):
+            refresh = getattr(tab, "refresh", None)
+            if callable(refresh):
+                try:
+                    refresh()
+                except Exception:  # noqa: BLE001 — обновление не должно ронять программу
+                    pass
 
     def _suggest_bridge(self, path: str) -> None:
         """После создания базы предлагает завести мост NCP.
@@ -7675,26 +7797,98 @@ def claim_single_instance() -> bool:
     return True
 
 
+def _set_taskbar_name(name: str) -> None:
+    """Назовить программу в панели задач и в списке Alt+Tab.
+
+    Зачем. По умолчанию Windows показывает там имя запущенного
+    интерпретатора, и в списке окон висело `Python` — выглядело так,
+    будто открыт чужой скрипт. Имя программы задаётся один раз на
+    процесс, до появления любых окон.
+
+    На Windows это идентификатор приложения (AppUserModelID); без него
+    панель задач группирует окно по имени файла, то есть по pythonw.
+    На других системах функция не нужна и не вызывается.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(name)
+    except Exception:
+        # Не fatally: без этого программа работает, просто в панели
+        # задач остаётся имя интерпретатора.
+        pass
+
+
 def run() -> int:
     app = QApplication(sys.argv)
-    app.setApplicationName("Управление базой")
+    # Имя в панели задач — как просил человек: OpenCodeBase, а не
+    # Python. Заголовок окна при этом остаётся человеческим.
+    _set_taskbar_name("OpenCodeBase")
+    app.setApplicationName("OpenCodeBase")
+    app.setApplicationDisplayName("OpenCodeBase")
+    app.setOrganizationName("OpenCodeBase")
     ui.apply_dark_theme(app)
+    # Крестик закрывает программу, поэтому идти по умолчанию нельзя:
+    # закрыли окно с мостами — мосты должны остаться работать.
+    app.setQuitOnLastWindowClosed(False)
 
     if not claim_single_instance():
         return 0
 
+    # Окно загрузки показываем сразу, до тяжёлой сборки главного окна:
+    # она занимает секунды, и без этого человек видит только молчание.
+    splash = ui.SplashWindow()
+    splash.show()
+    splash.say("Запуск программы…", 5)
+    app.processEvents()
+
     if not core.first_run_done():
+        splash.say("Первый запуск: готовим папку с базами…", 20)
+        app.processEvents()
         folder = core.ensure_data_bases_folder()
+        splash.hide()
         from ui_first_run import FirstRunDialog
 
         dlg = FirstRunDialog(folder)
         dlg.exec()
         core.mark_first_run_done()
+        splash.show()
+
+    splash.say("Читаем настройки и список мостов…", 45)
+    app.processEvents()
+
+    # Старые блоки мостов запускают консоль и открывают окна cmd.
+    # Переписываем их на запуск без окна, пока окно загрузки видно.
+    quiet_notes: list[str] = []
+    try:
+        import core
+        import mcp_registry
+        import opencode_caps
+
+        _base = core.current_base("opencode")
+        if _base is not None:
+            quiet_notes, _ = mcp_registry.quiet_migrate(
+                opencode_caps.opencode_dir(),
+                mcp_registry.load_servers(_base),
+            )
+    except Exception:
+        # Перепись настроек не обязана быть частью запуска: если она
+        # не вышла, программа всё равно должна открыться.
+        quiet_notes = []
 
     global _SINGLE_WINDOW
     window = MainWindow()
+    splash.say("Готово", 100)
+    app.processEvents()
     _SINGLE_WINDOW = window
     window.show()
+    splash.hide()
+    if quiet_notes:
+        # Говорим сразу и один раз: окно уже на экране, а отсчёт
+        # уходит в трей, и человек узнает об изменениях поздно.
+        window.notify("Мосты переписаны", "\n".join(quiet_notes))
     return app.exec()
 
 

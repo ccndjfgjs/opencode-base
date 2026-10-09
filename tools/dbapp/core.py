@@ -126,6 +126,33 @@ class Program:
         return any(place.is_dir() for place in self._detect_only_places())
 
 
+def hidden_startupinfo():
+    """Запуск, при котором у процесса не показывается окно консоли.
+
+    Windows: без этого каждый запуск npx, npm и uvx из проверок
+    поднимает чёрное окно cmd на весь ход работы.
+
+    Именно STARTUPINFO со скрытием, а не CREATE_NO_WINDOW. Разница
+    проверена на живых запусках: с CREATE_NO_WINDOW ребёнок отрабатывает,
+    но вывод в подставленную трубу теряется — для мостов MCP это
+    смертельно, они говорят через стандартные потоки. С STARTUPINFO и
+    SW_HIDE окно скрыто, а потоки остаются рабочими.
+
+    На других системах STARTUPINFO не существует: там возвращаем None,
+    и subprocess ведёт себя как обычно.
+
+    Отдельно отмечено: окна, которые открывает opencode, запуская
+    серверы MCP, программа закрыть не может — их порождает не она, а
+    opencode. Здесь речь о процессах, которые запускаем мы сами.
+    """
+    if os.name != "nt":
+        return None
+    info = subprocess.STARTUPINFO()
+    info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    info.wShowWindow = subprocess.SW_HIDE
+    return info
+
+
 def dsh_home() -> Path:
     """Домашняя папка Harness: переменная DSH_HOME, иначе ~/.dsh."""
     env = os.environ.get("DSH_HOME", "").strip().strip('"')

@@ -459,6 +459,8 @@ def probe(dest: Path, timeout: int = PROBE_TIMEOUT,
     """
     choice = read_choice(dest)
     argv = _wrap_cmd(list(command) if command else launcher_command())
+    import core  # noqa: PLC0415 — как и mcp_registry ниже: модуль тяжёлый
+
     env = dict(os.environ)
     env["OPENCODE_CONFIG_DIR"] = str(dest)
     env["PYTHONUNBUFFERED"] = "1"
@@ -467,6 +469,7 @@ def probe(dest: Path, timeout: int = PROBE_TIMEOUT,
             argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, env=env, cwd=str(dest),
             text=True, encoding="utf-8", errors="replace", bufsize=1,
+            startupinfo=core.hidden_startupinfo(),
         )
     except OSError as exc:
         return False, f"Мост не запустился: {exc}"
@@ -633,12 +636,15 @@ def install_firefox(progress=None) -> tuple[list[str], list[str]]:
         "это может занять несколько минут…")
     argv = _wrap_cmd([_which("npx"), "-y", "playwright@latest",
                       "install", "firefox"])
+    import core  # noqa: PLC0415 — локально, как принято в этом файле
+
     try:
         proc = subprocess.run(
             argv, stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, encoding="utf-8", errors="replace",
             timeout=DOWNLOAD_TIMEOUT, check=False,
+            startupinfo=core.hidden_startupinfo(),
         )
     except subprocess.TimeoutExpired:
         errors.append(
