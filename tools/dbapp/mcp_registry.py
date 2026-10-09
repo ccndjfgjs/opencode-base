@@ -714,8 +714,46 @@ def load_extra_programs(base: Path) -> list[ProgramInstall]:
     return out
 
 
+#: Разобранный реестр: ключ — отпечаток файла, значение — серверы.
+_LOADED: dict[tuple, list] = {}
+
+
+def _registry_key(base: Path) -> tuple | None:
+    """Отпечаток файла реестра: содержимое, размер и время изменения.
+
+    None, если файла нет или он не читается: тогда кэш не нужен, всё
+    равно разбирать нечего.
+    """
+    path = registry_path(base)
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return (str(path), stat.st_size, stat.st_mtime_ns)
+
+
 def load_servers(base: Path) -> list[Server]:
-    """Читает реестр и проверяет требования каждого сервера."""
+    """Читает реестр и проверяет требования каждого сервера.
+
+    Результат запоминается на время работы программы, и ключ — сам
+    файл реестра: его содержимое, размер и время изменения. Проверка
+    требований зовёт node и npx, это медленно: измерено, что одна
+    проверка всех серверов занимает около секунды, а при запуске
+    реестр читается пять раз, и каждое чтение платило полной
+    проверкой заново. На старте программы это была половина всего
+    времени до появления окна.
+
+    Почему ключ по файлу, а не по спецификации требования. Проверка
+    зависит не только от записи в реестре, но и от того, что стоит на
+    машине. Кэш по спецификации устарел бы молча и показал бы
+    неверное «готово». Ключ по файлу реестра этого не делает: правка
+    реестра меняет ключ, и всё перепроверяется само.
+    """
+    key = _registry_key(base)
+    if key is not None:
+        cached = _LOADED.get(key)
+        if cached is not None:
+            return list(cached)
     data = load_registry(base)
     result: list[Server] = []
     for spec in data.get("servers") or []:
@@ -734,6 +772,8 @@ def load_servers(base: Path) -> list[Server]:
             if isinstance(item, dict):
                 server.requirements.append(check_requirement(item))
         result.append(server)
+    if key is not None:
+        _LOADED[key] = list(result)
     return result
 
 
