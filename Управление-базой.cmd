@@ -77,6 +77,15 @@ rem собственной метки единственного экземпл�
 run() при старте. Так проверка не зависит от заголовков окон и от того,
 rem на каком языке печатает cmd.
 
+rem
+rem PID читается через for /f, а НЕ через set /p. Программа пишет его
+rem без перевода строки, и set /p такой файл не читает вовсе: переменная
+rem остаётся пустой, проверка не проходит никогда, и лаунчер двадцать
+rem секунд ждёт несуществующий PID, а потом открывает блокнот с ложью -
+rem при том, что окно программы давно на экране. Проверено на одном и том же файле
+rem без перевода строки: set /p даёт пусто, for /f даёт PID.
+rem С переводом строки разницы нет, так что чтение одинаково в обоих
+rem случаях и не зависит от того, как именно записан файл.
 pushd "%APPDIR%"
 start "" "%PYW%" -X utf8 "%APP%"
 popd
@@ -85,11 +94,17 @@ set "LOCK=%TEMP%\opencode-base-dbapp-%USERNAME%.lock"
 set /a _waited=0
 
 :await_window
-timeout /t 1 /nobreak >nul
+rem Пауза здесь через ping, а не через timeout. При перенаправленном
+rem вводе timeout не ждёт, а сразу падает с ошибкой, и весь цикл
+rem проходит за доли секунды: лаунчер успевает решить, что окно не
+rem открылось, раньше чем программа вообще дошла до записи метки.
+rem Проверено рядом на одинаковых вводных: timeout отработал сразу,
+rem ping -n 2 127.0.0.1 - ровно за секунду.
+ping -n 2 127.0.0.1 >nul
 set /a _waited+=1
 if not exist "%LOCK%" goto :wait_more
 set "LOCKPID="
-set /p LOCKPID=<"%LOCK%"
+for /f "usebackq delims=" %%P in ("%LOCK%") do set "LOCKPID=%%P"
 if not defined LOCKPID goto :wait_more
 tasklist /fi "PID eq %LOCKPID%" /nh >nul 2>&1
 if errorlevel 1 goto :wait_more

@@ -35,6 +35,44 @@ OK = "#5fbf7f"
 WARN = "#d9a441"
 ERROR = "#e06c75"
 
+# Окно у значка трея. Оно открывается поверх всего, поэтому рамка и тень
+# обязательны: без рамки светлое содержимое уезжает на светлый рабочий
+# стол и панель не читается как отдельное окно.
+PANEL_QSS = f"""
+#TrayPanel {{
+    background: {PANEL};
+    border: 1px solid {BORDER};
+    border-radius: 6px;
+}}
+/* Селектор намеренно не QWidget: правило по QWidget цепляется ко всем
+   вложенным элементам, и каждая подпись в панели получала рамку с
+   фоном — панель выглядела как таблица в рамках на каждой строке. */
+QScrollArea, QScrollArea > QWidget > QWidget {{
+    background: transparent;
+    border: none;
+}}
+QPushButton {{
+    background: {PANEL_ALT};
+    color: {TEXT};
+    border: 1px solid {BORDER};
+    border-radius: 4px;
+    padding: 2px 10px;
+}}
+QPushButton:hover {{ border-color: {ACCENT}; color: {ACCENT}; }}
+QPushButton:pressed {{ background: {ACCENT_DIM}; }}
+QScrollBar:vertical {{
+    background: transparent;
+    width: 10px;
+    margin: 0;
+}}
+QScrollBar::handle:vertical {{
+    background: {BORDER};
+    border-radius: 5px;
+    min-height: 24px;
+}}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+"""
+
 
 def app_icon() -> QIcon:
     """Значок программы — рисуется сам, файлов с картинками в ней нет.
@@ -153,8 +191,11 @@ class TrayIcon(QSystemTrayIcon):
     def __init__(self, parent, window) -> None:
         super().__init__(parent)
         self._window = window
+        self._panel = None
         self.setIcon(app_icon())
-        self.setToolTip("OpenCodeBase — правая кнопка открывает меню")
+        self.setToolTip(
+            "OpenCodeBase — левая кнопка открывает панель, "
+            "правая — меню, двойная — окно")
         # Меню держим в поле: если отдать его только setContextMenu,
         # сборщик мусора вправе унести объект вместе с пунктами, и
         # правая кнопка перестанет открывать меню вовсе.
@@ -175,6 +216,15 @@ class TrayIcon(QSystemTrayIcon):
         self.activated.connect(self._on_activated)
         self._hinted = False
 
+    @property
+    def panel(self):
+        """Панель трея. Создаётся в первый раз, дальше просто показывается."""
+        if self._panel is None:
+            from tray_panel import TrayPanel  # локальный импорт: цикл
+
+            self._panel = TrayPanel(self._window)
+        return self._panel
+
     def add_action(self, text: str, handler) -> object:
         """Добавить пункт в меню трея. Для будущих функций.
 
@@ -187,8 +237,13 @@ class TrayIcon(QSystemTrayIcon):
         return action
 
     def _on_activated(self, reason) -> None:
-        if reason in (QSystemTrayIcon.ActivationReason.Trigger,
-                      QSystemTrayIcon.ActivationReason.DoubleClick):
+        # Левая кнопка открывает панель «что подключено». Раньше она
+        # открывала главное окно, но по этому окно и находилось в трее,
+        # а состояние мостов и серверов было видно только через четыре
+        # разных вкладки. Двойная кнопка по-прежнему открывает окно.
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            self.panel.toggle()
+        elif reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self.show_window()
 
     def show_window(self) -> None:
@@ -200,6 +255,11 @@ class TrayIcon(QSystemTrayIcon):
         refresh = getattr(self._window, "refresh_now", None)
         if callable(refresh):
             refresh()
+        # Открытая панель обязана перечитать состояние тем же жестом:
+        # иначе «Обновить» в меню обновлял окно, а панель рядом показывала
+        # прошлый список и выглядела сломанной.
+        if self._panel is not None and self._panel.isVisible():
+            self._panel.refresh()
 
     def quit_program(self) -> None:
         """Закрыть программу по-настоящему, а не свернуть в трей.
@@ -216,6 +276,10 @@ class TrayIcon(QSystemTrayIcon):
         по нему и «Закрыть программу».
         """
         self._window.tray_quitting = True
+        # Панель у значка держится отдельно от окна, и без этого осталась
+        # бы висеть на экране после выхода — значок убрали, а панель нет.
+        if self._panel is not None:
+            self._panel.hide()
         self._window.close()
         if not self._window.isVisible():
             self.hide()

@@ -248,6 +248,168 @@ def main() -> int:
               "в лаунчере нет паузы: при скрытой консоли она зависла бы молча")
         check('notepad "%ERRF%"' in _cmd_text,
               "причину ошибки лаунчер показывает файлом, а не консолью")
+
+        # PID программы читается через for /f. set /p файл без перевода
+        # строки не читает вовсе, а программа пишет именно так: проверка
+        # тогда не проходит никогда, и лаунчер двадцать секунд ждёт
+        # несуществующий PID, после чего открывает блокнот с ложью при
+        # том, что окно программы давно на экране.
+        check("set /p LOCKPID" not in _cmd_text,
+              "PID лаунчер читает не через set /p: файл без перевода "
+              "строки тот не читает")
+        check('for /f "usebackq delims=" %%P in ("%LOCK%")' in _cmd_text,
+              "PID читается через for /f — он берёт файл и без перевода строки")
+
+        # Пауза ожидания — через ping, а не timeout. При перенаправленном
+        # вводе timeout не ждёт, а падает сразу, и весь цикл проверки
+        # проходит за доли секунды: лаунчер успевает решить, что окно не
+        # открылось, раньше, чем программа записала метку.
+        check("timeout /t 1" not in _cmd_text,
+              "ожидание идёт не через timeout: при перенаправленном вводе "
+              "он не ждёт, а падает, и цикл проходит мгновенно")
+        check("ping -n 2 127.0.0.1 >nul" in _cmd_text,
+              "ожидание идёт через ping: он отрабатывает секунду всегда")
+
+        # Панель трея: что подключено, что работает, что готово. Левая
+        # кнопка по значку открывает её, двойная — главное окно.
+        import tray_panel
+        from PyQt6.QtWidgets import QPushButton
+
+        _panel = tray_panel.TrayPanel(window)
+        for _ in range(3):
+            app.processEvents()
+        _sections = {s.title: s for s in _panel._sections}
+        check(set(_sections) == {"Модели", "JavaScript", "Python", "IDE-плагины",
+                                 "Облачные", "Мосты базы", "Ревьюеры"},
+              f"панель трея: разделы на месте ({', '.join(_sections) or 'пусто'})")
+
+        # Каждый сервер реестра обязан попасть ровно в один раздел, и
+        # ни один не должен провалиться в «Прочее»: молча растворившийся
+        # сервер — это панель, которая врёт о подключённом.
+        _reg_json = json.loads(
+            core.program_file("mcp-registry.json").read_text(encoding="utf-8"))
+        _reg_ids = {str(s.get("id")) for s in _reg_json.get("servers", [])}
+        check(_reg_ids <= set(tray_panel.CATEGORY_BY_ID),
+              "категория есть у каждого сервера реестра: "
+              f"не хватает {sorted(_reg_ids - set(tray_panel.CATEGORY_BY_ID))}")
+        _shown = [e.name for s in _panel._sections for e in s.entries]
+        _caps_names = {srv.name for srv in window.caps_tab.reg_servers}
+        check(_caps_names <= set(_shown),
+              "панель показывает каждый сервер из вкладки opencode: не хватает "
+              f"{sorted(_caps_names - set(_shown))}")
+        check("Прочее" not in _sections,
+              "раздела «Прочее» нет: все серверы разложены по разделам")
+
+        # Название раздела — по устройству сервера, а не по подписи
+        # реестра. Проверяем пару, где ошибка была бы самой дорогой.
+        _js = {e.name for e in _sections["JavaScript"].entries} \
+            if "JavaScript" in _sections else set()
+        check("Windows-администрирование" in _js,
+              "Windows-администрирование в JavaScript: это npx и Node.js")
+        check("LMArena (мост к моделям арены; стелс-модели форк не отдаёт)"
+              in {e.name for e in _sections["Модели"].entries}
+              if "Модели" in _sections else False,
+              "LMArena в «Модели», а не среди мостов: он отдаёт модели, "
+              "а не подключает программу")
+
+        # У строки есть состояние и кнопки. Строка без кнопок — это
+        # заглушка, на которую можно нажать и ничего не получить.
+        _no_actions = [e.name for s in _panel._sections for e in s.entries
+                       if not e.actions]
+        check(not _no_actions,
+              "у каждой строки панели есть кнопки: без действий "
+              f"{_no_actions or 'нет'}")
+        _qw = _sections["Ревьюеры"].entries[0] if "Ревьюеры" in _sections else None
+        check(_qw is not None and _qw.name == "Qwen",
+              "в «Ревьюерах» Qwen — он ревьюер, а не модель")
+        check(_qw is not None and "Модель" in [b for b, _h in _qw.actions],
+              "у Qwen есть выбор модели")
+        _bridges = {e.name for e in _sections["Мосты базы"].entries} \
+            if "Мосты базы" in _sections else set()
+        check(_bridges == {"Мост NCP", "Мост PC"},
+              f"мосты базы в одной категории, а не по одному: {sorted(_bridges)}")
+
+        # Панель обязана говорить тем же словами, что таблица вкладки.
+        # Свои формулировки про «работает» здесь означали бы вторую
+        # правду о том же сервере.
+        _panel_src = Path(tray_panel.__file__).read_text(encoding="utf-8")
+        check("caps._reg_state_text" in _panel_src,
+              "панель берёт состояние из метода вкладки, а не из своих слов")
+
+        # Левая кнопка открывает панель, двойная — окно. Раньше левая
+        # открывала окно, и состояние было видно только через четыре
+        # разные вкладки.
+        _ui_src = Path(ui.__file__).read_text(encoding="utf-8")
+        check("ActivationReason.Trigger" in _ui_src and "panel.toggle()" in _ui_src,
+              "левая кнопка по значку открывает панель трея")
+        check("ActivationReason.DoubleClick" in _ui_src,
+              "двойная кнопка по значку по-прежнему открывает окно")
+        check(hasattr(ui, "PANEL_QSS") and "border-radius" in ui.PANEL_QSS,
+              "у панели своя рамка: без неё она не читается как отдельное окно")
+        # Рамка должна доставаться самой панели, а не каждой вложенной
+        # подписи: правило по QWidget оборачивало каждую строку в
+        # таблицу в рамке, и список переставал читаться.
+        check("#TrayPanel" in ui.PANEL_QSS,
+              "рамка на самой панели, а не на каждом вложенном элементе")
+        # Кнопкам и прокрутке рамка нужна. Запрещено другое: селектор
+        # `QWidget` оборачивал в рамку каждую подпись, и список
+        # переставал читаться. Комментарии вырезаются, иначе проверка
+        # цеплялась бы за само это слово внутри комментария.
+        _panel_qss = re.sub(r"/\*.*?\*/", "", ui.PANEL_QSS, flags=re.S)
+        # Ищем селектор, состоящий ТОЛЬКО из QWidget. Подстрока «QWidget {»
+        # не годится: она сидит и внутри «QScrollArea > QWidget >
+        # QWidget {», а это правило как раз нужное — оно снимает рамку
+        # с области прокрутки. Поэтому QWidget должен начинать строку
+        # селектора сам или идти сразу после запятой.
+        check(re.search(r"(?:^|,)\s*QWidget\s*\{", _panel_qss, flags=re.M) is None,
+              "в стилях панели нет селектора QWidget: он оборачивал "
+              "рамкой каждую подпись")
+        check("QScrollArea > QWidget > QWidget" in ui.PANEL_QSS,
+              "у области прокрутки рамка снята: она не окно")
+
+        # Длинное имя реестра не влезало в строку и обрезалось посреди
+        # слова. Пояснение уходит в подсказку.
+        check(tray_panel.short_name(
+                  "OmniRoute (шлюз к провайдерам моделей, 358 провайдеров)")
+              == "OmniRoute",
+              "длинное имя обрезается по скобке: "
+              + tray_panel.short_name(
+                  "OmniRoute (шлюз к провайдерам моделей, 358 провайдеров)"))
+        check(tray_panel.short_name("Windows-администрирование")
+              == "Windows-администрирование",
+              "имя без скобок не трогается")
+
+        # Раскрытие раздела обязано переживать обновление списка. Без
+        # переноса состояния нажатие на заголовок закрывало раздел
+        # тут же: refresh() собирал разделы заново, с исходным флагом.
+        _panel._sections[0].expanded = False
+        _panel.refresh()
+        for _ in range(3):
+            app.processEvents()
+        check(not _panel._sections[0].expanded,
+              "закрытый раздел остаётся закрытым после обновления: "
+              f"{_panel._sections[0].title}")
+        _panel._sections[0].expanded = True
+        _panel.refresh()
+        for _ in range(3):
+            app.processEvents()
+        check(_panel._sections[0].expanded,
+              "и открытый остаётся открытым, а не схлопывается обратно")
+
+        # Кнопки не должны уезжать за край: строка в две линии, иначе
+        # имя и две кнопки физически не влезали в ширину панели.
+        _panel.adjustSize()
+        _offscreen = []
+        for _c in range(_panel.body_layout.count()):
+            _box = _panel.body_layout.itemAt(_c).widget()
+            if _box is None:
+                continue
+            for _btn in _box.findChildren(QPushButton):
+                if not _panel.scroll.viewport().rect().contains(_btn.geometry().center()):
+                    _offscreen.append(_btn.text())
+        check(not _offscreen,
+              "кнопки панели попадают в видимую область: за краем "
+              f"{_offscreen or 'нет'}")
         check(len(window.create_tab.program_list) > 0 or
               window.create_tab.program_list.count() > 0,
               f"список программ заполнен: "
