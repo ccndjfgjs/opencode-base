@@ -200,6 +200,20 @@ def find_python() -> str:
     return sys.executable or "python"
 
 
+def _hidden_startupinfo():
+    """Окно консоли не показывать. Подробности — в core.hidden_startupinfo.
+
+    Отдельная обёртка: модуль проверяют и зовут без окна программы, и
+    тогда core может быть недоступен.
+    """
+    try:
+        from core import hidden_startupinfo
+
+        return hidden_startupinfo()
+    except Exception:
+        return None
+
+
 def requests_available(python: str | None = None) -> tuple[bool, str]:
     """Есть ли у этого Python библиотека requests (единственная у автора)."""
     exe = python or find_python()
@@ -208,6 +222,11 @@ def requests_available(python: str | None = None) -> tuple[bool, str]:
             [exe, "-c", "import requests, sys; print(requests.__version__)"],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=CHECK_TIMEOUT,
+            # Окно прячем: проверка идёт при сборке главного окна, и
+            # каждый запуск python.exe на миг показывал консоль.
+            # capture_output подставляет трубы явно, поэтому STARTUPINFO
+            # со скрытием безопасен и ничего не рвёт.
+            startupinfo=_hidden_startupinfo(),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return False, str(exc)

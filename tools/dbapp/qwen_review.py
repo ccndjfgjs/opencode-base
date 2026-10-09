@@ -97,14 +97,32 @@ DEBATE_WARNING = (
 )
 
 
+def _hidden_startupinfo():
+    """Окно консоли не показывать. Подробности — в core.hidden_startupinfo."""
+    try:
+        from core import hidden_startupinfo
+
+        return hidden_startupinfo()
+    except Exception:
+        return None
+
+
 def _run_quiet(cmd: list[str], cwd: Path | None = None, env: dict | None = None,
                timeout: int = 120) -> tuple[int, str, str]:
-    """Запуск без окна: (код, stdout, stderr). Молчит про внутренние ошибки."""
+    """Запуск без окна: (код, stdout, stderr). Молчит про внутренние ошибки.
+
+    Имя функции обещало ровно то, чего код не делал: окно не пряталось.
+    Проверка qwen-review запускает qwen.cmd и node --version, и каждая
+    такая проверка на миг показывала чёрное окно прямо во время сборки
+    главного окна. capture_output подставляет трубы явно, поэтому
+    STARTUPINFO со скрытием безопасен и ничего не рвёт.
+    """
     try:
         done = subprocess.run(
             cmd, cwd=str(cwd) if cwd else None, env=env,
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=timeout,
+            startupinfo=_hidden_startupinfo(),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return -1, "", str(exc)
@@ -688,6 +706,7 @@ def deploy(dest: Path, progress=None, command: list[str] | None = None) -> tuple
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             encoding="utf-8", errors="replace", bufsize=1,
             env=run_env(dest),
+            startupinfo=_hidden_startupinfo(),
         )
         assert proc.stdout is not None
         for line in proc.stdout:
@@ -937,6 +956,7 @@ def run(dest: Path, project: Path, prompt: str, diff_text: str,
         done = subprocess.run(
             cmd, input=diff_text, capture_output=True, text=True,
             encoding="utf-8", errors="replace", env=env, timeout=timeout,
+            startupinfo=_hidden_startupinfo(),
         )
         code, out, err = done.returncode, done.stdout or "", done.stderr or ""
     except (OSError, subprocess.SubprocessError) as exc:
