@@ -7399,7 +7399,29 @@ class MainWindow(QMainWindow):
         self.tray_quitting = False
         self.setWindowIcon(ui.app_icon())
         self.setMinimumSize(720, 560)
-        self.resize(880, 900)
+        # Окно — по экрану, а не по заветной цифре. Раньше стояло
+        # resize(880, 900), и на экране 1280x720 окно выходило 737 px:
+        # Windows срезала низ, и нижние кнопки вкладки уезжали за
+        # край экрана — вместе с ними и жалоба «интерфейс не
+        # помещается». Теперь размер берётся от доступной области
+        # экрана (без панели задач), а лишнее содержимое вкладок
+        # уезжает в прокрутку — её даёт ScrollPage.
+        _screen = QApplication.primaryScreen()
+        _avail = _screen.availableGeometry() if _screen is not None else None
+        if _avail is not None:
+            # Минимум тоже от экрана: на узком экране заявленные
+            # 720 px сами оказались бы больше экрана, и окно снова
+            # вылезло бы за край — ровно то, от чего чиним.
+            self.setMinimumSize(
+                min(720, max(360, _avail.width() - 20)),
+                min(560, max(320, _avail.height() - 20)),
+            )
+            self.resize(
+                min(880, max(self.minimumWidth(), _avail.width() - 60)),
+                min(900, max(self.minimumHeight(), _avail.height() - 60)),
+            )
+        else:
+            self.resize(880, 900)
         # Значок в трее и сворачивание вместо закрытия. Если система не
         # даёт трей (бывает в самопроверке и на некоторых сборках
         # Windows), программа работает как раньше: крестик закрывает.
