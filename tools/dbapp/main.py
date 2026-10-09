@@ -38,7 +38,7 @@ else:  # запуск как модуль
                    lmarena, omniroute, program_cards, pxpipe, qwen_review, rtk,
                    winget_install)
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QFontMetrics
 from PyQt6.QtWidgets import (
     QApplication,
@@ -4220,6 +4220,20 @@ class CapsTab(ScrollPage):
         self._reg_load()
         # «Улучшить файл…» доступна, только когда галочка auto-improve
         # отмечена: по умолчанию цикл запускать нечем.
+        # Проверки уходят из сборки окна. Они бьют по сети и по запуску
+        # внешних программ, и из-за них главное окно открывалось через
+        # несколько секунд, а Windows помечала его «не отвечает»: главный
+        # поток занят, события не обрабатываются. Теперь проверки
+        # выполняются сразу после показа окна — очередь событий ещё
+        # пуста, поэтому окно успевает отрисоваться, а потом
+        # дописываются честные ответы.
+        QTimer.singleShot(0, self._startup_checks)
+
+        outer.activate()
+        self.refresh_height()
+
+    def _startup_checks(self) -> None:
+        """Проверки, которые раньше шли при сборке окна."""
         self._ai_toggled(self.checks["auto-improve"].isChecked())
         # Кнопки greenlight — по галочке greenlight: по умолчанию сканер
         # выключен и ничего не запускается.
@@ -4228,9 +4242,6 @@ class CapsTab(ScrollPage):
         self._qw_toggled(self.checks["qwen-review"].isChecked())
         self._qw_debate_toggled(False)
         self._refresh()
-
-        outer.activate()
-        self.refresh_height()
 
     # ---- серверы MCP из реестра
 
@@ -7936,10 +7947,15 @@ def run() -> int:
 
     global _SINGLE_WINDOW
     window = MainWindow(splash=splash)
+    _SINGLE_WINDOW = window
+    # Показ окна идёт ДО прокрутки очереди событий, и это не порядок
+    # ради порядка. Проверки вкладки opencode отложены на таймер, а
+    # таймер срабатывает на первом же processEvents. Если крутить очередь
+    # раньше, отложенные проверки успевают отработать до показа окна, и
+    # весь выигрыш пропадает: измерено 9.4 с против 2.9 с.
+    window.show()
     splash.say("Готово", 100)
     app.processEvents()
-    _SINGLE_WINDOW = window
-    window.show()
     splash.hide()
     if quiet_notes:
         # Говорим сразу и один раз: окно уже на экране, а отсчёт

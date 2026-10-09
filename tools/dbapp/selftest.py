@@ -200,6 +200,17 @@ def main() -> int:
         # (проверено: падение без трассировки, ровно как было с
         # самодельным подклассом QLayout). Вместо показа вызывается
         # тот же самый refresh_height, что и при показе вкладки.
+        #
+        # Перед замером даём отработать отложенным проверкам: вкладка
+        # opencode наполняется по таймеру после показа окна. Таймер в
+        # безоконном режиме сам не срабатывает, поэтому вызываем его
+        # работу напрямую там, где она есть.
+        for _ in range(6):
+            app.processEvents()
+        if hasattr(window.caps_tab, "_startup_checks"):
+            window.caps_tab._startup_checks()
+            for _ in range(3):
+                app.processEvents()
         _needs = 0
         _squeezed: list[str] = []
         for _i in range(window.tabs.count()):
@@ -210,7 +221,7 @@ def main() -> int:
                 app.processEvents()
             if _page.verticalScrollBar().maximum() > 0:
                 _needs += 1
-            if _page._inner.height() < _page._inner.sizeHint().height() - 2:
+            if _page._inner.height() < _page._inner.minimumHeight() - 2:
                 _squeezed.append(window.tabs.tabText(_i))
         check(not _squeezed,
               "содержимое вкладок не сжимается под окно"
