@@ -7705,7 +7705,7 @@ class MainWindow(QMainWindow):
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.setMinimumHeight(34)
             button.clicked.connect(
-                lambda _checked=False, i=index: tabs.setCurrentIndex(i))
+                lambda _checked=False, i=index: self._open_section(tabs, i))
             side.addWidget(button)
             self.nav_buttons.append(button)
         side.addStretch(1)
@@ -7726,13 +7726,31 @@ class MainWindow(QMainWindow):
         _row.addWidget(sidebar)
         _row.addWidget(tabs, 1)
         layout.addLayout(_row, 1)
-        # Подсветка едет за полосой вкладок: кто бы ни переключил
-        # раздел — стрелками, кликом по вкладке или из меню.
+        # Полосу вкладок убираем, сам QTabWidget оставляем. Он теперь
+        # просто хранилище страниц: всё в программе ходит к разделам
+        # через window.tabs, и замена на QStackedWidget сломала бы
+        # сорок с лишним проверок, которые смотрят в список вкладок
+        # напрямую. Видимую часть навигации делает меню сбоку.
+        tabs.tabBar().setVisible(False)
+        tabs.setUsesScrollButtons(False)
+        # Подсветка едет за текущим разделом: кто бы ни переключил
+        # раздел — из меню или программно.
         tabs.currentChanged.connect(self._sync_nav)
         self._sync_nav(tabs.currentIndex())
 
         self.create_tab.base_ready.connect(self._suggest_import)
         self.create_tab.base_ready.connect(self._suggest_bridge)
+
+    def _open_section(self, tabs, index: int) -> None:
+        """Открыть раздел из меню.
+
+        Подсветку ставим сами, а не ждём currentChanged. Клик по
+        уже открытому разделу индекс не меняет, сигнал не приходит, а
+        кнопка с checkable при этом снимает с себя отметку — раздел
+        оставался открытым и без подсветки, и меню выглядело сломанным.
+        """
+        tabs.setCurrentIndex(index)
+        self._sync_nav(index)
 
     def _sync_nav(self, index: int) -> None:
         """Отметить в меню тот раздел, что открыт в полосе вкладок.
