@@ -253,7 +253,7 @@ def main() -> int:
         # самая короткая имела высоту 6 пикселей при нужных 36, то есть
         # текст не был виден вообще.
         _clipped = []
-        from PyQt6.QtWidgets import QLabel, QPushButton
+        from PyQt6.QtWidgets import QLabel, QPushButton, QWidget
         for _i in range(window.tabs.count()):
             _page = window.tabs.widget(_i)
             if not hasattr(_page, "refresh_height"):
@@ -276,6 +276,67 @@ def main() -> int:
         check(not _clipped,
               "переносимые подписи не срезаны снизу"
               + (f": {'; '.join(_clipped[:3])}" if _clipped else ""))
+
+        # Окно живёт в двух режимах, и это две разные ширины. Размер
+        # при запуске считается от доступной области экрана: на экране
+        # 1280x720 развёрнутое окно даёт просмотр 1050, а оконное
+        # 650. Разница 400 пикселей — треть экрана, и в развёрнутом
+        # виде всё помещается с большим запасом, поэтому поломка в
+        # оконном режиме не видна, пока не вернёшь окно в прежний
+        # размер. Проверка на одном размере это пропускала.
+        def _cropped() -> list[str]:
+            """Подписи, срезанные в текущем состоянии окна."""
+            from PyQt6.QtWidgets import QAbstractButton, QGroupBox
+            bad: list[str] = []
+            for i in range(window.tabs.count()):
+                page = window.tabs.widget(i)
+                if not hasattr(page, "refresh_height"):
+                    continue
+                window.tabs.setCurrentIndex(i)
+                for _ in range(3):
+                    app.processEvents()
+                page.refresh_height()
+                for _ in range(3):
+                    app.processEvents()
+                for label in page._inner.findChildren(QLabel):
+                    if not label.wordWrap() or label.width() <= 0:
+                        continue
+                    need = label.heightForWidth(label.width())
+                    if need and need > label.height() + 1:
+                        bad.append(f"{window.tabs.tabText(i)}: снизу {label.text()[:20]!r}")
+                for widget in page._inner.findChildren(QWidget):
+                    if not widget.isVisible() or widget.height() <= 0:
+                        continue
+                    if isinstance(widget, QAbstractButton):
+                        text = widget.text()
+                    elif isinstance(widget, QGroupBox):
+                        text = widget.title()
+                    else:
+                        continue
+                    if not text:
+                        continue
+                    if widget.fontMetrics().horizontalAdvance(text) > widget.width() + 1:
+                        bad.append(f"{window.tabs.tabText(i)}: по ширине {text[:20]!r}")
+            return bad
+
+        _avail_geom = _avail
+        for _tag, _cmd in (("оконный", "normal"), ("развёрнутый", "max"),
+                           ("снова оконный", "normal")):
+            if _cmd == "max":
+                window.showMaximized()
+            else:
+                window.showNormal()
+            for _ in range(6):
+                app.processEvents()
+            _broken = _cropped()
+            check(not _broken,
+                  f"в режиме «{_tag}» текст не срезан"
+                  + (f": {'; '.join(_broken[:3])}" if _broken else ""))
+        if _avail_geom is not None:
+            window.resize(min(880, max(window.minimumWidth(), _avail_geom.width() - 60)),
+                          min(900, max(window.minimumHeight(), _avail_geom.height() - 60)))
+            for _ in range(4):
+                app.processEvents()
 
         # Ряд кнопок обязан переноситься, а не сжиматься. Обычный
         # QHBoxLayout при нехватке ширины сжимает кнопки и режет
