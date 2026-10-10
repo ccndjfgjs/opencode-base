@@ -40,6 +40,9 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 # Консоль Windows по умолчанию живёт в однобайтовой кодировке (cp1251),
 # и в ней нет, например, знака рубля. Ответ провайдера с ценой приходил
 # с символом \u20bd, print() падал с UnicodeEncodeError — и вместо внятной
@@ -338,6 +341,191 @@ def mask_text(text: str, key: str) -> str:
     import qwen_providers  # noqa: PLC0415 — рядом лежит, круга нет
 
     return qwen_providers.mask_text(text, key)
+
+
+# ------------------------------------------------------------------ проверка моделей
+
+#: Живая проверка доступности моделей. Один запрос на модель — минимальный:
+#: промпт из одного символа, максимум один токен в ответе, потому что
+#: проверка стоит реальных денег. Четыре потока — чтобы щадить провайдера,
+#: потолок 120 запросов за прогон — чтобы случайное нажатие кнопки не
+#: разорило человека, кэш на сутки — чтобы повторный прогон не бил по API.
+
+CHECK_WORKERS = 4          # потока одновременно — не больше
+CHECK_MAX_MODELS = 120     # потолок запросов за один прогон
+CHECK_CACHE_HOURS = 24     # сколько живёт кэш проверки
+CHECK_TIMEOUT = 30         # секунд на один запрос
+
+CHECK_OK = "ok"            # ✔ модель отвечает
+CHECK_NO = "no"            # ✘ точно нет: 401, 404 — окончательный отказ
+CHECK_UNKNOWN = "unknown"  # ? не знаю: 429, таймаут, сетевой сбой
+CHECK_SYMBOL = {CHECK_OK: "✔", CHECK_NO: "✘", CHECK_UNKNOWN: "?"}
+
+CHECK_CACHE_FILE = "model-check.json"
+
+
+def check_cache_file(dest: Path) -> Path:
+    """Кэш проверки моделей — рядом с остальными данными ревьюера."""
+    return data_dir(dest) / CHECK_CACHE_FILE
+
+
+def state_from_http(code: int) -> str:
+    """Состояние по коду ответа провайдера: ✔, ✘ или ?.
+
+    Три состояния, не два: 401 и 404 — окончательный отказ (ключа нет или
+    модели нет), а вот 429 — НЕ отказ. Лимит провайдера не имеет права
+    превращать половину моделей в «недоступные»: не знаем — так и пишем.
+    """
+    if 200 <= code < 300:
+        return CHECK_OK
+    if code in (401, 404):
+        return CHECK_NO
+    return CHECK_UNKNOWN
+
+
+def probe_model(base_url: str, model: str, key: str,
+                timeout: int = CHECK_TIMEOUT) -> tuple[str, str]:
+    """Один минимальный запрос к провайдеру. (состояние, сырая причина).
+
+    Промпт из одного символа, максимум один токен: проверка идёт по всем
+    моделям и стоит реальных денег. Сетевые сбои и таймауты — «не знаю»,
+    а не отказ: по ответу 500 нельзя сказать, жива ли модель.
+    """
+    base = (base_url or "https://api.openai.com/v1").rstrip("/")
+    body = json.dumps({
+        "model": model,
+        "messages": [{"role": "user", "content": "1"}],
+        "max_tokens": 1,
+    }).encode("utf-8")
+    request = urllib.request.Request(
+        base + "/chat/completions", data=body,
+        headers={
+            "Authorization": "Bearer " + key,
+            "Content-Type": "application/json",
+        }, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            response.read()
+            return CHECK_OK, ""
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = exc.read().decode("utf-8", "replace")[:300].strip()
+        except OSError:
+            detail = ""
+        return state_from_http(exc.code), f"HTTP {exc.code}: {detail}"
+    except (urllib.error.URLError, OSError) as exc:
+        return CHECK_UNKNOWN, f"сеть или таймаут: {exc}"
+
+
+def _load_check_cache(dest: Path) -> dict:
+    """Кэш проверок с диска. Пустой словарь — файла нет или он битый."""
+    try:
+        data = json.loads(check_cache_file(dest).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if isinstance(data, dict) and isinstance(data.get("providers"), dict):
+        return data
+    return {}
+
+
+def _save_check_cache(dest: Path, cache: dict) -> None:
+    """Пишет кэш. Ошибка записи не смертельна: проверка ценнее журнала."""
+    try:
+        data_dir(dest).mkdir(parents=True, exist_ok=True)
+        check_cache_file(dest).write_text(
+            json.dumps(cache, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _cache_entry_fresh(entry: dict, cache_hours: float) -> bool:
+    """Свежа ли запись кэша: ей меньше заданных часов."""
+    at = entry.get("at") if isinstance(entry, dict) else None
+    return isinstance(at, (int, float)) and (time.time() - at) < cache_hours * 3600.0
+
+
+def check_provider_models(dest: Path, provider_id: str, progress=None,
+                          probe=None, max_models: int = CHECK_MAX_MODELS,
+                          workers: int = CHECK_WORKERS,
+                          cache_hours: float = CHECK_CACHE_HOURS,
+                          ) -> tuple[dict, list[str]]:
+    """Доступность моделей провайдера: {модель: (состояние, причина)}.
+
+    Состояния три: ✔ отвечает, ✘ точно нет (401/404), ? не знаю (429,
+    таймаут, сеть). Причина — текст ошибки провайдера, вычищенный через
+    mask_text: провайдер любит цитировать присланный ключ, и без маски он
+    уезжал бы в кэш, окно и журнал.
+
+    Потолок — не больше max_models запросов за прогон: если моделей
+    больше, проверяются первые по алфавиту, и об остальных сказано
+    словами. Повторный прогон в те же сутки читает кэш и не бьёт по API.
+    Параметр probe подменяется в самопроверке: там сети быть не должно.
+    """
+    dest = Path(dest)
+    probe = probe or probe_model
+    chosen = next((p for p in providers(dest) if p["id"] == provider_id), None)
+    if chosen is None:
+        return {}, [f"Провайдера «{provider_id}» в настройках opencode нет."]
+    if not chosen["ok"]:
+        return {}, [f"Провайдер «{provider_id}» не подходит: {chosen['why']}."]
+
+    notes: list[str] = []
+    models = sorted(chosen["models"])
+    key, key_source = provider_key_info(dest, provider_id)
+    if not key:
+        # Без ключа в провайдера ходить нельзя — и не надо: вместо сети
+        # честный отказ по каждой модели, ни одного запроса. Деньги и
+        # лимиты провайдера тут ни при чём, поэтому это ✘, а не ?.
+        detail = "ключ не найден: " + (key_source or "в настройках нет apiKey")
+        return {m: (CHECK_NO, detail) for m in models}, notes
+
+    cache = _load_check_cache(dest)
+    stored = cache.setdefault("providers", {}).setdefault(provider_id, {})
+    stored = stored.setdefault("models", {})
+
+    limited = models
+    if len(models) > max_models:
+        limited = models[:max_models]
+        notes.append(
+            f"Моделей {len(models)}: проверены первые {max_models} по алфавиту, "
+            f"остальные {len(models) - max_models} не проверялись "
+            f"(потолок {max_models} запросов за прогон).")
+
+    results: dict[str, tuple[str, str]] = {}
+    todo: list[str] = []
+    cached = 0
+    for model in limited:
+        entry = stored.get(model)
+        if isinstance(entry, dict) and _cache_entry_fresh(entry, cache_hours):
+            results[model] = (str(entry.get("state") or CHECK_UNKNOWN),
+                              str(entry.get("reason") or ""))
+            cached += 1
+        else:
+            todo.append(model)
+    if cached:
+        notes.append(
+            f"Из кэша (свежесть {cache_hours:g} ч): {cached} моделей — "
+            "по API не били.")
+
+    if todo:
+        done_count = 0
+        with ThreadPoolExecutor(max_workers=max(1, min(workers, len(todo)))) as pool:
+            jobs = {pool.submit(probe, chosen["base_url"], model, key): model
+                    for model in todo}
+            for job in as_completed(jobs):
+                model = jobs[job]
+                state, raw = job.result()
+                reason = mask_text(raw, key)
+                results[model] = (state, reason)
+                stored[model] = {"state": state, "reason": reason,
+                                 "at": time.time()}
+                done_count += 1
+                if progress:
+                    progress(f"Проверено {done_count + cached} из "
+                             f"{len(limited)}: {model} "
+                             f"{CHECK_SYMBOL.get(state, '?')}")
+        _save_check_cache(dest, cache)
+    return results, notes
 
 
 def choose(dest: Path, provider_id: str, model: str,
@@ -1086,6 +1274,11 @@ def _main(argv: list[str]) -> int:
     p_choose.add_argument("model")
     p_choose.add_argument("--dest", default="")
 
+    p_check = sub.add_parser("check-models",
+                             help="живая проверка доступности моделей провайдера")
+    p_check.add_argument("provider")
+    p_check.add_argument("--dest", default="")
+
     p_review = sub.add_parser("review", help="проверить изменения проектом")
     p_review.add_argument("project")
     p_review.add_argument("--base", default="", help="с чем сравнивать (по умолчанию рабочее дерево)")
@@ -1113,6 +1306,23 @@ def _main(argv: list[str]) -> int:
     if args.what == "choose":
         messages, errors = choose(dest, args.provider, args.model, progress=say)
         return done(errors)
+    if args.what == "check-models":
+        results, notes = check_provider_models(dest, args.provider, progress=say)
+        if not results:
+            _say("Проверка не состоялась.")
+            return done(notes)
+        counts = {CHECK_OK: 0, CHECK_NO: 0, CHECK_UNKNOWN: 0}
+        for model in sorted(results):
+            state, reason = results[model]
+            counts[state] = counts.get(state, 0) + 1
+            _say(f"{CHECK_SYMBOL.get(state, '?')} {model}: "
+                 f"{reason or 'отвечает'}")
+        _say(f"Итог: {counts.get(CHECK_OK, 0)} ✔, "
+             f"{counts.get(CHECK_NO, 0)} ✘, {counts.get(CHECK_UNKNOWN, 0)} ? "
+             f"(всего {len(results)}).")
+        for note in notes:
+            _say(note)
+        return done([])
     if args.what == "deploy":
         messages, errors = deploy(dest, progress=say)
         return done(errors)

@@ -8902,6 +8902,134 @@ def main() -> int:
     check("import qwen_providers" in _qr_src,
           "ревьюер берёт разбор провайдеров из нового модуля")
 
+    # ---- 8з. Живая проверка доступности моделей: ✔/✘/?, потолок 120, кэш 24 ч
+    #
+    # Сети в самопроверке нет и быть не должно: вместо probe_model в
+    # проверку подставляется своя функция, которая считает вызовы и
+    # возвращает заготовленные ответы. Разбирается только то, что уже
+    # «получено» — как и обещано в плане.
+    echo("\n--- 8з. Проверка доступности моделей (синтетика, без сети) ---")
+    import time as _qm_time  # noqa: PLC0415 — по образцу остальных проверок
+    _qm_dir = Path(tempfile.mkdtemp(prefix="selftest-qwencheck-"))
+    try:
+        _qm_models = {f"модель-{i:03d}": {"name": f"модель-{i:03d}"}
+                      for i in range(150)}
+        (_qm_dir / "opencode.jsonc").write_text(json.dumps({
+            "provider": {
+                "провер-": {"npm": "@ai-sdk/openai-compatible",
+                            "apiKey": "ключ-проверки",
+                            "baseURL": "https://example.test/v1",
+                            "models": _qm_models},
+                "без-ключа-": {"npm": "@ai-sdk/openai-compatible",
+                               "apiKey": "",
+                               "models": {"одна": {"name": "одна"}}},
+            }}, ensure_ascii=False), encoding="utf-8")
+
+        # 1. Разбор статусов: 200 → ✔, 401/404 → ✘, 429 и прочее → ?
+        check(_qr.state_from_http(200) == _qr.CHECK_OK
+              and _qr.state_from_http(201) == _qr.CHECK_OK,
+              "ответ 200 и 201 — модель отвечает (✔)")
+        check(_qr.state_from_http(401) == _qr.CHECK_NO
+              and _qr.state_from_http(404) == _qr.CHECK_NO,
+              "401 и 404 — окончательный отказ (✘)")
+        check(_qr.state_from_http(429) == _qr.CHECK_UNKNOWN
+              and _qr.state_from_http(500) == _qr.CHECK_UNKNOWN
+              and _qr.state_from_http(503) == _qr.CHECK_UNKNOWN,
+              "429, 500, 503 — НЕ отказ, состояние «не знаю» (?)")
+        check(_qr.CHECK_WORKERS == 4 and _qr.CHECK_MAX_MODELS == 120,
+              "четыре потока и потолок 120 запросов заданы константами")
+
+        # 2. Потолок: моделей 150, запросов не больше 120, остальные — словами.
+        _qm_calls: list[str] = []
+
+        def _qm_probe(base_url, model, key, timeout=30):
+            _qm_calls.append(model)
+            if model == "модель-042":
+                return _qr.CHECK_NO, f"HTTP 401: ключ {key} неверен"
+            if model == "модель-077":
+                return _qr.CHECK_UNKNOWN, "HTTP 429: rate limit exceeded"
+            if model == "модель-119":
+                return _qr.CHECK_UNKNOWN, "таймаут соединения"
+            return _qr.CHECK_OK, ""
+
+        _qm_progress: list[str] = []
+        _qm_res, _qm_notes = _qr.check_provider_models(
+            _qm_dir, "провер-", probe=_qm_probe,
+            progress=_qm_progress.append)
+        check(len(_qm_res) == 120, f"проверено ровно 120 моделей, не 150: {len(_qm_res)}")
+        check(len(_qm_calls) == 120, f"запросов к провайдеру 120: {len(_qm_calls)}")
+        check("модель-000" in _qm_res and "модель-119" in _qm_res
+              and "модель-149" not in _qm_res,
+              "проверяются первые 120 моделей по алфавиту")
+        check(any("не проверялись" in n and "30" in n for n in _qm_notes),
+              "про непроверенные 30 моделей сказано словами")
+        check(_qm_res["модель-042"][0] == _qr.CHECK_NO,
+              "модель с ответом 401 — ✘, точно нет")
+        check(_qm_res["модель-077"][0] == _qr.CHECK_UNKNOWN,
+              "модель с ответом 429 — ?, а не ✘: лимит провайдера не отказ")
+        check(_qm_res["модель-119"][0] == _qr.CHECK_UNKNOWN,
+              "таймаут — ?, а не ✘")
+        check(_qm_res["модель-000"][0] == _qr.CHECK_OK
+              and _qm_res["модель-000"][1] == "",
+              "модель с ответом 200 — ✔ и без причины")
+        check("ключ-проверки" not in _qm_res["модель-042"][1],
+              "полного ключа в причине ошибки нет")
+        check("…" in _qm_res["модель-042"][1] and "длина" in _qm_res["модель-042"][1],
+              "в причине ошибки стоит маска ключа")
+        check(any("из 120" in p for p in _qm_progress),
+              "прогресс показывает, сколько проверено из скольких")
+
+        # 3. Кэш: файл записан, ключа в нём нет, повторный прогон не бьёт по API.
+        _qm_cache_path = _qr.check_cache_file(_qm_dir)
+        check(_qm_cache_path.is_file(),
+              "кэш проверки записан рядом с данными ревьюера")
+        _qm_cache_text = _qm_cache_path.read_text(encoding="utf-8")
+        check("ключ-проверки" not in _qm_cache_text,
+              "полного ключа в файле кэша нет")
+        check('"at"' in _qm_cache_text and "модель-042" in _qm_cache_text,
+              "в кэше хранятся модель, состояние, причина и время")
+        _qm_calls.clear()
+        _qm_res2, _qm_notes2 = _qr.check_provider_models(
+            _qm_dir, "провер-", probe=_qm_probe)
+        check(not _qm_calls, "повторный прогон в те же сутки не бьёт по API")
+        check(_qm_res2 == _qm_res, "результат из кэша совпадает с живым")
+        check(any("кэша" in n for n in _qm_notes2),
+              "о чтении из кэша сказано словами")
+
+        # 4. Свежесть: запись старше 24 часов обязана перепровериться.
+        _qm_old = json.loads(_qm_cache_path.read_text(encoding="utf-8"))
+        _qm_old["providers"]["провер-"]["models"]["модель-000"]["at"] = (
+            _qm_time.time() - 25 * 3600)
+        _qm_cache_path.write_text(
+            json.dumps(_qm_old, ensure_ascii=False), encoding="utf-8")
+        _qm_calls.clear()
+        _qm_res3, _qm_notes3 = _qr.check_provider_models(
+            _qm_dir, "провер-", probe=_qm_probe)
+        check(_qm_calls == ["модель-000"],
+              f"устаревшая запись перепроверяется, остальные из кэша: {_qm_calls}")
+        check(_qm_res3["модель-000"][0] == _qr.CHECK_OK,
+              "перепроверенная модель отвечает (✔)")
+
+        # 5. Нет ключа — ✘ по каждой модели и ни одного запроса, без падения.
+        _qm_calls.clear()
+        _qm_res4, _qm_notes4 = _qr.check_provider_models(
+            _qm_dir, "без-ключа-", probe=_qm_probe)
+        check(not _qm_calls, "без ключа ни один запрос к провайдеру не уходит")
+        check(list(_qm_res4) == ["одна"] and _qm_res4["одна"][0] == _qr.CHECK_NO,
+              "без ключа модель получает ✘, а не падение")
+        check("ключ" in _qm_res4["одна"][1],
+              "причина ✘ словами говорит про ключ")
+
+        # 6. Несуществующий провайдер — пустой результат и слова, не падение.
+        _qm_res5, _qm_notes5 = _qr.check_provider_models(
+            _qm_dir, "нет-такого-", probe=_qm_probe)
+        check(_qm_res5 == {} and _qm_notes5,
+              "несуществующий провайдер — пустой результат и слова")
+    except (ImportError, NameError):
+        check(False, "модуль ревьюера импортируется для проверки моделей")
+    finally:
+        shutil.rmtree(_qm_dir, ignore_errors=True)
+
     # ---- 8г. Обновление скилла в уже созданной базе
     echo("\n--- 8г. Скилл, который в мастере, но только в старой базе ---")
     _src_sk = core.program_root()
