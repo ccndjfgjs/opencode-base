@@ -123,11 +123,20 @@ class ScrollPage(QScrollArea):
         # колесо мыши должно крутить содержимое, а не «залипать» на краях
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         inner.setAutoFillBackground(False)
-        # страницу запрещаем сжимать: её высота — это её настоящая высота.
-        # Иначе Qt подгоняет её под окно и рисует элементы друг поверх друга.
+        # Страницу запрещаем сжимать по высоте: её высота — это её
+        # настоящая высота. Иначе Qt подгоняет её под окно и рисует
+        # элементы друг поверх друга.
         inner.setMinimumHeight(inner.sizeHint().height())
+        inner.setMinimumWidth(0)
+        # По ширине страница обязана ужиматься вместе с окном. Раньше
+        # стояло Preferred, и это означало «хочу шириной со своё
+        # содержимое»: при окне 895 внутренний виджет был 825 при
+        # просмотре 665, и подписи уезжали за правый край наравне с
+        # рамкой, а их концы просто пропадали. По горизонтали здесь
+        # та же политика Minimum, что и по высоте: содержимое может
+        # стать любой ширины, лишнее уходит в перенос строк.
         inner.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
+            QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Minimum
         )
         self._inner = inner
 
@@ -141,7 +150,16 @@ class ScrollPage(QScrollArea):
         self.refresh_height()
 
     def refresh_height(self) -> None:
-        """Держит минимальную высоту страницы по её содержимому."""
+        """Держит минимальную высоту страницы по её содержимому.
+
+        Заодно ограничивает ширину. Без этого страница брала ширину
+        по своему содержимому и оказывалась шире окна: измерено, при
+        окне 895 просмотр был 665, а внутренний виджет 825. Ряды с
+        длинными подписями и таблицами уезжали за правый край, и
+        концы подписей просто пропадали. Максимальная ширина заставляет
+        Qt сжать содержимое до его минимумов, а горизонтальной
+        прокрутки у страницы нет намеренно.
+        """
         layout = self._inner.layout()
         if layout is None:
             return
@@ -150,6 +168,9 @@ class ScrollPage(QScrollArea):
         value = max(need, hint)
         if self._inner.minimumHeight() != value:
             self._inner.setMinimumHeight(value)
+        limit = self.viewport().width()
+        if limit > 0 and self._inner.maximumWidth() != limit:
+            self._inner.setMaximumWidth(limit)
 
 
 class Worker(QThread):

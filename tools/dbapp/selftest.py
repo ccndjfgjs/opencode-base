@@ -226,6 +226,35 @@ def main() -> int:
         check(not _squeezed,
               "содержимое вкладок не сжимается под окно"
               + (f": {', '.join(_squeezed)}" if _squeezed else ""))
+        # Страница не должна быть шире окна. Иначе ряды с длинными
+        # подписями и таблицами уезжают за правый край, и концы
+        # подписей просто пропадают. Измерялось: при окне 895 просмотр
+        # был 665, а внутренний виджет 825.
+        _wide = []
+        for _i in range(window.tabs.count()):
+            _page = window.tabs.widget(_i)
+            if not hasattr(_page, "refresh_height"):
+                continue
+            _page.refresh_height()
+            for _ in range(3):
+                app.processEvents()
+            _vp = _page.viewport().width()
+            _in = _page._inner.width()
+            if _vp and _in > _vp:
+                _wide.append(f"{window.tabs.tabText(_i)}: {_in} при {_vp}")
+        check(not _wide,
+              f"содержимое вкладок не шире окна: {_wide or 'везде помещается'}")
+
+        # И ширину страницы надо уметь уменьшать: без этого Qt отдаёт ей
+        # ширину по содержимому и рамки с длинными заголовками держат
+        # всё остальное за правым краем.
+        _caps_page = window.caps_tab
+        check(getattr(_caps_page._inner, "minimumWidth", lambda: 0)() == 0,
+              "странице разрешено сжиматься по ширине")
+        check(_caps_page._inner.sizePolicy().horizontalPolicy()
+              != _caps_page._inner.sizePolicy().Policy.Preferred,
+              "и политика по ширине не «хочу шириной со содержимым»")
+
         check(_needs > 0,
               f"лишнее содержимое уходит в прокрутку, а не за край: {_needs} вкладок")
 
