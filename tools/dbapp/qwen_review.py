@@ -276,235 +276,46 @@ def ensure_home(dest: Path) -> Path:
 
 # ------------------------------------------------------------------ выбор модели
 
-#: Пакеты провайдеров у авторов AI SDK, говорящие на языке OpenAI.
-OPENAI_PACKAGES = (
-    "@ai-sdk/openai",
-    "@ai-sdk/openai-compatible",
-    "@ai-sdk/azure",
-    "@ai-sdk/deepseek",
-    "@ai-sdk/groq",
-    "@ai-sdk/xai",
-    "@ai-sdk/cerebras",
-    "@ai-sdk/togetherai",
-    "@ai-sdk/fireworks",
-    "@ai-sdk/perplexity",
-    "@ai-sdk/deepinfra",
-    "@ai-sdk/baseten",
-    "@ai-sdk/llamacpp",
-    "@openrouter/ai-sdk-provider",
-    "ollama-ai-provider",
-    "ai-sdk-ollama",
-)
-
-#: Пакеты, которые с Qwen Code напрямую не заговорят.
-NON_OPENAI_PACKAGES = (
-    "@ai-sdk/anthropic",
-    "@ai-sdk/google",
-    "@ai-sdk/google-vertex",
-    "@ai-sdk/amazon-bedrock",
-    "@ai-sdk/mistral",
-    "@ai-sdk/cohere",
-    "@ai-sdk/vertex",
-)
+#: Списки пакетов живут в qwen_providers. Тут они отдаются наружу как
+#: реэкспорт: снаружи на них смотрят, а второй раз определёнными быть
+#: не должны — иначе списки разъедутся.
+_REEXPORTED = ("OPENAI_PACKAGES", "NON_OPENAI_PACKAGES")
 
 
-def _config(dest: Path) -> Path:
-    return Path(dest) / "opencode.jsonc"
+def __getattr__(name: str):
+    """Отдаём наружу списки пакетов из qwen_providers, не импортируя его
+    на импорте: qwen_review читают раньше, чем кладут папку в sys.path."""
+    if name in _REEXPORTED:
+        import qwen_providers  # noqa: PLC0415 — рядом лежит, круга нет
 
-
-def _provider_block(text: str) -> str:
-    """Кусок текста настроек с записями провайдеров."""
-    import opencode_caps  # noqa: PLC0415 — рядом лежит, круга нет
-
-    bounds = opencode_caps.find_key_object(text, "provider")
-    if bounds is None:
-        return ""
-    return text[bounds[0] : bounds[1]]
-
-
-def _entry_text(text: str, name: str) -> str:
-    """Текст одной записи провайдера."""
-    import opencode_caps  # noqa: PLC0415 — рядом лежит, круга нет
-
-    block = _provider_block(text)
-    if not block:
-        return ""
-    bounds = opencode_caps.find_key_object(text, name, text.find(block))
-    if bounds is None:
-        return ""
-    return text[bounds[0] : bounds[1]]
-
-
-def _str_field(text: str, key: str) -> str:
-    """Строковое поле записи (первое вхождение)."""
-    match = re.search(r'"' + key + r'"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
-    return match.group(1) if match else ""
-
-
-def _models(text: str) -> list[str]:
-    """Имена моделей из записи провайдера, по порядку."""
-    import opencode_caps  # noqa: PLC0415 — рядом лежит, круга нет
-
-    bounds = opencode_caps.find_key_object(text, "models")
-    if bounds is None:
-        return []
-    chunk = text[bounds[0] : bounds[1]]
-    names: list[str] = []
-    depth = 0
-    in_str = False
-    escape = False
-    i = 0
-    while i < len(chunk):
-        ch = chunk[i]
-        if in_str:
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_str = False
-            i += 1
-            continue
-        if ch == '"':
-            match = re.match(r'"((?:[^"\\]|\\.)*)"\s*:', chunk[i:])
-            if match and depth == 1:
-                names.append(match.group(1))
-            in_str = True
-            i += 1
-            continue
-        if ch in "{[":
-            depth += 1
-        elif ch in "}]":
-            depth -= 1
-        i += 1
-    return names
+        return getattr(qwen_providers, name)
+    raise AttributeError(f"модуль qwen_review не знает имени {name!r}")
 
 
 def providers(dest: Path) -> list[dict]:
     """Провайдеры, уже подключённые в opencode, с их моделями.
 
-    Каждый — словарь: id, npm, base_url, models, ok (годится ли для
-    ревьюера), why (словами, если не годится). Ключ сюда не попадает:
-    он читается отдельно и живёт только в окружении запуска.
+    Разбор живёт в qwen_providers — там снимаются комментарии jsonc,
+    оттуда же берутся адрес из вложенных options и имена переменных
+    окружения. Здесь только тонкая обёртка: имена и подписи те же.
     """
-    try:
-        text = _config(dest).read_text(encoding="utf-8")
-    except OSError:
-        return []
-    import opencode_caps  # noqa: PLC0415 — рядом лежит, круга нет
+    import qwen_providers  # noqa: PLC0415 — рядом лежит, круга нет
 
-    bounds = opencode_caps.find_key_object(text, "provider")
-    if bounds is None:
-        return []
-    names = _provider_names(text)
-    found: list[dict] = []
-    for name in names:
-        entry = _entry_text(text, name)
-        if not entry:
-            continue
-        npm = _str_field(entry, "npm")
-        base = _str_field(entry, "baseURL")
-        models = _models(entry)
-        ok, why = provider_fits(npm, base, models)
-        found.append({
-            "id": name,
-            "npm": npm,
-            "base_url": base,
-            "models": models,
-            "ok": ok,
-            "why": why,
-        })
-    return found
-
-
-def _provider_names(text: str) -> list[str]:
-    """Имена записей провайдеров верхнего уровня."""
-    block = _provider_block(text)
-    if not block:
-        return []
-    names: list[str] = []
-    depth = 0
-    in_str = False
-    escape = False
-    i = 0
-    while i < len(block):
-        ch = block[i]
-        if in_str:
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_str = False
-            i += 1
-            continue
-        if ch == '"':
-            match = re.match(r'"((?:[^"\\]|\\.)*)"\s*:\s*\{', block[i:])
-            if match and depth == 1:
-                names.append(match.group(1))
-            in_str = True
-            i += 1
-            continue
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-        i += 1
-    return names
+    return qwen_providers.providers(dest)
 
 
 def provider_fits(npm: str, base_url: str, models: list[str]) -> tuple[bool, str]:
-    """Годится ли провайдер для ревьюера. (да/нет, причина словами).
+    """Годится ли провайдер для ревьюера. (да/нет, причина словами)."""
+    import qwen_providers  # noqa: PLC0415 — рядом лежит, круга нет
 
-    Qwen Code говорит с провайдером на языке OpenAI. Пакет-обёртка и адрес
-    из настроек opencode говорят нам, на каком языке говорит провайдер:
-    если это не OpenAI — ревьюер не подойдёт, и подставлять наугад нельзя.
-    """
-    if not models:
-        return False, "у провайдера нет списка моделей — выбирать нечего"
-    if npm in OPENAI_PACKAGES:
-        return True, ""
-    if npm in NON_OPENAI_PACKAGES:
-        return False, (
-            f"провайдер работает не через OpenAI-совместимый интерфейс "
-            f"({npm}) — Qwen Code с ним не заговорит"
-        )
-    if base_url:
-        return False, (
-            "провайдер со своим адресом, но без известного OpenAI-совместимого "
-            "пакета — программа не берётся угадывать; если он совместим, "
-            "поставь ему npm @ai-sdk/openai-compatible"
-        )
-    return False, "не видно, что провайдер говорит на языке OpenAI"
+    return qwen_providers.provider_fits(npm, base_url, models)
 
 
 def provider_key(dest: Path, provider_id: str) -> str:
-    """Ключ провайдера из настроек — только для окружения запуска.
+    """Ключ провайдера из настроек — только для окружения запуска."""
+    import qwen_providers  # noqa: PLC0415 — рядом лежит, круга нет
 
-    Значение не печатается и не пишется в наши файлы: в состояние попадает
-    лишь имя провайдера и модель.
-
-    В настройках opencode ключ записан двумя способами: прямо строкой либо
-    ссылкой на переменную окружения. Ссылка у opencode выглядит как
-    `{env:ИМЯ}`, а не как `${ИМЯ}`. Разбирался только второй вид, и ссылка
-    уходила в Qwen Code как есть: провайдер вместо ключа получал строку
-    «{env:...}» и отвечал 401 Invalid API key. Поэтому разбираем оба вида,
-    а пустое значение отдаём пустым — вызывающий сам скажет об этом
-    человеку.
-    """
-    try:
-        text = _config(dest).read_text(encoding="utf-8")
-    except OSError:
-        return ""
-    entry = _entry_text(text, provider_id)
-    if not entry:
-        return ""
-    key = _str_field(entry, "apiKey").strip()
-    if key.startswith("{env:") and key.endswith("}"):
-        return os.environ.get(key[5:-1].strip(), "").strip()
-    if key.startswith("${") and key.endswith("}"):
-        return os.environ.get(key[2:-1].strip(), "").strip()
-    return key
+    return qwen_providers.provider_key(dest, provider_id)
 
 
 def choose(dest: Path, provider_id: str, model: str,
