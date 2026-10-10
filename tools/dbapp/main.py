@@ -66,6 +66,7 @@ from PyQt6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
+    QFrame,
     QWidget,
 )
 
@@ -7674,10 +7675,80 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.themes_tab, "Темы")
         tabs.addTab(self.update_tab, "Обновление")
         tabs.addTab(self.help_tab, "Инструкция")
-        layout.addWidget(tabs, 1)
+        self.tabs = tabs
+
+        # ---- боковое меню разделов
+        #
+        # Полоса вкладок сверху кончится: восемь подписей занимают
+        # 861 пиксель, а полоса при окне 880 показывает около 830, и
+        # последние вкладки уезжают за край. Меню растёт вниз и не
+        # кончается.
+        #
+        # Пока полоса вкладок остаётся на месте, меню работает как
+        # указатель на неё и переключает те же страницы. Так старый
+        # код вкладок остаётся рабочим целиком, а меню можно снять
+        # одной строкой, если не пригодится.
+        self.nav_buttons: list = []
+        sidebar = QFrame()
+        sidebar.setObjectName("sidebar")
+        sidebar.setFixedWidth(190)
+        side = QVBoxLayout(sidebar)
+        side.setContentsMargins(10, 14, 10, 12)
+        side.setSpacing(4)
+        logo = ui.label("◈  Управление\n     базой", kind="title")
+        side.addWidget(logo)
+        side.addSpacing(10)
+        for index in range(tabs.count()):
+            button = QPushButton(tabs.tabText(index))
+            button.setObjectName("nav")
+            button.setCheckable(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setMinimumHeight(34)
+            button.clicked.connect(
+                lambda _checked=False, i=index: tabs.setCurrentIndex(i))
+            side.addWidget(button)
+            self.nav_buttons.append(button)
+        side.addStretch(1)
+        self.nav_status = ui.label("", kind="dim", wrap=True)
+        side.addWidget(self.nav_status)
+        # Сайдбар и полоса вкладок стоят рядом, поэтому оба едут в
+        # общий горизонтальный ряд. Если их положить прямо в верхний
+        # вертикальный макет, меню встаёт НАД вкладками, а не сбоку —
+        # так и вышло с первой попытки, увидел на снимке.
+        #
+        # В ряд кладём сразу, без промежуточного добавления в layout:
+        # removeWidget отвязывает виджет, и до следующего addLayout он
+        # остаётся без родителя, а на сборке мусора удаляется. Кнопки
+        # меню после этого оказывались удалёнными объектами.
+        _row = QHBoxLayout()
+        _row.setContentsMargins(0, 0, 0, 0)
+        _row.setSpacing(0)
+        _row.addWidget(sidebar)
+        _row.addWidget(tabs, 1)
+        layout.addLayout(_row, 1)
+        # Подсветка едет за полосой вкладок: кто бы ни переключил
+        # раздел — стрелками, кликом по вкладке или из меню.
+        tabs.currentChanged.connect(self._sync_nav)
+        self._sync_nav(tabs.currentIndex())
 
         self.create_tab.base_ready.connect(self._suggest_import)
         self.create_tab.base_ready.connect(self._suggest_bridge)
+
+    def _sync_nav(self, index: int) -> None:
+        """Отметить в меню тот раздел, что открыт в полосе вкладок.
+
+        Подпись снизу показывает, какая вкладка открыта. Это не
+        украшение: меню и полоса — два указателя на одно, и без
+        отметки нельзя было понять, где вы находитесь, если раздел
+        переключили стрелками у края полосы.
+        """
+        for i, button in enumerate(getattr(self, "nav_buttons", []) or []):
+            button.setChecked(i == index)
+        buttons = getattr(self, "nav_buttons", []) or []
+        if 0 <= index < len(buttons):
+            status = getattr(self, "nav_status", None)
+            if status is not None:
+                status.setText(buttons[index].text())
 
     def closeEvent(self, event) -> None:  # noqa: N802 — имя из Qt
         """Крестик закрывает программу, как закрывал раньше.

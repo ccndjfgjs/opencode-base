@@ -87,6 +87,8 @@ QScrollBar::handle:vertical {{
     min-height: 24px;
 }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+
+
 """
 
 
@@ -375,6 +377,24 @@ def apply_dark_theme(app) -> None:
     app.setStyleSheet(
         f"""
         QWidget {{ font-size: 13px; }}
+        #sidebar {{
+            background: {PANEL};
+            border-right: 1px solid {BORDER};
+        }}
+        QPushButton#nav {{
+            background: transparent;
+            border: none;
+            border-radius: 6px;
+            color: {TEXT};
+            text-align: left;
+            padding: 6px 10px;
+        }}
+        QPushButton#nav:hover {{ background: {PANEL_ALT}; }}
+        QPushButton#nav:checked {{
+            background: {PANEL_ALT};
+            color: {ACCENT};
+            font-weight: 600;
+        }}
         QTabWidget::pane {{ border: 1px solid {BORDER}; border-radius: 6px;
                             background: {PANEL}; }}
         QTabBar::tab {{ background: {BG}; color: {TEXT_DIM};
