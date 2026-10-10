@@ -99,6 +99,94 @@ DEBATE_WARNING = (
     "спорный фрагмент, а решает человек."
 )
 
+# ------------------------------------------------------------------ режимы
+
+#: Режимы ревьюера — единый список данных. Из него строятся галочка «спор»
+#: в окне, командная строка и будущее окно выбора режима (задача 5 плана).
+#: Поля:
+#:   id          — стабильное имя режима (для кода и командной строки);
+#:   name        — короткое человеческое имя;
+#:   description — что делает режим (подсказка галочки в окне, help в CLI);
+#:   flag        — состояние старой галочки «спор», дающее этот режим
+#:                 (галочка одна, режимов пока два: снята — once);
+#:   label       — подпись галочки в окне; у once своей галочки нет;
+#:   requires    — что нужно режиму, человеческими словами.
+MODES: list[dict] = [
+    {
+        "id": "once",
+        "name": "Одна проверка",
+        "description": (
+            "Ревьюер один раз смотрит git diff и присылает замечания. "
+            "Возражений и раундов нет: следующий запуск начинает счёт заново."
+        ),
+        "flag": False,
+        "label": "одна проверка — ревьюер без спора",
+        "requires": [
+            "отмеченная галочка qwen-review",
+            "одна модель ревьюера: выбраны провайдер и модель",
+        ],
+    },
+    {
+        "id": "debate",
+        "name": "Спор",
+        "description": (
+            "Отдельный режим, по умолчанию выключен. Ревьюер присылает "
+            "замечания, основной агент возражает с обоснованием, ревьюер "
+            "отвечает — и так не больше заданного числа раундов. Если "
+            "согласия нет, программа не решает сама: она показывает оба "
+            "довода и спорный фрагмент, а решает человек"
+        ),
+        "flag": True,
+        "label": "спор — ревьюер против модели",
+        "requires": [
+            "отмеченная галочка qwen-review",
+            "включённый переключатель «спор»",
+            "две стороны: модель ревьюера и основная модель агента",
+            "возражение основного агента для каждого раунда после первого",
+            f"число раундов от 1 до {MAX_ROUNDS}",
+        ],
+    },
+]
+
+#: Идентификаторы режимов: на них смотрят окно и командная строка.
+MODE_ONCE = str(MODES[0]["id"])
+MODE_DEBATE = next(str(mode["id"]) for mode in MODES if mode.get("flag"))
+
+
+def mode_by_id(mode_id: str) -> dict | None:
+    """Режим по идентификатору. Незнакомое значение — None, а не падение."""
+    wanted = str(mode_id or "").strip().lower()
+    for mode in MODES:
+        if str(mode.get("id")) == wanted:
+            return mode
+    return None
+
+
+def mode_from_flag(on: bool) -> str:
+    """Старая галочка режима → идентификатор режима из MODES.
+
+    Галочка «спор» в окне остаётся той же, но её смысл теперь живёт в
+    общем списке режимов, а не в хардкоде вызывающего кода: включена —
+    «debate», снята — «once». Соответствие берётся по полю flag.
+    """
+    for mode in MODES:
+        if bool(mode.get("flag")) == bool(on):
+            return str(mode["id"])
+    return str(MODES[0]["id"])
+
+
+def mode_ids() -> list[str]:
+    """Все идентификаторы режимов — по порядку списка."""
+    return [str(mode["id"]) for mode in MODES]
+
+
+def mode_requires(mode_id: str) -> list[str]:
+    """Что нужно режиму. Незнакомый режим — пустой список."""
+    mode = mode_by_id(mode_id)
+    if mode is None:
+        return []
+    return [str(item) for item in mode.get("requires") or []]
+
 
 def _hidden_startupinfo():
     """Окно консоли не показывать. Подробности — в core.hidden_startupinfo."""
@@ -1284,6 +1372,14 @@ def _main(argv: list[str]) -> int:
     p_review.add_argument("--base", default="", help="с чем сравнивать (по умолчанию рабочее дерево)")
     p_review.add_argument("--reply", default="", help="возражение основного агента (раунд спора)")
     p_review.add_argument("--rounds", type=int, default=DEFAULT_ROUNDS)
+    # Режим строится из общего списка MODES. Пустое значение по умолчанию —
+    # прежнее поведение: без --reply это одна проверка, с --reply — раунд
+    # спора. Старые вызовы CLI не передают --mode и работают как раньше.
+    p_review.add_argument(
+        "--mode", default="", choices=[""] + mode_ids(),
+        help="режим ревьюера: "
+             + "; ".join(f"{mode['id']} — {mode['name']}" for mode in MODES)
+             + " (без указания решает --reply: есть возражение — спор)")
     p_review.add_argument("--dest", default="")
 
     args = parser.parse_args(argv)
@@ -1336,6 +1432,15 @@ def _main(argv: list[str]) -> int:
         messages, errors = clear_debate(dest)
         return done(errors)
     if args.what == "review":
+        # Явный режим из общего списка. Несовместимая пара «once + возражение»
+        # отвергается словами: в разовой проверке возражений не бывает.
+        mode = str(getattr(args, "mode", "") or "")
+        if mode:
+            _mode_name = (mode_by_id(mode) or {}).get("name") or mode
+            if mode == MODE_ONCE and args.reply:
+                _say(f"В режиме «{_mode_name}» возражений не бывает: "
+                     "убери --reply или выбери режим " + MODE_DEBATE + ".")
+                return 1
         messages, errors = review(
             dest, Path(args.project), args.base, reply=args.reply,
             rounds=args.rounds, progress=say,

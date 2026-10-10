@@ -8626,6 +8626,15 @@ def main() -> int:
     finally:
         _probe.unlink(missing_ok=True)
         _pid_file.unlink(missing_ok=True)
+        # Проба, взявшая метку, засыпает на 30 с и выходит, не убрав
+        # файл-метку. Пока он лежит, мёртвый номер владельца может
+        # достаться любому новому процессу, и следующий прогон примет
+        # его за живого: было живьём, LOCK-BUSY навсегда. Метка здесь
+        # тестовая, боевое имя другое — убираем сами.
+        try:
+            _main._lock_path().unlink(missing_ok=True)
+        except OSError:
+            pass
 
     # Кнопка «Настроить автоматически» не должна трогать конфиг,
     # когда блок уже записан. opencode перезапускает серверы MCP на
@@ -9029,6 +9038,117 @@ def main() -> int:
         check(False, "модуль ревьюера импортируется для проверки моделей")
     finally:
         shutil.rmtree(_qm_dir, ignore_errors=True)
+
+    # ---- 8к. Режимы ревьюера как данные: once и debate
+    #
+    # Сети нет: проверяются данные MODES, старая галочка «спор» (синтетический
+    # вызов обработчика на собранном окне из раздела 1) и обратная
+    # совместимость командной строки. Ревьюер не запускается.
+    echo("\n--- 8к. Режимы ревьюера как данные (once, debate) ---")
+    try:
+        # (а) Список режимов не пуст и содержит once и debate.
+        check(bool(_qr.MODES), "список режимов ревьюера не пуст")
+        check(_qr.MODE_ONCE in _qr.mode_ids()
+              and _qr.MODE_DEBATE in _qr.mode_ids(),
+              f"в списке режимов есть once и debate: {_qr.mode_ids()}")
+        check(_qr.mode_from_flag(False) == _qr.MODE_ONCE
+              and _qr.mode_from_flag(True) == _qr.MODE_DEBATE,
+              "снятая галочка — once, отмеченная — debate: как и раньше")
+
+        # (в) У каждого режима есть непустые id, имя и описание, а пометки
+        # о требуемых данных — непустой список из непустых строк.
+        for _mode in _qr.MODES:
+            _mid = str(_mode.get("id") or "")
+            check(bool(_mid) and bool(str(_mode.get("name") or "").strip())
+                  and bool(str(_mode.get("description") or "").strip()),
+                  f"режим {_mid or '?'}: имя и описание не пустые")
+            _req = _qr.mode_requires(_mid)
+            check(bool(_req) and all(str(item).strip() for item in _req),
+                  f"режим {_mid}: пометки о требуемых данных заполнены")
+            check(isinstance(_mode.get("flag"), bool),
+                  f"режим {_mid}: поле flag — булево состояние старой галочки")
+        check(len({str(m.get("id")) for m in _qr.MODES}) == len(_qr.MODES),
+              "идентификаторы режимов не повторяются")
+        check("модель" in " ".join(_qr.mode_requires(_qr.MODE_ONCE)),
+              "режиму once помечена нужна одна модель ревьюера")
+        check("две стороны" in " ".join(_qr.mode_requires(_qr.MODE_DEBATE)),
+              "режиму debate помечены нужны две стороны спора")
+
+        # (б) Старая галочка выставляет/снимает тот же режим, что и раньше:
+        # синтетический вызов обработчика на собранном окне, без показа.
+        # Виджеты qwen живут на вкладке opencode — window.caps_tab.
+        _qw_tab = getattr(window, "caps_tab", None)
+        _qw_box = getattr(_qw_tab, "qw_debate", None)
+        if _qw_box is None:
+            check(False, "галочка спора «спор — ревьюер против модели» на месте")
+        else:
+            # Подпись и подсказка галочки теперь строятся из MODES.
+            _debate = _qr.mode_by_id(_qr.MODE_DEBATE) or {}
+            check(_qw_box.text() == str(_debate.get("label") or ""),
+                  "подпись галочки спора взята из списка режимов")
+            check(_qw_box.toolTip() == str(_debate.get("description") or ""),
+                  "подсказка галочки спора взята из описания режима")
+            check(not _qw_box.isChecked(),
+                  "галочка спора по умолчанию снята — режим once")
+            check(_qw_tab._qw_mode_id == _qr.MODE_ONCE,
+                  "при сборке вкладки текущий режим — once")
+            # Синтетический вызов обработчика: не сигнал Qt, а прямой зов.
+            _qw_box.blockSignals(True)
+            _qw_box.setChecked(True)
+            _qw_box.blockSignals(False)
+            _qw_tab._qw_debate_toggled(True)
+            check(_qw_tab._qw_mode_id == _qr.MODE_DEBATE,
+                  "отмеченная галочка выставляет режим debate, как и раньше")
+            check(_qr.mode_from_flag(_qw_box.isChecked()) == _qr.MODE_DEBATE,
+                  "чтение режима из общего списка согласовано с галочкой")
+            _qw_box.blockSignals(True)
+            _qw_box.setChecked(False)
+            _qw_box.blockSignals(False)
+            _qw_tab._qw_debate_toggled(False)
+            check(_qw_tab._qw_mode_id == _qr.MODE_ONCE,
+                  "снятая галочка возвращает режим once, как и раньше")
+            # Вернуть стартовое состояние окна: ревьюер и спор выключены.
+            _qw_tab._qw_toggled(_qw_tab.checks["qwen-review"].isChecked())
+
+        # Обратно-совместимость CLI: старый вызов без --mode ведёт себя как
+        # раньше (на пустой папке настроек — честный отказ словами), новый
+        # --mode once даёт то же самое, а once + --reply отвергается словами.
+        import io as _rm_io
+        from contextlib import redirect_stdout as _rm_redirect
+
+        def _run_cli(argv: list[str]) -> tuple[int, str]:
+            buf = _rm_io.StringIO()
+            with _rm_redirect(buf):
+                code = _qr._main(argv)
+            return code, buf.getvalue()
+
+        _rm_dir = Path(tempfile.mkdtemp(prefix="selftest-qwenmode-"))
+        try:
+            _old_code, _old_out = _run_cli(
+                ["review", "проект", "--dest", str(_rm_dir)])
+            _once_code, _once_out = _run_cli(
+                ["review", "проект", "--mode", "once", "--dest", str(_rm_dir)])
+            check(_old_code == 1 and "Ревьюер выключен" in _old_out,
+                  "старый вызов review без --mode работает как раньше: "
+                  "код 1 и отказ словами")
+            check(_once_code == _old_code and _once_out == _old_out,
+                  "явный --mode once даёт тот же результат, что старый вызов")
+            _rej_code, _rej_out = _run_cli(
+                ["review", "проект", "--mode", "once", "--reply", "возражение",
+                 "--dest", str(_rm_dir)])
+            check(_rej_code == 1 and "возражений не бывает" in _rej_out,
+                  "once с возражением отвергается словами, код 1")
+            _deb_code, _deb_out = _run_cli(
+                ["review", "проект", "--mode", "debate", "--dest", str(_rm_dir)])
+            check(_deb_code == 1 and "Ревьюер выключен" in _deb_out,
+                  "debate без возражения — первый раунд, тот же отказ словами "
+                  "на пустой папке")
+        except Exception as exc:  # noqa: BLE001 — чужой код не должен ронять проверку
+            check(False, f"синтетический вызов CLI упал: {exc}")
+        finally:
+            shutil.rmtree(_rm_dir, ignore_errors=True)
+    except (ImportError, NameError):
+        check(False, "модуль ревьюера импортируется для проверки режимов")
 
     # ---- 8г. Обновление скилла в уже созданной базе
     echo("\n--- 8г. Скилл, который в мастере, но только в старой базе ---")

@@ -3779,14 +3779,23 @@ class CapsTab(ScrollPage):
             row_qw_btns.addWidget(button)
         row_qw_btns.addStretch(1)
         qw_layout.addLayout(row_qw_btns)
-        self.qw_debate = QCheckBox("спор — ревьюер против модели")
-        self.qw_debate.setToolTip(
+        # Подпись и подсказка галочки берутся из общего списка режимов
+        # (qwen_review.MODES): в задаче 5 отсюда же построится окно выбора.
+        # Текст прежний — разметку не ломаем, на галочку завязаны
+        # _qw_toggled, _qw_debate_toggled, _qw_run и _qw_reply.
+        _qw_debate_mode = qwen_review.mode_by_id(qwen_review.MODE_DEBATE) or {}
+        self.qw_debate = QCheckBox(
+            str(_qw_debate_mode.get("label") or "спор — ревьюер против модели"))
+        self.qw_debate.setToolTip(str(_qw_debate_mode.get("description") or (
             "Отдельный режим, по умолчанию выключен. Ревьюер присылает "
             "замечания, основной агент возражает с обоснованием, ревьюер "
             "отвечает — и так не больше заданного числа раундов. Если "
             "согласия нет, программа не решает сама: она показывает оба "
             "довода и спорный фрагмент, а решает человек"
-        )
+        )))
+        # Текущий режим по старой галочке: пишется в _qw_debate_toggled,
+        # читается оттуда же, из qwen_review.MODES.
+        self._qw_mode_id = qwen_review.mode_from_flag(False)
         row_qw_debate = QHBoxLayout()
         row_qw_debate2 = QHBoxLayout()
         row_qw_debate.addWidget(self.qw_debate)
@@ -6293,7 +6302,13 @@ class CapsTab(ScrollPage):
             self._qw_debate_toggled(self.qw_debate.isChecked())
 
     def _qw_debate_toggled(self, on: bool) -> None:
-        """«Спор» — отдельный выключатель: без него раундов не будет."""
+        """«Спор» — отдельный выключатель: без него раундов не будет.
+
+        Состояние галочки переводится в режим из общего списка
+        qwen_review.MODES по полю flag и запоминается в _qw_mode_id:
+        не хардкодом, а из данных.
+        """
+        self._qw_mode_id = qwen_review.mode_from_flag(bool(on))
         button = getattr(self, "btn_qw_reply", None)
         if button is not None:
             enabled = bool(on) and bool(self.checks.get("qwen-review") is not None
@@ -6468,7 +6483,10 @@ class CapsTab(ScrollPage):
             return
         values = dialog.values()
         rounds = int(self.qw_rounds.value())
-        if self.qw_debate.isChecked():
+        # Режим читается из общего списка qwen_review.MODES по состоянию
+        # старой галочки, а не хардкодом: включена — «спор».
+        if qwen_review.mode_from_flag(
+                self.qw_debate.isChecked()) == qwen_review.MODE_DEBATE:
             answer = QMessageBox.question(
                 self, "Ревьюер и спор",
                 qwen_review.COST_WARNING + "\n\n" + qwen_review.DEBATE_WARNING
@@ -6490,7 +6508,9 @@ class CapsTab(ScrollPage):
         dest = self._qw_dest()
         if dest is None:
             return
-        if not (self.checks["qwen-review"].isChecked() and self.qw_debate.isChecked()):
+        if not (self.checks["qwen-review"].isChecked()
+                and qwen_review.mode_from_flag(self.qw_debate.isChecked())
+                == qwen_review.MODE_DEBATE):
             self._warn(
                 "Спор выключен: отметь галочку qwen-review и переключатель "
                 "«спор», иначе раундов не будет."
