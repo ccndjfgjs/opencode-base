@@ -85,6 +85,13 @@ CATEGORY_BY_ID = {
 BASE_BRIDGES_TITLE = "Мосты базы"
 REVIEWERS_TITLE = "Ревьюеры"
 
+# Ширина панели. Меньше, чем хотелось сначала: окно у трея — не рабочее
+# окно, а быстрый список, и оно перекрывает угол экрана. Широкое окно
+# здесь только мешает: чем больше площади, тем труднее пройти мимо него
+# к значку обратно. Ширины хватает под название, состояние и две кнопки;
+# длинные названия и состояния обрезаются, а полный текст — в подсказке.
+PANEL_WIDTH = 340
+
 # Значок раздела: закрыт и открыт. Треугольник читается однозначно —
 # по нему видно, что нажатие раскроет список, а не запустит.
 ARROW_CLOSED = "▶"
@@ -485,7 +492,7 @@ class TrayPanel(QWidget):
         self.body_layout.addStretch(1)
         self.scroll.setWidget(self.body)
 
-        self.setFixedWidth(430)
+        self.setFixedWidth(PANEL_WIDTH)
         self._checking = False
         # Панель запоминает себя на окне сразу при создании. Ищут её
         # потом и трей, и кнопка «Проверить» изнутри самой панели.
@@ -570,14 +577,20 @@ class TrayPanel(QWidget):
         # и кнопки уезжали за край, где их нельзя было нажать.
         line = QWidget()
         column = QVBoxLayout(line)
-        column.setContentsMargins(12, 3, 4, 5)
-        column.setSpacing(3)
+        column.setContentsMargins(10, 2, 2, 4)
+        column.setSpacing(2)
 
         top = QHBoxLayout()
-        top.setSpacing(8)
+        top.setSpacing(6)
         short = short_name(entry.name)
         name = ui.label(short)
         name.setToolTip(entry.name)
+        # Длинное название сжимается и обрезается, а не распирает строку.
+        # Политика тут обычная, а не Ignored: та даёт виджету нулевую
+        # ширину, и название пропадало совсем — измерено: все подписи
+        # схлопнулись в 0 пикселей. Минимум в 40 пикселей оставляет
+        # место под начало имени, а полное — в подсказке.
+        name.setMinimumWidth(40)
         top.addWidget(name, 0)
 
         # Пока идёт проверка, состояние прежнее и показывать его нельзя:
@@ -593,12 +606,19 @@ class TrayPanel(QWidget):
                     "Требования этого сервера ещё не проверялись на этой "
                     "машине. Нажмите «Проверить» — программа запустит "
                     "внешние программы и покажет, чего не хватает.")
+        # Состояние тоже сжимается: «нужно: Аддон MCP for Blender
+        # включён в самом Blender» — это четыре слова, и в узкой панели
+        # они не поместятся. Полный текст — в подсказке, чтобы ничего не
+        # потерялось молча.
+        state.setMinimumWidth(40)
+        if not state.toolTip() and entry.state != "не проверено":
+            state.setToolTip(entry.state)
         top.addWidget(state, 1)
         column.addLayout(top)
 
         if entry.actions:
             buttons = QHBoxLayout()
-            buttons.setSpacing(6)
+            buttons.setSpacing(4)
             for caption, handler in entry.actions:
                 button = QPushButton(caption)
                 button.setFixedHeight(22)

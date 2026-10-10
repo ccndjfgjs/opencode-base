@@ -273,7 +273,7 @@ def main() -> int:
         # Панель трея: что подключено, что работает, что готово. Левая
         # кнопка по значку открывает её, двойная — главное окно.
         import tray_panel
-        from PyQt6.QtWidgets import QPushButton
+        from PyQt6.QtWidgets import QLabel, QPushButton
 
         _panel = tray_panel.TrayPanel(window)
         for _ in range(3):
@@ -420,6 +420,36 @@ def main() -> int:
               "пункт меню зовёт тот же вход, что и кнопка панели")
         check(hasattr(_tray, "show_panel") and "panel.toggle()" in _ui_src,
               "пункт меню открывает ту же панель, что и левая кнопка")
+        # Панель узкая намеренно: окно у трея — быстрый список, оно
+        # перекрывает угол экрана, и широкое мешает вернуться к значку.
+        # Но узкая панель обязана оставаться читаемой: подписи не могут
+        # схлопнуться в ноль, а кнопки — уехать за край, где их нельзя
+        # нажать. Обе поломки уже случались по ходу работы.
+        check(tray_panel.PANEL_WIDTH <= 380,
+              f"панель у́же широкой: {tray_panel.PANEL_WIDTH} px")
+        _panel.adjustSize()
+        for _ in range(3):
+            app.processEvents()
+        _hidden = [lbl.text()[:24] for c in range(_panel.body_layout.count())
+                   if _panel.body_layout.itemAt(c).widget() is not None
+                   for lbl in _panel.body_layout.itemAt(c).widget().findChildren(QLabel)
+                   if lbl.text() and lbl.width() < 8]
+        check(not _hidden,
+              f"подписи не схлопнулись в ноль: {_hidden or 'все на месте'}")
+        _offscreen_2 = [b.text() for c in range(_panel.body_layout.count())
+                        if _panel.body_layout.itemAt(c).widget() is not None
+                        for b in _panel.body_layout.itemAt(c).widget().findChildren(QPushButton)
+                        if not _panel.scroll.viewport().rect().contains(b.geometry().center())]
+        check(not _offscreen_2,
+              f"кнопки в узкой панели попадают в видимую область: {_offscreen_2 or 'все'}")
+        _cut = [lbl for c in range(_panel.body_layout.count())
+                if _panel.body_layout.itemAt(c).widget() is not None
+                for lbl in _panel.body_layout.itemAt(c).widget().findChildren(QLabel)
+                if lbl.text() and lbl.width() < lbl.sizeHint().width()
+                and not lbl.toolTip()]
+        check(not _cut,
+              "у обрезанной подписи есть подсказка: полный текст не пропадает молча "
+              f"({len(_cut)} без неё)")
         # Реальный add_action: новый пункт обязан встать ПЕРЕД выходом.
         # Разделитель стоит перед «Закрыть программу», и add_action
         # вставляет перед ним. Проверка на настоящем списке, а не на
