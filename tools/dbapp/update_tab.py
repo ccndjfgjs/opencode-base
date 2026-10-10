@@ -44,7 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import selfupdate as _selfupdate  # noqa: E402
 import update_download as _dl  # noqa: E402
 import update_source as _src  # noqa: E402
-from ui import label  # noqa: E402
+from ui import flow_row, label  # noqa: E402
 
 # ScrollPage и Worker живут в main.py, а не в ui.py: `label` — это про вид,
 # а полоса прокрутки и поток — про устройство окна.
@@ -121,7 +121,9 @@ class UpdateTab(ScrollPage):
         outer.addWidget(prog)
 
         # --- кнопки
-        row = QHBoxLayout()
+        # Ряд переносящийся: три кнопки с длинными подписями в обычном
+        # QHBoxLayout при узком окне сжимаются, и подписи срезаются.
+        row = flow_row()
         self.btn_check = QPushButton("Проверить обновление")
         self.btn_check.clicked.connect(self._check_clicked)
         self.btn_apply = QPushButton("Скачать и применить")
@@ -130,11 +132,10 @@ class UpdateTab(ScrollPage):
         self.btn_rollback = QPushButton("Вернуть из бэкапа")
         self.btn_rollback.clicked.connect(self._rollback_clicked)
         self.btn_rollback.setEnabled(False)
-        row.addWidget(self.btn_check)
-        row.addWidget(self.btn_apply)
-        row.addWidget(self.btn_rollback)
-        row.addStretch(1)
-        outer.addLayout(row)
+        row.add(self.btn_check)
+        row.add(self.btn_apply)
+        row.add(self.btn_rollback)
+        outer.addWidget(row)
 
         # --- бэкап
         box2 = QGroupBox("Бэкап перед последним обновлением")
@@ -142,15 +143,14 @@ class UpdateTab(ScrollPage):
         self.lbl_backup = QLabel("—")
         self.lbl_backup.setWordWrap(True)
         b2.addWidget(self.lbl_backup)
-        row2 = QHBoxLayout()
+        row2 = flow_row()
         self.btn_open_backup = QPushButton("Открыть папку")
         self.btn_open_backup.clicked.connect(self._open_backup)
         self.btn_drop_backup = QPushButton("Удалить бэкап")
         self.btn_drop_backup.clicked.connect(self._drop_backup_clicked)
-        row2.addWidget(self.btn_open_backup)
-        row2.addWidget(self.btn_drop_backup)
-        row2.addStretch(1)
-        b2.addLayout(row2)
+        row2.add(self.btn_open_backup)
+        row2.add(self.btn_drop_backup)
+        b2.addWidget(row2)
         outer.addWidget(box2)
 
         outer.addStretch(1)

@@ -541,6 +541,114 @@ def row(*widgets, stretch_last: bool = False) -> QWidget:
     return holder
 
 
+class FlowRow(QWidget):
+    """Ряд элементов, который переносится на следующую строку сам.
+
+    Обычный QHBoxLayout не переносится. Когда ряд не помещается, Qt не
+    переносит кнопки на следующую строку, а сжимает их, и подписи
+    обрезаются. Измерено на вкладке «Программы»: кнопке «Проверить
+    обновление» при окне 895 досталось 125 пикселей вместо 160, и
+    человек видел «Проверить обновле…».
+
+    Здесь строки пересобираются при каждой смене ширины: что не
+    поместилось — уходит на следующую строку целиком. Разбивка идёт по
+    настоящей ширине элемента (sizeHint), а не по минимальной: если
+    мерить по минимальной, ряд снова схлопнется и подписи срежутся.
+
+    Последняя строка добивается растягивателем до края, иначе кнопки
+    висели бы сбоку без причины.
+    """
+
+    def __init__(self, parent=None, spacing: int = 8) -> None:
+        super().__init__(parent)
+        self._items: list[QWidget] = []
+        self._rows: list[QWidget] = []
+        self._spacing = spacing
+        self._last_width = -1
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(spacing)
+        # Ряд сам решает, сколько ему строк, поэтому по высоте он
+        # занимает ровно столько, сколько занял, а по ширине не должен
+        # требовать больше, чем есть.
+        self.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
+        )
+
+    def add(self, widget: QWidget) -> QWidget:
+        """Добавляет элемент в ряд. Возвращает его же — для цепочек."""
+        self._items.append(widget)
+        self._last_width = -1
+        self._reflow()
+        return widget
+
+    def count(self) -> int:
+        """Сколько элементов в ряду."""
+        return len(self._items)
+
+    def _row_at(self, index: int) -> QWidget:
+        while len(self._rows) <= index:
+            holder = QWidget()
+            holder.setSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+            )
+            inner = QHBoxLayout(holder)
+            inner.setContentsMargins(0, 0, 0, 0)
+            inner.setSpacing(self._spacing)
+            self.layout().addWidget(holder)
+            self._rows.append(holder)
+        return self._rows[index]
+
+    def _reflow(self, force: bool = False) -> None:
+        width = self.width()
+        if width <= 0:
+            return
+        if not force and width == self._last_width:
+            return
+        self._last_width = width
+        # Сначала вынимаем всё из прежних строк: при переносе элемент
+        # должен уйти в новую строку целиком, а не остаться в старой.
+        for holder in self._rows:
+            inner = holder.layout()
+            while inner.count():
+                inner.takeAt(0)
+        current: QWidget | None = None
+        used = 0
+        rows_used = 0
+        for widget in self._items:
+            need = widget.sizeHint().width()
+            if current is None or (
+                used and used + self._spacing + need > width
+            ):
+                current = self._row_at(rows_used)
+                rows_used += 1
+                current.setVisible(True)
+                used = 0
+            current.layout().addWidget(widget)
+            used += (self._spacing if used else 0) + need
+        if current is not None:
+            current.layout().addStretch(1)
+        for index in range(rows_used, len(self._rows)):
+            self._rows[index].setVisible(False)
+        self.layout().activate()
+
+    def resizeEvent(self, event) -> None:  # noqa: D102
+        super().resizeEvent(event)
+        self._reflow()
+
+    def showEvent(self, event) -> None:  # noqa: D102
+        super().showEvent(event)
+        self._reflow(force=True)
+
+
+def flow_row(*widgets: QWidget, spacing: int = 8) -> FlowRow:
+    """Ряд, который сам переносится на следующую строку."""
+    holder = FlowRow(spacing=spacing)
+    for widget in widgets:
+        holder.add(widget)
+    return holder
+
+
 def column(*widgets, spacing: int = 8) -> QWidget:
     """Вертикальный столбец элементов."""
     holder = QWidget()

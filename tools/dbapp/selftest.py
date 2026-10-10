@@ -245,6 +245,68 @@ def main() -> int:
         check(not _wide,
               f"содержимое вкладок не шире окна: {_wide or 'везде помещается'}")
 
+        # Переносимая подпись обязана быть выше своего текста. Qt не
+        # пересчитывает высоту подписи с переносом, когда страницу сжали
+        # по ширине: слова уходят на новую строку, а рамка остаётся от
+        # прежней ширины, и последняя строка срезается пополам, прямо
+        # посреди букв. Измерено на вкладке «Программы»: 16 подписей,
+        # самая короткая имела высоту 6 пикселей при нужных 36, то есть
+        # текст не был виден вообще.
+        _clipped = []
+        from PyQt6.QtWidgets import QLabel, QPushButton
+        for _i in range(window.tabs.count()):
+            _page = window.tabs.widget(_i)
+            if not hasattr(_page, "refresh_height"):
+                continue
+            _page.refresh_height()
+            for _ in range(3):
+                app.processEvents()
+            _inner_layout = _page._inner.layout()
+            if _inner_layout is not None:
+                _inner_layout.activate()
+            for _label in _page._inner.findChildren(QLabel):
+                if not _label.wordWrap() or _label.width() <= 0:
+                    continue
+                _need = _label.heightForWidth(_label.width())
+                if _need and _need > _label.height() + 1:
+                    _clipped.append(
+                        f"{window.tabs.tabText(_i)}: {_label.text()[:24]!r} "
+                        f"нужно {_need}, есть {_label.height()}"
+                    )
+        check(not _clipped,
+              "переносимые подписи не срезаны снизу"
+              + (f": {'; '.join(_clipped[:3])}" if _clipped else ""))
+
+        # Ряд кнопок обязан переноситься, а не сжиматься. Обычный
+        # QHBoxLayout при нехватке ширины сжимает кнопки и режет
+        # подписи: «Проверить обновление» получало 125 пикселей вместо
+        # 160. Считаем на настоящем ряде из ui.FlowRow.
+        _row = ui.FlowRow()
+        _wide_buttons = []
+        for _name in ("Проверить обновление", "Скачать и применить",
+                      "Вернуть из бэкапа"):
+            _row.add(QPushButton(_name))
+        _row.resize(150, 40)
+        _row._reflow(force=True)
+        for _ in range(3):
+            app.processEvents()
+        for _i in range(_row.count()):
+            _holder = _row.layout().itemAt(0).widget()
+            _inner_row = _holder.layout()
+            for _k in range(_inner_row.count()):
+                _btn = _inner_row.itemAt(_k).widget()
+                if _btn is None or not isinstance(_btn, QPushButton):
+                    continue
+                if _btn.width() + 1 < _btn.sizeHint().width():
+                    _wide_buttons.append(
+                        f"{_btn.text()}: {_btn.width()} при {_btn.sizeHint().width()}"
+                    )
+        check(not _wide_buttons,
+              "ряд кнопок переносится, а не сжимает подписи"
+              + (f": {'; '.join(_wide_buttons[:3])}" if _wide_buttons else ""))
+        check(_row.layout().count() >= 2,
+              "и кнопки уходят на следующую строку, а не впритык")
+
         # И ширину страницы надо уметь уменьшать: без этого Qt отдаёт ей
         # ширину по содержимому и рамки с длинными заголовками держат
         # всё остальное за правым краем.

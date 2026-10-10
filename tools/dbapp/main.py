@@ -160,17 +160,44 @@ class ScrollPage(QScrollArea):
         Qt сжать содержимое до его минимумов, а горизонтальной
         прокрутки у страницы нет намеренно.
         """
+        limit = self.viewport().width()
+        if limit > 0 and self._inner.maximumWidth() != limit:
+            self._inner.setMaximumWidth(limit)
+        self._fit_wrapped()
         layout = self._inner.layout()
         if layout is None:
             return
+        layout.activate()
         need = layout.minimumSize().height()
         hint = layout.sizeHint().height()
         value = max(need, hint)
         if self._inner.minimumHeight() != value:
             self._inner.setMinimumHeight(value)
-        limit = self.viewport().width()
-        if limit > 0 and self._inner.maximumWidth() != limit:
-            self._inner.setMaximumWidth(limit)
+
+    def _fit_wrapped(self) -> None:
+        """Растягивает переносимые подписи под их текст.
+
+        Qt не пересчитывает высоту подписи с переносом строк, когда
+        страницу сжали по ширине: слова переносятся на новую строку,
+        а рамка подписи остаётся от прежней ширины — и последняя
+        строка обрезается пополам, прямо посреди букв. Измерено на
+        вкладке «Программы»: 16 подписей, самая короткая имела высоту
+        6 пикселей при нужных 36, то есть текст не был виден вообще.
+
+        Считать высоту надо у каждой подписи по её собственной
+        ширине, потому что длина текста разная, и после обрезки надо
+        пересчитать раскладку — иначе высота страницы будет посчитана
+        по старым, обрезанным подписям.
+
+        Минимальная высота, а не фиксированная: при расширении окна
+        строки снова встанут в одну, и подпись сама станет ниже.
+        """
+        for label in self._inner.findChildren(QLabel):
+            if not label.wordWrap() or label.width() <= 0:
+                continue
+            needed = label.heightForWidth(label.width())
+            if needed > 0 and label.minimumHeight() != needed:
+                label.setMinimumHeight(needed)
 
 
 class Worker(QThread):
@@ -6787,7 +6814,7 @@ class ProgramsTab(ScrollPage):
                          kind="dim", wrap=True)
             )
 
-        buttons = ui.row()
+        buttons = ui.flow_row()
         row: dict[str, QPushButton] = {}
         for code, label, hint in card.buttons():
             btn = QPushButton(label)
@@ -6818,8 +6845,7 @@ class ProgramsTab(ScrollPage):
                 btn.clicked.connect(
                     lambda _=False, u=card.install.official_url: self._open_page(u))
             row[code] = btn
-            buttons.layout().addWidget(btn)
-        buttons.layout().addStretch(1)
+            buttons.add(btn)
         layout.addWidget(buttons)
 
         # Строка результата: сюда пишется ход установки и итог. Пустая
