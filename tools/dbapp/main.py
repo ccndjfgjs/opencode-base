@@ -3886,11 +3886,22 @@ class CapsTab(ScrollPage):
         self.btn_skills_all = QPushButton("Отметить все")
         self.btn_skills_none = QPushButton("Снять все")
         self.btn_skills_reload = QPushButton("Обновить список")
+        # Проверка обновлений у авторов. Отдельная кнопка, а не
+        # продолжение «Обновить список»: та просто перерисовывает
+        # содержимое базы, эта ходит в сеть и сравнивает с тем, что
+        # лежит у автора.
+        self.btn_skills_check = QPushButton("Проверить обновления скилов")
+        self.btn_skills_check.setToolTip(
+            "Сравнить наши скилы с тем, что лежит у их авторов. "
+            "Ничего не обновляет: показывает, у кого появилось, и "
+            "разницу. Переводы не трогает — их нечем заменить "
+            "автоматически.")
         self.btn_skills_put = QPushButton("Поставить отмеченные")
         self.btn_skills_drop = QPushButton("Убрать отмеченные")
         row_skills.addWidget(self.btn_skills_all)
         row_skills.addWidget(self.btn_skills_none)
         row_skills.addWidget(self.btn_skills_reload)
+        row_skills.addWidget(self.btn_skills_check)
         row_skills.addStretch(1)
         row_skills.addWidget(self.btn_skills_put)
         row_skills.addWidget(self.btn_skills_drop)
@@ -4170,6 +4181,7 @@ class CapsTab(ScrollPage):
         self.btn_skills_all.clicked.connect(lambda: self._set_all_caps_skills(True))
         self.btn_skills_none.clicked.connect(lambda: self._set_all_caps_skills(False))
         self.btn_skills_reload.clicked.connect(lambda: self._fill_caps_skills())
+        self.btn_skills_check.clicked.connect(self._check_skill_updates)
         self.btn_skills_put.clicked.connect(self._install_skills)
         self.btn_skills_drop.clicked.connect(self._remove_skills)
         self.caps_skills_list.itemChanged.connect(self._caps_skills_changed)
@@ -5393,6 +5405,120 @@ class CapsTab(ScrollPage):
             self.caps_skills_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
             self.caps_skills_hint.setText(f"Отмечено: {chosen} из {total}.")
 
+    def _check_skill_updates(self) -> None:
+        """Проверить, не появилось ли нового у авторов наших скилов.
+
+        Идёт в сеть и в рабочий поток: двадцать скилов — это двадцать
+        запросов, по 0,3 секунды пауза между ними, и на это нужны
+        секунды. Главный поток при этом свободен, окно не «отвечает».
+        """
+        import skill_sources
+
+        base = self._base()
+
+        def job(progress):
+            rows, errors = skill_sources.check_updates(base, progress)
+            # Результат кладём на вкладку: диалог покажет именно его, а
+            # не результат повторного запроса из обработчика.
+            self._skill_check_rows = rows
+            lines = [f"{r['skill']}: {r['state']}" + (
+                f" ({r['date']})" if r["date"] else "") for r in rows]
+            return lines, errors
+
+        self._start(job, "skills-check")
+
+    def _skill_update_report(self, rows: list) -> None:
+        """Диалог по итогам проверки: у кого появилось и как это смотреть."""
+        import skill_sources
+
+        if not rows:
+            self._warn("Проверять нечего: список источников пуст.")
+            return
+        behind = [r for r in rows if r["state"] == skill_sources.ST_BEHIND]
+        fresh = [r for r in rows if r["state"] == skill_sources.ST_FRESH]
+        unknown = [r for r in rows if r["state"] == skill_sources.ST_UNKNOWN]
+        offline = [r for r in rows if r["state"] == skill_sources.ST_NO_NET]
+
+        parts = []
+        if behind:
+            parts.append("У авторов появилось: " + ", ".join(
+                r["skill"] for r in behind))
+        if fresh:
+            parts.append(f"Совпадает с авторским: {len(fresh)}.")
+        if unknown:
+            parts.append("Источник неизвестен, проверка в следующий раз: "
+                         + ", ".join(r["skill"] for r in unknown))
+        if offline:
+            parts.append("Не проверилось (нет сети или адрес отвергнут): "
+                         + ", ".join(r["skill"] for r in offline))
+        parts.append("")
+        parts.append("Ничего не обновлено: наши скилы — переводы, и "
+                     "оригинал автора затёр бы перевод. Открой разницу "
+                     "и переводи сам.")
+
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Обновления скилов")
+        dialog.setText("\n".join(parts))
+        if behind:
+            names = "\n".join(r["skill"] for r in behind)
+            box = QVBoxLayout()
+            chooser = QComboBox()
+            chooser.addItems(names.split("\n"))
+            show = QPushButton("Посмотреть разницу")
+            take = QPushButton("Взять оригинал автора")
+
+            def _show():
+                src = next((r for r in behind if r["skill"] == chooser.currentText()),
+                           None)
+                if src is None:
+                    return
+                theirs = skill_sources.fetch_original(src)
+                if not theirs:
+                    self._warn("Оригинал не скачался: нет сети или папка "
+                               "называется иначе.")
+                    return
+                ours = skill_sources.local_skill_text(self._base(), src["skill"])
+                lines = skill_sources.diff_lines(ours, theirs)
+                dlg = QMessageBox(self)
+                dlg.setWindowTitle(f"Разница: {src['skill']}")
+                dlg.setText("Слева наш перевод, справа оригинал автора.\n"
+                            "Перевод не тронут.")
+                dlg.setDetailedText("\n".join(lines[:400]))
+                dlg.exec()
+
+            def _take():
+                src = next((r for r in behind if r["skill"] == chooser.currentText()),
+                           None)
+                if src is None:
+                    return
+                theirs = skill_sources.fetch_original(src)
+                if not theirs:
+                    self._warn("Оригинал не скачался.")
+                    return
+                folder = core.current_base("opencode") / "skills" / src["skill"]
+                path = skill_sources.save_original(folder, theirs)
+                if path is None:
+                    self._warn("Не удалось записать оригинал.")
+                    return
+                self.log.add(f"Оригинал {src['skill']} сохранён: {path}", "ok")
+                dialog.close()
+
+            show.clicked.connect(_show)
+            take.clicked.connect(_take)
+            box.addWidget(chooser)
+            row = QHBoxLayout()
+            row.addWidget(show)
+            row.addWidget(take)
+            box.addLayout(row)
+            holder = QWidget()
+            holder.setLayout(box)
+            dialog.setInformativeText("Выбери скил:")
+            holder.setParent(dialog)
+            holder.setVisible(True)
+            holder.move(dialog.width() - 220, dialog.height() - 80)
+            holder.raise_()
+        dialog.exec()
+
     def _install_skills(self) -> None:
         dest = self._dest()
         if dest is None:
@@ -5668,6 +5794,15 @@ class CapsTab(ScrollPage):
             if reg_dest is not None:
                 mcp_registry.mark_installed(self.reg_servers, reg_dest)
                 self._reg_paint()
+        elif self._what == "skills-check":
+            # Отчёт по скилам показываем диалогом: в журнале строки
+            # «у автора появилось» легко пролистать, а человек пришёл
+            # сюда за ответом. Результат берём из работы, а не проверяем
+            # заново: повторный запрос — это двадцать обращений в сеть
+            # впустую и, что хуже, возможно другой ответ.
+            rows = getattr(self, "_skill_check_rows", None)
+            if rows:
+                self._skill_update_report(rows)
 
     def _base(self) -> Path:
         return core.app_root()

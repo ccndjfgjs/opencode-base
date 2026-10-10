@@ -542,6 +542,67 @@ def main() -> int:
         _panel.hide()
         for _ in range(3):
             app.processEvents()
+
+        # ---- обновление скилов от авторов
+        #
+        # Скилы у нас — адаптированные переводы чужих наборов. Автоматически
+        # заменить их оригиналами нельзя: оригинал английский и стёр бы
+        # перевод. Поэтому программа только говорит, у кого появилось, и
+        # показывает разницу.
+        import skill_sources
+
+        _base_dir = core.current_base("opencode")
+        _sources = skill_sources.load_sources(_base_dir)
+        check(bool(_sources),
+              f"список источников скилов прочитан: {len(_sources)} штук")
+        _repos = {s["repo"] for s in _sources}
+        check(all(skill_sources._good_repo(r) for r in _repos),
+              f"все адреса проходят проверку: {sorted(_repos)}")
+        # Адрес вида ../../etc не должен пройти: он попадает в запрос.
+        check(not skill_sources._good_repo("../../etc/passwd")
+              and not skill_sources._good_repo("a/b/c")
+              and not skill_sources._good_repo("плохой адрес"),
+              "кривые адреса отвергаются до запроса")
+        # Каждый указанный скил обязан реально лежать на диске: иначе
+        # список разошёлся бы с базой и проверял бы то, чего нет.
+        _missing_skill = [s["skill"] for s in _sources
+                          if not (_base_dir / "skills" / s["skill"]).is_dir()]
+        check(not _missing_skill,
+              f"каждый скил из списка есть на диске: нет {_missing_skill or 'ни одного'}")
+        # Кнопка на вкладке opencode и подсказка с честным обещанием.
+        check(hasattr(window.caps_tab, "btn_skills_check"),
+              "кнопка проверки обновлений собрана на вкладке opencode")
+        _btn_txt = getattr(window.caps_tab, "btn_skills_check", None)
+        check(_btn_txt is not None and _btn_txt.toolTip(),
+              "и подсказка у неё есть, что она не обновляет сама")
+        # Разница: наш перевод против изменённого текста обязана что-то
+        # показать, а одинаковые — ничего.
+        _ours = "строка один\nстрока два\n"
+        check(any(l.startswith("+") for l in
+                  skill_sources.diff_lines(_ours, "строка один\nстрока три\n")),
+              "разница показывает добавленную строку")
+        check(skill_sources.diff_lines(_ours, _ours) == ["Различий нет."],
+              "одинаковые тексты дают «Различий нет», а не пустоту")
+        # Оригинал кладётся рядом и не трогает перевод.
+        _tmp_skill = _base_dir / "skills" / "селект-самопроверки"
+        _try = _tmp_skill / core.SKILL_MARKER
+        _try.parent.mkdir(parents=True, exist_ok=True)
+        _try.write_text("\u043d\u0430\u0448 \u043f\u0435\u0440\u0435\u0432\u043e\u0434\n",
+                        encoding="utf-8")
+        try:
+            _saved = skill_sources.save_original(_tmp_skill, "original\n")
+            check(_saved is not None and _try.read_text(encoding="utf-8")
+                  == "\u043d\u0430\u0448 \u043f\u0435\u0440\u0435\u0432\u043e\u0434\n",
+                  "оригинал кладётся рядом, а перевод остаётся нетронутым")
+        finally:
+            import shutil as _sh
+
+            _sh.rmtree(_tmp_skill, ignore_errors=True)
+        # Плагин не должен сносить скил с оригиналом: он не из базы.
+        _plugin = core.program_root() / "config" / "plugins" / "memory-base.js"
+        _plugin_text = _plugin.read_text(encoding="utf-8") if _plugin.is_file() else ""
+        check("SKILL.md.\u043e\u0440\u0438\u0433\u0438\u043d\u0430\u043b" in _plugin_text,
+              "плагин не удаляет скил, у которого лежит оригинал автора")
         # Реальный add_action: новый пункт обязан встать ПЕРЕД выходом.
         # Разделитель стоит перед «Закрыть программу», и add_action
         # вставляет перед ним. Проверка на настоящем списке, а не на
