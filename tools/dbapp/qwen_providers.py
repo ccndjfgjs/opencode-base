@@ -16,7 +16,12 @@
 ни про Qwen Code, ни про git не знает — это всё забота вызывающего. И ключ
 наружу не отдаётся: в `providers()` его нет вовсе, а `provider_key` отдаёт
 его ровно одному — вызывающему, чтобы положить в окружение процесса; в
-команды, журналы и окно значение не попадает никогда.
+команды, журналы и окно значение не попадает никогда. Вместо значения
+наружу идёт маска: `mask_key` показывает первые 4 символа и длину, а
+`mask_text` вычищает ключ из чужого текста — провайдер в ответе на 401
+любит цитировать присланный ключ целиком, и без этого он уезжал бы в
+журнал и окно ошибок. Откуда взят ключ, словами без значения говорит
+`provider_key_info`.
 """
 
 from __future__ import annotations
@@ -258,30 +263,83 @@ def provider_fits(npm: str, base_url: str, models: list[str]) -> tuple[bool, str
     return False, "не видно, что провайдер говорит на языке OpenAI"
 
 
-def provider_key(dest: Path, provider_id: str) -> str:
-    """Ключ провайдера из настроек — только для окружения запуска.
+def mask_key(key: str) -> str:
+    """Маска ключа вместо значения: первые 4 символа и длина.
+
+    Ключ в ответах на 401 провайдер часто цитирует целиком, и без маски
+    он уезжал бы в журнал, консоль и окно ошибок — так однажды уже
+    случилось. Поэтому наружу отдаётся только маска.
+    """
+    key = (key or "").strip()
+    if not key:
+        return ""
+    return f"{key[:4]}… (длина {len(key)})"
+
+
+def mask_text(text: str, key: str) -> str:
+    """Вычищает значение ключа из чужого текста: вывод, ошибки, журнал."""
+    key = (key or "").strip()
+    if not key or key not in text:
+        return text
+    return text.replace(key, mask_key(key))
+
+
+def provider_key_info(dest: Path, provider_id: str) -> tuple[str, str]:
+    """Ключ провайдера и словами, откуда он взят.
 
     Значение не печатается и не пишется в наши файлы: в состояние попадает
-    лишь имя провайдера и модель.
+    лишь имя провайдера и модель, а наружу вместо значения идёт маска.
 
-    В настройках opencode ключ записан двумя способами: прямо строкой либо
-    ссылкой на переменную окружения. Ссылка у opencode выглядит как
-    `{env:ИМЯ}`, а не как `${ИМЯ}`. Разбирался только второй вид, и ссылка
-    уходила в Qwen Code как есть: провайдер вместо ключа получал строку
-    «{env:...}» и отвечал 401 Invalid API key. Поэтому разбираем оба вида,
-    а пустое значение отдаём пустым — вызывающий сам скажет об этом
-    человеку.
+    Порядок получения жёсткий: сначала переменная окружения по именам из
+    поля env провайдера, потом ссылка на переменную в apiKey («{env:ИМЯ}»
+    у opencode, «${ИМЯ}» — второй вид, который когда-то разбирали в
+    одиночку), и только потом литерал в файле. Итого переменная окружения
+    всегда сильнее литерала: ключ можно сменить, не трогая настройки.
+
+    Источник возвращается словами и без значения: «переменная окружения
+    X», «ссылка {env:X}», «литерал в opencode.jsonc (первые 4 символа:
+    dah…)». Пустая пара — записи нет или apiKey не задан вовсе.
     """
     try:
         text = _config(dest).read_text(encoding="utf-8")
     except OSError:
-        return ""
+        return "", ""
+    import opencode_caps  # noqa: PLC0415 — рядом лежит, круга нет
+
+    # Комментарии снимаются до поиска записи — так же, как в providers():
+    # иначе комментарий с несбалансированной { внутри записи смещал
+    # границы, и ключ читался не оттуда.
+    text = opencode_caps.strip_jsonc(text)
     entry = _entry_text(text, provider_id)
     if not entry:
-        return ""
-    key = _str_field(entry, "apiKey").strip()
-    if key.startswith("{env:") and key.endswith("}"):
-        return os.environ.get(key[5:-1].strip(), "").strip()
-    if key.startswith("${") and key.endswith("}"):
-        return os.environ.get(key[2:-1].strip(), "").strip()
-    return key
+        return "", ""
+    # 1) Переменная окружения по именам из поля env провайдера.
+    env_names = _env_names(entry)
+    for name in env_names:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value, f"переменная окружения {name}"
+    raw = _str_field(entry, "apiKey").strip()
+    # 2) Ссылка на переменную окружения в самом apiKey.
+    if raw.startswith("{env:") and raw.endswith("}"):
+        name = raw[5:-1].strip()
+        return os.environ.get(name, "").strip(), f"ссылка {{env:{name}}}"
+    if raw.startswith("${") and raw.endswith("}"):
+        name = raw[2:-1].strip()
+        return os.environ.get(name, "").strip(), f"переменная окружения {name}"
+    # 3) Литерал в файле: наружу отдаём как есть, а показывают его маской.
+    if raw:
+        return raw, "литерал в opencode.jsonc (первые 4 символа: " + raw[:4] + "…)"
+    if env_names:
+        return "", "переменная окружения " + ", ".join(env_names) + " — не задана"
+    return "", ""
+
+
+def provider_key(dest: Path, provider_id: str) -> str:
+    """Ключ провайдера из настроек — только для окружения запуска.
+
+    Значение не печатается и не пишется в наши файлы: в состояние попадает
+    лишь имя провайдера и модель. Порядок получения (переменная окружения
+    → ссылка → литерал) и слова об источнике — в provider_key_info.
+    """
+    return provider_key_info(dest, provider_id)[0]

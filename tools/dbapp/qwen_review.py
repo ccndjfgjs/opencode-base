@@ -318,6 +318,28 @@ def provider_key(dest: Path, provider_id: str) -> str:
     return qwen_providers.provider_key(dest, provider_id)
 
 
+def provider_key_info(dest: Path, provider_id: str) -> tuple[str, str]:
+    """Ключ и словами, откуда он взят: имя переменной окружения, ссылка
+    {env:ИМЯ} или литерал с маской. Само значение наружу не выходит."""
+    import qwen_providers  # noqa: PLC0415 — рядом лежит, круга нет
+
+    return qwen_providers.provider_key_info(dest, provider_id)
+
+
+def mask_key(key: str) -> str:
+    """Маска ключа: первые 4 символа и длина вместо значения."""
+    import qwen_providers  # noqa: PLC0415 — рядом лежит, круга нет
+
+    return qwen_providers.mask_key(key)
+
+
+def mask_text(text: str, key: str) -> str:
+    """Вычищает значение ключа из чужого текста: вывод, ошибки, журнал."""
+    import qwen_providers  # noqa: PLC0415 — рядом лежит, круга нет
+
+    return qwen_providers.mask_text(text, key)
+
+
 def choose(dest: Path, provider_id: str, model: str,
            progress=None) -> tuple[list[str], list[str]]:
     """Запоминает выбор провайдера и модели и пишет настройки Qwen Code.
@@ -377,6 +399,9 @@ def choose(dest: Path, provider_id: str, model: str,
         say(f"Адрес для Qwen Code взят из настроек opencode: {base}")
     say(f"Настройки Qwen Code лежат в нашем доме: {folder} (личный ~/.qwen не тронут).")
     say("Ключ провайдера в настройки не записан: он уедет в окружение процесса при запуске.")
+    _key, _source = provider_key_info(dest, provider_id)
+    if _source:
+        say(f"Ключ возьмётся из: {_source}.")
     if provider_id == "lmarena":
         say(LMARENA_WARNING)
     say(COST_WARNING)
@@ -740,20 +765,20 @@ def run(dest: Path, project: Path, prompt: str, diff_text: str,
     log = _open_log(dest, "ревью")
     env = run_env(dest)
     provider_id = str(selection.get("provider") or "")
-    key = provider_key(dest, provider_id)
+    key, key_source = provider_key_info(dest, provider_id)
     if not key:
         # Раньше запуск уходил в провайдера без ключа и тот отвечал 401
         # «Invalid API key» — выглядело так, будто сломан ревьюер. Дешевле
-        # и честнее сказать сразу, где ключа нет.
+        # и честнее сказать сразу, где ключа нет: имя переменной окружения
+        # называется по имени, само значение не печатается.
+        detail = key_source or "в настройках opencode не задан apiKey"
         if log:
             log.write("Запуск без ключа: у провайдера «"
-                      + (provider_id or "?") + "» нет apiKey в настройках"
-                      + " opencode.\n")
+                      + (provider_id or "?") + "» — " + detail + ".\n")
             log.close()
         return messages, [
-            "У провайдера «" + (provider_id or "?") + "» нет ключа: в "
-            "настройках opencode не задан apiKey или не задана переменная "
-            "окружения, на которую он ссылается. Ревью не запускалось."
+            "У провайдера «" + (provider_id or "?") + "» нет ключа: "
+            + detail + ". Ревью не запускалось."
         ], {}
     env["OPENAI_API_KEY"] = key
     base = str(selection.get("base_url") or "")
@@ -769,7 +794,12 @@ def run(dest: Path, project: Path, prompt: str, diff_text: str,
             encoding="utf-8", errors="replace", env=env, timeout=timeout,
             startupinfo=_hidden_startupinfo(),
         )
-        code, out, err = done.returncode, done.stdout or "", done.stderr or ""
+        code = done.returncode
+        # Провайдер в ответе на 401 любит цитировать присланный ключ
+        # целиком — без маскирования он уехал бы в журнал и в окно
+        # ошибок (так однажды случилось с ключом dahl).
+        out = mask_text(done.stdout or "", key)
+        err = mask_text(done.stderr or "", key)
     except (OSError, subprocess.SubprocessError) as exc:
         if log:
             log.close()

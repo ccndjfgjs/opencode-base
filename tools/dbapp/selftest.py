@@ -8783,14 +8783,21 @@ def main() -> int:
             '{"provider": {"тест-": {"npm": "@ai-sdk/openai-compatible",'
             ' "apiKey": "{env:SELFTEST_QR_KEY}"},'
             ' "прямой-": {"apiKey": "просто-ключ"},'
+            ' "окружение-": {"npm": "@ai-sdk/openai-compatible",'
+            ' "apiKey": "литерал-из-файла", "env": ["SELFTEST_QR_ENV_KEY"]},'
+            ' "без-ключа-": {"npm": "@ai-sdk/openai-compatible",'
+            ' "env": ["SELFTEST_QR_ENV_KEY"]},'
             ' "нет-": {"npm": "@ai-sdk/openai-compatible"}}}',
             encoding="utf-8")
         if str(_root / "tools" / "dbapp") not in sys.path:
             sys.path.insert(0, str(_root / "tools" / "dbapp"))
         import qwen_review as _qr
+        import qwen_providers as _qp
         import os as _qr_os  # noqa: PLC0415 — по образцу остальных проверок
         _was = _qr_os.environ.get("SELFTEST_QR_KEY")
         _qr_os.environ["SELFTEST_QR_KEY"] = "подставленный-ключ"
+        _was_env = _qr_os.environ.get("SELFTEST_QR_ENV_KEY")
+        _qr_os.environ["SELFTEST_QR_ENV_KEY"] = "ключ-из-окружения"
         try:
             check(_qr.provider_key(_qr_dir, "тест-") == "подставленный-ключ",
                   "ключ по ссылке {env:ИМЯ} берётся из переменной окружения")
@@ -8798,15 +8805,69 @@ def main() -> int:
                   "ключ, записанный строкой, берётся как есть")
             check(_qr.provider_key(_qr_dir, "нет-") == "",
                   "у провайдера без apiKey ключ пустой, а не ссылка")
+            # Порядок получения ключа жёсткий: переменная окружения сильнее
+            # литерала. Иначе смена ключа требует правки настроек opencode.
+            check(_qr.provider_key(_qr_dir, "окружение-") == "ключ-из-окружения",
+                  "переменная окружения из поля env сильнее литерала в файле")
+            _qr_os.environ.pop("SELFTEST_QR_ENV_KEY", None)
+            check(_qr.provider_key(_qr_dir, "окружение-") == "литерал-из-файла",
+                  "переменной окружения нет — берётся литерал из файла")
+            # Маска: наружу вместо ключа идут первые 4 символа и длина.
+            _secret = "sk-секретный-ключ-123456"
+            _mask = _qp.mask_key(_secret)
+            check(_secret[:4] in _mask and str(len(_secret)) in _mask,
+                  "маска показывает первые 4 символа ключа и длину")
+            check(_secret not in _mask and len(_mask) < len(_secret),
+                  "маска не содержит полного ключа")
+            check(_qp.mask_text("ошибка 401: ключ " + _secret + " неверен",
+                                _secret)
+                  == "ошибка 401: ключ " + _mask + " неверен",
+                  "маскирование вычищает ключ из чужого текста")
+            check(_qr.provider_key_info(_qr_dir, "прямой-")[1]
+                  == "литерал в opencode.jsonc (первые 4 символа: прос…)",
+                  "источник литерала описывается словами с маской значения")
+            check(_qr.provider_key_info(_qr_dir, "тест-")[1]
+                  == "ссылка {env:SELFTEST_QR_KEY}",
+                  "источник по ссылке описывается именем переменной окружения")
+            check(_qr.provider_key_info(_qr_dir, "окружение-")[1]
+                  == "литерал в opencode.jsonc (первые 4 символа: лите…)",
+                  "переменной нет — источником назван литерал с маской")
+            check(_qr.provider_key_info(_qr_dir, "без-ключа-")[1]
+                  == "переменная окружения SELFTEST_QR_ENV_KEY — не задана",
+                  "неназначенная переменная из поля env называется по имени")
         finally:
             if _was is None:
                 _qr_os.environ.pop("SELFTEST_QR_KEY", None)
             else:
                 _qr_os.environ["SELFTEST_QR_KEY"] = _was
+            if _was_env is None:
+                _qr_os.environ.pop("SELFTEST_QR_ENV_KEY", None)
+            else:
+                _qr_os.environ["SELFTEST_QR_ENV_KEY"] = _was_env
     except ImportError:
         check(False, "модуль ревьюера импортируется для проверки ключа")
     finally:
         shutil.rmtree(_qr_dir, ignore_errors=True)
+
+    # Комментарий с несбалансированной { внутри записи провайдера смещал
+    # границы: в provider_key сырой файл разбирался без strip_jsonc, в
+    # отличие от providers(), и ключ читался не оттуда. Проверяем, что
+    # обе функции видят файл одинаково.
+    _qc_dir = Path(tempfile.mkdtemp(prefix="selftest-qwencmt-"))
+    try:
+        (_qc_dir / "opencode.jsonc").write_text(
+            '{\n  "provider": {\n'
+            '    // заметка с несбалансированной { скобкой внутри\n'
+            '    "с-комментарием-": {"apiKey": "ключ-под-комментарием"}\n'
+            '  }\n}\n',
+            encoding="utf-8")
+        check(_qr.provider_key(_qc_dir, "с-комментарием-")
+              == "ключ-под-комментарием",
+              "provider_key снимает комментарии jsonc до поиска записи")
+    except NameError:
+        check(False, "модуль ревьюера импортируется для проверки комментариев")
+    finally:
+        shutil.rmtree(_qc_dir, ignore_errors=True)
 
     # 2. Ошибка, которую команда вернула, но не показала, обязана быть
     #    напечатана: иначе «код 1 и ни слова» — это не диагностика.
