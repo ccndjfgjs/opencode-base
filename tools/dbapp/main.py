@@ -3901,11 +3901,20 @@ class CapsTab(ScrollPage):
         row_skills.addWidget(self.btn_skills_all)
         row_skills.addWidget(self.btn_skills_none)
         row_skills.addWidget(self.btn_skills_reload)
-        row_skills.addWidget(self.btn_skills_check)
         row_skills.addStretch(1)
         row_skills.addWidget(self.btn_skills_put)
         row_skills.addWidget(self.btn_skills_drop)
         skills_layout.addLayout(row_skills)
+
+        # Проверка обновлений — на своей строке. В общий ряд она не
+        # помещалась: шесть кнопок в линию не влезают в ширину окна, Qt
+        # растягивал их на всю ширину блока, и кнопка уезжала за край
+        # экрана целиком — измерено: все шесть были по 640 пикселей при
+        # окне 895. Человек её не видел вовсе.
+        row_skills_check = QHBoxLayout()
+        row_skills_check.addWidget(self.btn_skills_check)
+        row_skills_check.addStretch(1)
+        skills_layout.addLayout(row_skills_check)
 
         self.caps_skills_hint = ui.label("", kind="dim", wrap=True)
         skills_layout.addWidget(self.caps_skills_hint)
