@@ -23,7 +23,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from PyQt6.QtCore import QPoint, Qt, QTimer
+from PyQt6.QtCore import QEvent, QPoint, Qt, QTimer
 from PyQt6.QtWidgets import (
     QApplication,
     QFrame,
@@ -84,6 +84,11 @@ CATEGORY_BY_ID = {
 
 BASE_BRIDGES_TITLE = "Мосты базы"
 REVIEWERS_TITLE = "Ревьюеры"
+
+# Значок закрытия. Крестик, а не «×» из другого шрифта: у этого знака
+# оптическая масса больше, чем у буквы, поэтому он на пару пикселей
+# меньше по размеру иначе кажется тяжелее соседней кнопки.
+CLOSE_CAPTION = "✕"
 
 # Ширина панели. Меньше, чем хотелось сначала: окно у трея — не рабочее
 # окно, а быстрый список, и оно перекрывает угол экрана. Широкое окно
@@ -475,6 +480,17 @@ class TrayPanel(QWidget):
         self.btn_refresh.setFixedHeight(24)
         self.btn_refresh.clicked.connect(self.refresh)
         head.addWidget(self.btn_refresh, 0)
+        # Крестик в шапке. Без него панель было нечем закрыть: ни одного
+        # элемента управления для выхода нет, а вернуться к значку в
+        # трее, чтобы нажать на него ещё раз, — отдельный квест. У
+        # всплывающего окна выход должен быть видно сразу.
+        self.btn_close = QPushButton(CLOSE_CAPTION)
+        self.btn_close.setObjectName("TrayPanelClose")
+        self.btn_close.setFixedSize(24, 24)
+        self.btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_close.setToolTip("Закрыть панель (Esc)")
+        self.btn_close.clicked.connect(self.hide)
+        head.addWidget(self.btn_close, 0)
         outer.addLayout(head)
         outer.addWidget(ui.line())
 
@@ -497,7 +513,57 @@ class TrayPanel(QWidget):
         # Панель запоминает себя на окне сразу при создании. Ищут её
         # потом и трей, и кнопка «Проверить» изнутри самой панели.
         _attach(window, self)
+        # Наведение мыши на саму панель гасим, иначе под курсором
+        # остаётся серый прямоугольник — окно без рамки, но с рамкой
+        # от подсветки Qt, и это выглядит как чужой элемент.
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         self.refresh()
+
+    # ---- закрытие
+
+    def showEvent(self, event) -> None:  # noqa: N802 — имя из Qt
+        """Включить перехват кликов, пока панель на экране.
+
+        Перехват включается на время показа и снимается при закрытии:
+        постоянный фильтр на всё приложение перехватывал бы события
+        зря, даже когда панели на экране нет.
+        """
+        super().showEvent(event)
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+
+    def hideEvent(self, event) -> None:  # noqa: N802 — имя из Qt
+        app = QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
+        super().hideEvent(event)
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 — имя из Qt
+        """Клик мимо панели закрывает её.
+
+        Так ведёт себя любое всплывающее окно: нажал в стороне — оно
+        спряталось. Без этого единственный способ закрыть панель —
+        дотянуться до значка в трее, ради чего окно и появлялось.
+        """
+        if event.type() == QEvent.Type.DeferredDelete:
+            # Панель уничтожается, а hideEvent при этом не обязательно
+            # приходит — например, когда её снимают вместе с родителем.
+            # Оставшийся фильтр на QApplication заставил бы Qt звать
+            # метод уже мёртвого объекта. Снимаем себя первым делом.
+            app = QApplication.instance()
+            if app is not None:
+                app.removeEventFilter(self)
+            return False
+        if event.type() == QEvent.Type.MouseButtonPress:
+            point = event.globalPosition().toPoint()
+            if not self.geometry().contains(point):
+                self.hide()
+        elif event.type() == QEvent.Type.KeyPress:
+            if event.key() == Qt.Key.Key_Escape:
+                self.hide()
+                return True
+        return super().eventFilter(watched, event)
 
     # ---- содержимое
 

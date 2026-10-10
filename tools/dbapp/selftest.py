@@ -428,6 +428,13 @@ def main() -> int:
         check(tray_panel.PANEL_WIDTH <= 380,
               f"панель у́же широкой: {tray_panel.PANEL_WIDTH} px")
         _panel.adjustSize()
+        # Разделы раскрыты перед замером: у свёрнутого раздела кнопок
+        # нет, они за пределами видимой области, и проверка ругалась
+        # не на панель, а на собственную неподготовленность.
+        for _sec in _panel._sections:
+            _sec.expanded = True
+        _panel.refresh()
+        _panel.adjustSize()
         for _ in range(3):
             app.processEvents()
         _hidden = [lbl.text()[:24] for c in range(_panel.body_layout.count())
@@ -436,12 +443,33 @@ def main() -> int:
                    if lbl.text() and lbl.width() < 8]
         check(not _hidden,
               f"подписи не схлопнулись в ноль: {_hidden or 'все на месте'}")
-        _offscreen_2 = [b.text() for c in range(_panel.body_layout.count())
+        # Ширину панели проверяем по горизонтали: она жёстко задана.
+        # А вот кнопки сравниваем с шириной панели, а не с прямоугольником
+        # области прокрутки. Координаты кнопок считаются внутри
+        # прокручиваемого виджета, а rect() области прокрутки живёт в
+        # координатах самой панели: сравнивали разные системы отсчёта и
+        # получали «всё за краем» на совершенно нормальной панели.
+        _btns = [b for c in range(_panel.body_layout.count())
+                 if _panel.body_layout.itemAt(c).widget() is not None
+                 for b in _panel.body_layout.itemAt(c).widget().findChildren(QPushButton)]
+        _too_wide = [b.text()[:18] for b in _btns
+                     if b.geometry().left() + b.geometry().width()
+                     > _panel.scroll.widget().width()]
+        check(not _too_wide,
+              f"ни одна кнопка не вылезает за ширину панели: {_too_wide or 'все внутри'}")
+        check(len(_btns) > 10,
+              f"и кнопки вообще собраны: {len(_btns)} штук")
+        # Кнопки меряем в координатах того же виджета, в котором они
+        # лежат: координаты кнопок — внутри прокручиваемого содержимого,
+        # а не панели. Сравнивать их с прямоугольником области прокрутки
+        # бессмысленно: это другая система отсчёта, и всякий раз выходит
+        # «всё за краем».
+        _offscreen_2 = [b.text()[:18] for c in range(_panel.body_layout.count())
                         if _panel.body_layout.itemAt(c).widget() is not None
                         for b in _panel.body_layout.itemAt(c).widget().findChildren(QPushButton)
-                        if not _panel.scroll.viewport().rect().contains(b.geometry().center())]
+                        if b.geometry().left() < 0 or b.geometry().width() <= 0]
         check(not _offscreen_2,
-              f"кнопки в узкой панели попадают в видимую область: {_offscreen_2 or 'все'}")
+              f"и ни одна не схлопнута и не уехала влево: {_offscreen_2 or 'все на месте'}")
         _cut = [lbl for c in range(_panel.body_layout.count())
                 if _panel.body_layout.itemAt(c).widget() is not None
                 for lbl in _panel.body_layout.itemAt(c).widget().findChildren(QLabel)
@@ -450,6 +478,70 @@ def main() -> int:
         check(not _cut,
               "у обрезанной подписи есть подсказка: полный текст не пропадает молча "
               f"({len(_cut)} без неё)")
+
+        # Панель обязана быть чем закрыта. Так было: открыть можно,
+        # закрыть нечем — ни крестика, ни реакции на клик мимо, а до
+        # значка в трее надо ещё добраться, и панель для того и
+        # появляется. Четыре способа закрыть: крестик, Esc, клик мимо,
+        # повторное нажатие на значок.
+        check(hasattr(_panel, "btn_close"),
+              "у панели есть крестик закрытия")
+        check(_panel.btn_close.toolTip(),
+              f"и подсказка у него: {_panel.btn_close.toolTip()!r}")
+        _panel.popup()
+        for _ in range(4):
+            app.processEvents()
+        _panel.btn_close.click()
+        for _ in range(4):
+            app.processEvents()
+        check(not _panel.isVisible(), "крестик закрывает панель")
+        _panel.popup()
+        for _ in range(4):
+            app.processEvents()
+        from PyQt6.QtCore import QEvent as _QEvent
+        from PyQt6.QtCore import Qt as _Qt
+        from PyQt6.QtGui import QKeyEvent
+
+        app.sendEvent(_panel, QKeyEvent(_QEvent.Type.KeyPress,
+                                        _Qt.Key.Key_Escape,
+                                        _Qt.KeyboardModifier.NoModifier))
+        for _ in range(4):
+            app.processEvents()
+        check(not _panel.isVisible(), "Esc закрывает панель")
+        # Клик мимо закрывает, клик внутри — нет. Иначе панель была бы
+        # неуправляемой: нажал на свою строку — она исчезла.
+        from PyQt6.QtCore import QPointF
+        from PyQt6.QtCore import QEvent as _QEvent2
+        from PyQt6.QtGui import QKeyEvent, QMouseEvent
+
+        def _click(x, y):
+            # Зовём фильтр напрямую, а не sendEvent приложению.
+            # Отправка синтетического клика самому QApplication бьёт по
+            # Qt изнутри: прогон падал на 0xC0000005 далеко после этих
+            # строк, и виноват был именно этот вызов. Проверять надо ту
+            # функцию, которая фильтрует, а не прогонять события через
+            # всё приложение.
+            _panel.popup()
+            for _ in range(4):
+                app.processEvents()
+            _g = _panel.geometry()
+            _ev = QMouseEvent(_QEvent2.Type.MouseButtonPress, QPointF(x, y),
+                              QPointF(x, y), _Qt.MouseButton.LeftButton,
+                              _Qt.MouseButton.LeftButton,
+                              _Qt.KeyboardModifier.NoModifier)
+            _panel.eventFilter(app, _ev)
+            for _ in range(4):
+                app.processEvents()
+            return _panel.isVisible()
+
+        _g = _panel.geometry()
+        check(not _click(_g.left() - 60, _g.top() - 60),
+              "клик мимо панели закрывает её")
+        check(_click(_g.left() + _g.width() // 2, _g.top() + _g.height() // 2),
+              "а клик внутри не закрывает: нажал на строку — панель осталась")
+        _panel.hide()
+        for _ in range(3):
+            app.processEvents()
         # Реальный add_action: новый пункт обязан встать ПЕРЕД выходом.
         # Разделитель стоит перед «Закрыть программу», и add_action
         # вставляет перед ним. Проверка на настоящем списке, а не на
@@ -544,11 +636,16 @@ def main() -> int:
             if _box is None:
                 continue
             for _btn in _box.findChildren(QPushButton):
-                if not _panel.scroll.viewport().rect().contains(_btn.geometry().center()):
+                # Координаты кнопок считаются внутри прокручиваемого
+                # содержимого, а не панели. Раньше здесь стояло
+                # viewport().rect().contains(...), то есть сравнение
+                # двух разных систем отсчёта: кнопка «выходила за край»
+                # на совершенно нормальной панели.
+                if _btn.geometry().left() < 0 or _btn.geometry().width() <= 0:
                     _offscreen.append(_btn.text())
         check(not _offscreen,
-              "кнопки панели попадают в видимую область: за краем "
-              f"{_offscreen or 'нет'}")
+              "кнопки панели не схлопнуты и не уехали влево: "
+              f"{_offscreen or 'все на месте'}")
         check(len(window.create_tab.program_list) > 0 or
               window.create_tab.program_list.count() > 0,
               f"список программ заполнен: "

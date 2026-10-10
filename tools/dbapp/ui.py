@@ -60,6 +60,22 @@ QPushButton {{
 }}
 QPushButton:hover {{ border-color: {ACCENT}; color: {ACCENT}; }}
 QPushButton:pressed {{ background: {ACCENT_DIM}; }}
+/* Крестик закрытия. Без рамки: он не действие, а выход, и рамка на нём
+   превращала бы его в такую же кнопку, как соседнюю, и тянула взгляд на
+   пустое место. Цвет приглушённый: крестик заметен, но не спорит с
+   заголовком панели. */
+QPushButton#TrayPanelClose {{
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: {TEXT_DIM};
+    padding: 0;
+    font-size: 13px;
+}}
+QPushButton#TrayPanelClose:hover {{
+    background: {PANEL_ALT};
+    color: {TEXT};
+}}
 QScrollBar:vertical {{
     background: transparent;
     width: 10px;
