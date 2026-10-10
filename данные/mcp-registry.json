@@ -393,7 +393,10 @@
         "version_measured": "2026-10-06",
         "bridge_checked": false,
         "known_good": [],
-        "version_note": "Стоит. Мост не проверялся."
+        "version_note": "Стоит. Мост не проверялся.",
+        "previous_versions": [
+          "2026.1"
+        ]
       },
       "connection": {
         "kind": "remote",

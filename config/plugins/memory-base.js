@@ -178,10 +178,20 @@ function syncSkills() {
       }
     }
 
-    // скиллы, которых больше нет в базе, — убрать из opencode
+    // скиллы, которых больше нет в базе, — убрать из opencode.
+    // Исключение: скил, у которого в самой папке лежит файл
+    // SKILL.md.оригинал. Это метка «здесь стоит скачанный оригинал»,
+    // и такой скил нельзя сносить молча: он не в списке базы потому,
+    // что приехал от автора, а не от конструктора. Раньше такой
+    // скил удалялся на следующем же запуске.
     for (const entry of readdirSync(dst, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue
       const name = entry.name.replace(/\.md$/i, "")
+      const hasOriginal = existsSync(path.join(dst, entry.name, "SKILL.md.оригинал"))
+      if (hasOriginal) {
+        debug(`skill kept: ${entry.name} (есть оригинал автора)`)
+        continue
+      }
       if (!names.includes(name) && !names.includes(entry.name)) {
         rmSync(path.join(dst, entry.name), { recursive: true, force: true })
         debug(`skill removed: ${entry.name} (нет в базе)`)
