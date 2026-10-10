@@ -163,6 +163,7 @@ class ScrollPage(QScrollArea):
         limit = self.viewport().width()
         if limit > 0 and self._inner.maximumWidth() != limit:
             self._inner.setMaximumWidth(limit)
+        self._wrap_rows_later()
         self._fit_wrapped()
         layout = self._inner.layout()
         if layout is None:
@@ -173,6 +174,30 @@ class ScrollPage(QScrollArea):
         value = max(need, hint)
         if self._inner.minimumHeight() != value:
             self._inner.setMinimumHeight(value)
+
+    def _wrap_rows_later(self) -> None:
+        """Переносит ряды кнопок, но не сейчас, а следующим тактом.
+
+        Перестроение раскладки прямо во время сборки окна роняет Qt на
+       мертвь: проверено, окно падало с 0xC0000409 ещё на создании.
+        Поэтому работа уходит в отдельный такт цикла событий, когда
+        раскладки уже никто не считает, и делается один раз на страницу
+        — иначе она переписывала бы саму себя при каждой смене ширины.
+        """
+        if getattr(self, "_rows_wrapped", False):
+            return
+        self._rows_wrapped = True
+
+        def do_wrap() -> None:
+            try:
+                ui.wrap_button_rows(self._inner)
+                self.refresh_height()
+            except Exception:  # noqa: BLE001
+                # Не сломанный ряд — не повод ронять программу: остаётся
+                # как было, лишь часть подписей при узком окне срежется.
+                self._rows_wrapped = False
+
+        QTimer.singleShot(0, do_wrap)
 
     def _fit_wrapped(self) -> None:
         """Растягивает переносимые подписи под их текст.
@@ -335,8 +360,7 @@ class CreateTab(ScrollPage):
         # Решение человека о чувствительных данных. По умолчанию
         # выключено: без прямой просьбы секретное не пишется.
         self.chk_sensitive = QCheckBox(
-            "Разрешить в этой базе пароли и ключи "
-            "(иначе нейросеть откажется их записывать)"
+            "Разрешить в этой базе пароли и ключи"
         )
         self.chk_sensitive.setToolTip(
             "Сними галочку — нейросеть не будет записывать пароли, ключи "
@@ -3378,7 +3402,7 @@ class CapsTab(ScrollPage):
         "pc": "Мост ПК — файлы, программы, скриншоты (всё через спрос)",
         "ncp": "Мост NCP — память, библиотека, 7 инструментов",
         "agents": "13 агентов — поиск, план, код, проверка и другие",
-        "antiblock": "Обход блокировок — запуск OpenCode через прокси, пул обновляется сам",
+        "antiblock": "Обход блокировок — запуск OpenCode через прокси",
         "rtk": "rtk — вывод команд короче (нужен rtk в PATH)",
         "caveman": "caveman — ответы короче (правила в AGENTS.md)",
         "pxpipe": "pxpipe — запросы картинками (локальный прокси)",
@@ -3755,7 +3779,7 @@ class CapsTab(ScrollPage):
             row_qw_btns.addWidget(button)
         row_qw_btns.addStretch(1)
         qw_layout.addLayout(row_qw_btns)
-        self.qw_debate = QCheckBox("спор — ревьюер и основная модель спорят до предела раундов")
+        self.qw_debate = QCheckBox("спор — ревьюер против модели")
         self.qw_debate.setToolTip(
             "Отдельный режим, по умолчанию выключен. Ревьюер присылает "
             "замечания, основной агент возражает с обоснованием, ревьюер "
@@ -3861,16 +3885,27 @@ class CapsTab(ScrollPage):
         import antiblock as _ab  # noqa: PLC0415 — рядом лежит, круга нет
 
         self.achecks: dict[str, QCheckBox] = {}
-        for key, title in (
+        # Подпись у галочки короткая, а подробности — в подсказке. Qt не
+        # переносит текст внутри QCheckBox, и длинная подпись просто
+        # обрезалась: измерено при минимальном окне 720, «Защищённый DNS»
+        # получал 422 пикселя вместо 526 и конец пропадал. Обрезанное
+        # должно оставаться достижимым — для этого подсказка.
+        for key, title, tip in (
             ("facade",
              f"Переводчик и запуск (фасад 127.0.0.1:{_ab.facade_port()} "
-             "+ ярлык-запуск)"),
-            ("lists", "Бесплатные списки (SOCKS5-пул + VLESS-подписки + автообновление раз в сутки)"),
-            ("dns", "Защищённый DNS (DoH: Google/Cloudflare/Quad9/AdGuard) — запасной способ обхода"),
-            ("command", "Команда /обход внутри OpenCode"),
-            ("shortcut", "Ярлык «OpenCode (обход)» с иконкой программы на рабочий стол"),
+             "+ ярлык-запуск)",
+             "Поднимает переводчик на своём порту и создаёт ярлык запуска"),
+            ("lists", "Бесплатные списки",
+             "SOCKS5-пул и VLESS-подписки, обновляются раз в сутки сами"),
+            ("dns", "Защищённый DNS",
+             "DoH через Google, Cloudflare, Quad9 или AdGuard — запасной "
+             "способ обхода, если прокси не помог"),
+            ("command", "Команда /обход", "Команда /обход внутри OpenCode"),
+            ("shortcut", "Ярлык «OpenCode (обход)»",
+             "Ярлык на рабочий стол с иконкой самой программы"),
         ):
             box = QCheckBox(title)
+            box.setToolTip(tip)
             box.setChecked(True)
             ab_layout.addWidget(box)
             self.achecks[key] = box

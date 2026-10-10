@@ -9,6 +9,7 @@ from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPalette, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
+    QAbstractButton,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -562,6 +563,7 @@ class FlowRow(QWidget):
     def __init__(self, parent=None, spacing: int = 8) -> None:
         super().__init__(parent)
         self._items: list[QWidget] = []
+        self._labels: list[QWidget] = []
         self._rows: list[QWidget] = []
         self._spacing = spacing
         self._last_width = -1
@@ -581,6 +583,17 @@ class FlowRow(QWidget):
         self._last_width = -1
         self._reflow()
         return widget
+
+    def setLabels(self, labels: list[QWidget]) -> None:
+        """Задаёт подписи, которые всегда остаются на первой строке.
+
+        Это имя блока слева от кнопок: на следующую строку оно уходить
+        не должно, иначе кнопки окажутся без своего названия. Ширина
+        подписи входит в счёт первой строки — иначе ряд решит, что
+        поместилось больше, чем на самом деле есть места.
+        """
+        self._labels = list(labels)
+        self._last_width = -1
 
     def count(self) -> int:
         """Сколько элементов в ряду."""
@@ -612,18 +625,27 @@ class FlowRow(QWidget):
             inner = holder.layout()
             while inner.count():
                 inner.takeAt(0)
-        current: QWidget | None = None
-        used = 0
         rows_used = 0
+
+        def start_row() -> tuple[QWidget, int]:
+            """Заводит новую строку. Первая сразу получает подписи."""
+            nonlocal rows_used
+            holder = self._row_at(rows_used)
+            rows_used += 1
+            holder.setVisible(True)
+            taken = 0
+            if rows_used == 1:
+                for label in self._labels:
+                    holder.layout().addWidget(label)
+                    taken += (self._spacing if taken else 0)
+                    taken += label.sizeHint().width()
+            return holder, taken
+
+        current, used = start_row()
         for widget in self._items:
             need = widget.sizeHint().width()
-            if current is None or (
-                used and used + self._spacing + need > width
-            ):
-                current = self._row_at(rows_used)
-                rows_used += 1
-                current.setVisible(True)
-                used = 0
+            if used and used + self._spacing + need > width:
+                current, used = start_row()
             current.layout().addWidget(widget)
             used += (self._spacing if used else 0) + need
         if current is not None:
@@ -639,6 +661,77 @@ class FlowRow(QWidget):
     def showEvent(self, event) -> None:  # noqa: D102
         super().showEvent(event)
         self._reflow(force=True)
+
+
+def wrap_button_rows(root: QWidget) -> int:
+    """Заменяет ряды из одних кнопок на переносящиеся. Возвращает, сколько.
+
+    Ряды кнопок в программе собраны обычными QHBoxLayout — их много, и
+    переписывать каждый вручную бессмысленно: при другой ширине окна
+    поедут другие ряды. Общее правило надёжнее: любой ряд, где лежат
+    только кнопки (плюс растягиватели), перестаёт сжимать подписи и
+    переносит не поместившееся на следующую строку.
+
+    Измерено на вкладке opencode при окне 720, минимальном для
+    программы: таких рядов было 8, и подписи обрезались с двух сторон —
+    «Проверить окруже|», «збрать greenligh|t», «ить iOS-прилож|».
+
+    Ряд заменяется на FlowRow один раз: пометка на самом layout
+    защищает от повторной переделки при каждой смене ширины.
+    """
+    changed = 0
+    for layout in list(root.findChildren(QHBoxLayout)):
+        if layout.parent() is None:
+            continue
+        if layout.property("flow_ready"):
+            continue
+        labels: list[QWidget] = []
+        buttons: list[QWidget] = []
+        plain = True
+        seen_button = False
+        for index in range(layout.count()):
+            item = layout.itemAt(index)
+            if item.spacerItem() is not None:
+                continue
+            widget = item.widget()
+            if widget is None:
+                plain = False
+                break
+            if isinstance(widget, QAbstractButton):
+                seen_button = True
+                buttons.append(widget)
+            elif isinstance(widget, QLabel) and not seen_button:
+                # Подпись слева от кнопок — имя того, что переключают.
+                # На новые строки она не уходит: иначе карточка перестаёт
+                # читаться, имя оказывается в стороне от своих кнопок.
+                labels.append(widget)
+            else:
+                plain = False
+                break
+        # Ряд из одной кнопки переносить некуда, и пустой — не дело.
+        if not plain or len(buttons) < 2:
+            continue
+        parent_layout = layout.parent()
+        position = -1
+        for index in range(parent_layout.count()):
+            if parent_layout.itemAt(index).layout() is layout:
+                position = index
+                break
+        if position < 0:
+            continue
+        layout.setProperty("flow_ready", True)
+        row = FlowRow()
+        row.setLabels(labels)
+        for button in buttons:
+            row.add(button)
+        # Элементы переедут в новый ряд сами: у виджета может быть только
+        # одна раскладка. Старый ряд вынимаем и убираем — иначе он
+        # продолжит держать страницу широкой.
+        parent_layout.takeAt(position)
+        layout.deleteLater()
+        parent_layout.insertWidget(position, row)
+        changed += 1
+    return changed
 
 
 def flow_row(*widgets: QWidget, spacing: int = 8) -> FlowRow:
