@@ -9529,6 +9529,59 @@ def main() -> int:
     except Exception as _gw_exc:  # noqa: BLE001 — замер не должен ронять проверку
         check(False, f"замер геометрии упал: {_gw_exc}")
 
+    # ---- 8м-2. Окно умеет тройное ревью: выбор режима в диалоге ревью
+    #
+    # Блок плана 4. Диалог выбора проекта получил список режимов из общего
+    # qwen_review.MODES, а _qw_run при выборе vote зовёт review_vote, а не
+    # review. Проверяем по коду и по собранному диалогу: окно не должно
+    # уметь меньше командной строки.
+    echo("\n--- 8м-2. Окно: тройное ревью назначается в диалоге ревью ---")
+    try:
+        _rv_dlg = getattr(window, "caps_tab", None)
+        if _rv_dlg is None:
+            check(False, "вкладка opencode собрана для проверки окна ревью")
+        else:
+            _rv_dialog = None
+            try:
+                _rv_dialog = app_main.QwenReviewDialog(window)
+            except Exception as _rv_exc:  # noqa: BLE001
+                check(False, f"диалог ревью собирается: {_rv_exc}")
+            if _rv_dialog is not None:
+                try:
+                    _rv_ids = [
+                        str(_rv_dialog.mode.itemData(i))
+                        for i in range(_rv_dialog.mode.count())
+                    ]
+                    check(_qr.MODE_VOTE in _rv_ids,
+                          f"в диалоге ревью есть тройное ревью: {_rv_ids}")
+                    check(_qr.MODE_DEBATE in _rv_ids,
+                          "спор в диалоге ревью не потерялся")
+                    check(_qr.MODE_ONCE in _rv_ids,
+                          "одна проверка в диалоге ревью не потерялась")
+                    _rv_values = _rv_dialog.values()
+                    check("mode" in _rv_values,
+                          "диалог отдаёт выбранный режим")
+                    check(str(_rv_values.get("mode")) in _qr.mode_ids(),
+                          f"режим диалога из известных: "
+                          f"{_rv_values.get('mode')}")
+                finally:
+                    _rv_dialog.deleteLater()
+            # Свой алиас, не общее inspect: в этом блоке inspect уже
+            # занят соседним разделом, и имя без алиаса снова дало бы
+            # UnboundLocalError «cannot access local variable».
+            import inspect as _rv_inspect  # noqa: PLC0415
+            _rvs = _rv_inspect.getsource(type(_rv_dlg)._qw_run)
+            check("review_vote" in _rvs,
+                  "окно запускает тройное ревью через review_vote")
+            check("MODE_VOTE" in _rvs,
+                  "окно различает режим тройного ревью")
+            check("mode_from_flag" in _rvs,
+                  "начальное значение комбо берётся из галочки спора")
+    except (ImportError, NameError) as _rv_imp:
+        check(False, f"модуль ревьюера импортируется для проверки 8м-2: {_rv_imp}")
+    except Exception as _rv_exc:  # noqa: BLE001 — блок проверок не роняет прогон
+        check(False, f"блок проверок 8м-2 упал, не оборвав прогон: {_rv_exc}")
+
     # ---- 8м. Тройное ревью: панель, свод голосования, три ключа
     #
     # Сети и ревьюера здесь нет: run подменяется синтетикой, ключи

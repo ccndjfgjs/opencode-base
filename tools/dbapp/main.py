@@ -3116,6 +3116,25 @@ class QwenReviewDialog(QDialog):
             kind="dim", wrap=True,
         ))
 
+        # Режим ревью — из общего списка qwen_review.MODES, а не хардкод.
+        # Выбор в комбо (once/debate/vote); спором управляет человек.
+        row_mode = QHBoxLayout()
+        row_mode.addWidget(QLabel("Режим:   "))
+        self.mode = QComboBox()
+        for _mode in qwen_review.MODES:
+            self.mode.addItem(str(_mode.get("name") or _mode["id"]),
+                              str(_mode.get("id") or ""))
+        self.mode.setToolTip(
+            "«Одна проверка» — ревьюер прочитал diff и вернул замечания. "
+            "«Спор» — обмен возражениями двух моделей до N раундов, решает "
+            "человек. «Тройное ревью» — три обличья из панели ловят одну "
+            "проблему дважды, а её повтор подтверждается двумя моделями. "
+            "Спор с тройным ревью совмещать нельзя: программа откажет "
+            "сама."
+        )
+        row_mode.addWidget(self.mode, 1)
+        box.addLayout(row_mode)
+
         self.status = ui.label("", wrap=True)
         box.addWidget(self.status)
 
@@ -3140,10 +3159,11 @@ class QwenReviewDialog(QDialog):
             self.project.setText(chosen)
 
     def values(self) -> dict:
-        """Выбор человека: папка проекта и база сравнения."""
+        """Выбор человека: папка проекта, база сравнения и режим."""
         return {
             "project": self.project.text().strip(),
             "base": self.base.text().strip(),
+            "mode": str(self.mode.currentData() or qwen_review.MODE_ONCE),
         }
 
     def _accept(self) -> None:
@@ -6590,14 +6610,19 @@ class CapsTab(ScrollPage):
             )
             return
         dialog = QwenReviewDialog(self)
+        # Начальное значение комбо режима — режим вкладки: галочка «спор»
+        # включена → спор, снята → одна проверка. Человек поправит сам,
+        # если ему нужно тройное ревью.
+        _default_mode = qwen_review.mode_from_flag(self.qw_debate.isChecked())
+        _i = dialog.mode.findData(_default_mode)
+        if _i >= 0:
+            dialog.mode.setCurrentIndex(_i)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         values = dialog.values()
         rounds = int(self.qw_rounds.value())
-        # Режим читается из общего списка qwen_review.MODES по состоянию
-        # старой галочки, а не хардкодом: включена — «спор».
-        if qwen_review.mode_from_flag(
-                self.qw_debate.isChecked()) == qwen_review.MODE_DEBATE:
+        mode = str(values.get("mode") or qwen_review.MODE_ONCE)
+        if mode == qwen_review.MODE_DEBATE:
             answer = QMessageBox.question(
                 self, "Ревьюер и спор",
                 qwen_review.COST_WARNING + "\n\n" + qwen_review.DEBATE_WARNING
@@ -6606,11 +6631,21 @@ class CapsTab(ScrollPage):
             if answer != QMessageBox.StandardButton.Yes:
                 return
 
-        def job(progress):
-            return qwen_review.review(
-                dest, Path(values["project"]), values["base"],
-                rounds=rounds, progress=progress,
-            )
+        if mode == qwen_review.MODE_VOTE:
+            # Тройное ревью: три модели из панели, один diff, свод с
+            # метками «кого заметили двое/трое». Пустая панель — отказ
+            # словами, а не пустой запуск: ревью не тратится ни секунды.
+            def job(progress):
+                return qwen_review.review_vote(
+                    dest, Path(values["project"]), values["base"],
+                    progress=progress,
+                )
+        else:
+            def job(progress):
+                return qwen_review.review(
+                    dest, Path(values["project"]), values["base"],
+                    rounds=rounds, progress=progress,
+                )
 
         self._start(job, "Qwen Code")
 
