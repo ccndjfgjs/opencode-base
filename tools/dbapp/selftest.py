@@ -8563,6 +8563,17 @@ def main() -> int:
         "    import time; time.sleep(30)\n",
         encoding="utf-8",
     )
+    # Боевая метка — не наша: проба захватывает метку только под
+    # переопределённым тестовым именем. Если программа сейчас запущена,
+    # её боевая метка занята законно, и самопроверка обязана оставить
+    # её ровно такой, какой застала. Запоминаем состояние до пробы.
+    try:
+        _prod_lock = _main._lock_path()
+        _prod_before = (
+            _prod_lock.read_text(encoding="utf-8", errors="replace")
+            if _prod_lock.exists() else None)
+    except OSError:
+        _prod_lock, _prod_before = None, None
     try:
         _first = subprocess.Popen([sys.executable, str(_probe), str(_pid_file)],
                                   stdout=subprocess.PIPE, text=True)
@@ -8629,12 +8640,42 @@ def main() -> int:
         # Проба, взявшая метку, засыпает на 30 с и выходит, не убрав
         # файл-метку. Пока он лежит, мёртвый номер владельца может
         # достаться любому новому процессу, и следующий прогон примет
-        # его за живого: было живьём, LOCK-BUSY навсегда. Метка здесь
-        # тестовая, боевое имя другое — убираем сами.
+        # его за живого: было живьём, LOCK-BUSY навсегда. Убираем
+        # ТОЛЬКО тестовые метки: проба создаёт их под переопределённым
+        # APP_SOCKET_NAME «opencode-base-selftest». _main._lock_path()
+        # в процессе самопроверки — боевой путь живой программы: её
+        # метку (защиту от второго экземпляра) тест стирать не вправе.
         try:
-            _main._lock_path().unlink(missing_ok=True)
+            for _stale in Path(tempfile.gettempdir()).glob(
+                    "opencode-base-selftest-*.lock"):
+                _stale.unlink(missing_ok=True)
         except OSError:
             pass
+
+    # Гигиена пробы замка: тестовые следы убраны, боевая метка живой
+    # программы не задета. Раньше очистка стирала боевую метку живой
+    # программы, а тестовая копилась в TEMP от прогона к прогону.
+    _stale_locks = sorted(p.name for p in Path(tempfile.gettempdir()).glob(
+        "opencode-base-selftest-*.lock"))
+    check(not _stale_locks,
+          "после пробы замка тестовых меток в TEMP не осталось: "
+          + (", ".join(_stale_locks) or "чисто"))
+    _self_src = Path(__file__).read_text(encoding="utf-8", errors="replace")
+    _needle = "_main._lock_path" + "().unlink"
+    check(_needle not in _self_src,
+          "очистка пробы замка не берёт боевой путь метки")
+    if _prod_lock is not None and _prod_before is not None:
+        _prod_after = None
+        try:
+            _prod_after = (_prod_lock.read_text(encoding="utf-8", errors="replace")
+                           if _prod_lock.exists() else None)
+        except OSError:
+            _prod_after = "недоступна"
+        check(_prod_after == _prod_before,
+              "проба замка не трогает боевую метку работающей программы"
+              if _prod_after == _prod_before else
+              f"боевая метка изменилась пробой: было {_prod_before!r}, "
+              f"стало {_prod_after!r}")
 
     # Кнопка «Настроить автоматически» не должна трогать конфиг,
     # когда блок уже записан. opencode перезапускает серверы MCP на
