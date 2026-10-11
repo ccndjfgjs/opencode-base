@@ -1160,7 +1160,9 @@ def run(dest: Path, project: Path, prompt: str, diff_text: str,
         return messages, [f"Qwen Code не запустился: {exc}"], {}
 
     if log:
-        log.write("$ " + " ".join(cmd) + "\n")
+        # Команда уходит в журнал строкой — и в ней сидит `-м <модель>`
+        # из панели, а модель человек мог вписать руками вместе с ключом.
+        log.write("$ " + mask_text(" ".join(cmd), key) + "\n")
         if err:
             log.write(err if err.endswith("\n") else err + "\n")
         log.write(f"===== код {code} =====\n")
@@ -1424,8 +1426,16 @@ def review_vote(dest: Path, project: Path, base: str = "",
         slot_messages = [mask_text(str(item), key) for item in slot_messages]
         slot_errors = [mask_text(str(item), key) for item in errs]
         if slot_errors:
-            messages.extend(slot_errors)
+            # Ошибка слота идёт и в errors, и на экран. Раньше она
+            # попадала только в messages, _main печатал пустой errors и
+            # отдавал код 0: свод собирался из одной модели вместо трёх
+            # и выглядел так, будто голосование прошло.
+            messages.extend(slot_messages)
+            for item in slot_errors:
+                errors.append(f"Слот {slot} ({provider} / {model}): {item}")
+                say(f"Слот {slot} не ответил: {item}")
             continue
+        messages.extend(slot_messages)
         reviews.append((model, result.get("text") or ""))
         usage = result.get("usage") or {}
         if usage:
@@ -1438,6 +1448,12 @@ def review_vote(dest: Path, project: Path, base: str = "",
             "Ни одна из трёх моделей не ответила: смотри ошибки выше."]
     say("")
     say("Свод тройного ревью:")
+    if len(reviews) < len(VOTE_SLOTS):
+        # Свод из не трёх ответов — это не голосование, и сказать об
+        # этом обязательно: иначе человек примет свод двух моделей за
+        # вывод трёх.
+        say(f"ВНИМАНИЕ: ответили {len(reviews)} из {len(VOTE_SLOTS)} — "
+            f"свод НЕполный, ошибки слотов выше.")
     for line in format_vote_summary(reviews):
         say(line)
     # Последний рубеж: итоговый доклад маскируем всеми тремя ключами
@@ -1472,9 +1488,16 @@ def _content_words(text: str) -> set:
     проверки installed()» и «нет тестов на маску» выглядели одинаково
     похожими. Смысловые слова у них разные, и после их отбрасывания
     пересечение пусто — как и должно быть.
+
+    ЧИСЛА ОСТАЮТСЯ, даже однозначные. Раньше отсев `len(word) > 2`
+    выбрасывал «5», «3», «1» — и «Разрешить 5 раундов» склеивалось с
+    «Разрешить 3 раунда»: числа разные, а свод говорил одно и то же.
+    Для панели из трёх слотов это особенно скверно: замечания «слот 1 и
+    слот 3» и «слот 1 и слот 2» слипались в одно.
     """
     return {word for word in _normalize_remark(text).split()
-            if word not in VOTE_STOPWORDS and len(word) > 2}
+            if word not in VOTE_STOPWORDS
+            and (word.isdigit() or len(word) > 2)}
 
 
 def _similar(a: str, b: str) -> float:
@@ -1490,6 +1513,14 @@ def _similar(a: str, b: str) -> float:
         return 0.0
     if a == b:
         return 1.0
+    # Числа в замечаниях РЕШАЮЩИЕ. Одних слов мало: «Лимит 120 моделей»
+    # и «Лимит 12 моделей» пересекаются по двум словам из трёх и давали
+    # ровно порог, а «слот 1 и слот 3» со «слот 1 и слот 2» — выше.
+    # Разные числа = разные замечания по существу.
+    left_numbers = set(re.findall(r"\d+", a))
+    right_numbers = set(re.findall(r"\d+", b))
+    if left_numbers and right_numbers and left_numbers != right_numbers:
+        return 0.0
     left = _content_words(a)
     right = _content_words(b)
     if not left or not right:
@@ -1529,7 +1560,13 @@ def _normalize_remark(text: str) -> str:
     text = re.sub(r"[_\-]", "\x00", text, flags=re.UNICODE)
     text = re.sub(r"[^\w\s\x00]+", " ", text, flags=re.UNICODE)
     text = re.sub(r"\s+", " ", text).strip()
-    return text.replace("\x00", "-")
+    # Дефис возвращается как РАЗДЕЛИТЕЛЬ, а не как часть слова: иначе
+    # «прод-а» и «прод-в» отличаются одним символом, а всё остальное в
+    # них совпадает — и свод объявлял замечания разных провайдеров одним
+    # и тем же (0.5 при пороге 0.5). Теперь это два разных токена, и
+    # пересечение у них пустое. Пара «прод-а»/«прод-б» при этом не
+    # рассыпается: сличаются по набору слов, а не посимвольно.
+    return text.replace("\x00 ", " ").replace("\x00", " ")
 
 
 def summarize_vote(reviews: list[tuple[str, str]]) -> list[dict]:
@@ -1667,11 +1704,19 @@ def panel_set(dest: Path, slot: str, provider: str, model: str,
         # Имена пишем только те, что реально есть в настройках: панель с
         # выдуманным провайдером упала бы позже, на первом же запросе.
         known = {item["id"]: item for item in providers(dest)}
+        # Отказы собираем по замаскированным именам. Раньше маска стояла
+        # ПОСЛЕ проверки, и отказ «У провайдера X нет модели <ключ>»
+        # печатал ключ целиком — как раз тот случай, от которого
+        # доктрина функции и обещает защиту.
+        _safe_provider = mask_known_keys(dest, provider)
+        _safe_model = mask_known_keys(dest, model)
         if provider not in known:
-            return [], [f"Провайдера «{provider}» в настройках opencode нет."]
+            return [], [
+                f"Провайдера «{_safe_provider}» в настройках opencode нет."]
         if model not in (known[provider].get("models") or []):
             return [], [
-                f"У провайдера «{provider}» нет модели «{model}». "
+                f"У провайдера «{_safe_provider}» нет модели "
+                f"«{_safe_model}». "
                 "Посмотри список командой providers."
             ]
         # Маска СВОИМ ключом слота: ключ, вставленный в имя модели или
@@ -1713,6 +1758,30 @@ def panel_clear(dest: Path, progress=None) -> tuple[list[str], list[str]]:
     return [message], []
 
 
+def mask_known_keys(dest: Path, text: str) -> str:
+    """Вычищает из текста ключи ЛЮБОГО известного провайдера.
+
+    Панель и её отказы правит человек, и ключ, вставленный в поле «модель»,
+    не обязательно принадлежит тому провайдеру, чьё имя стоит рядом. Маска
+    одного слота такой ключ пропускала: «Слот 1: пров-а / sk-ключ-БББ»
+    выводился насквозь. Поэтому здесь собираются ключи всех провайдеров
+    из настроек и применяются по очереди — лишних символов на экране это
+    не добавляет, зато закрывает путь.
+    """
+    text = str(text or "")
+    if not text:
+        return text
+    try:
+        found = providers(Path(dest))
+    except Exception:  # noqa: BLE001 — маска не должна ронять вывод
+        return text
+    for item in found:
+        key, _source = provider_key_info(Path(dest), item["id"])
+        if key:
+            text = mask_text(text, key)
+    return text
+
+
 def panel_show(dest: Path) -> list[str]:
     """Панель тройного ревью словами. Пустая — с подсказкой, что делать.
 
@@ -1733,10 +1802,13 @@ def panel_show(dest: Path) -> list[str]:
         if slot not in filled:
             continue
         text = f"Слот {slot}: {slots[slot]['provider']} / {slots[slot]['model']}"
+        # Маска слота — и общая: ключ, вписанный руками в имя модели,
+        # может принадлежать другому провайдеру, и своя маска его не
+        # поймает.
         slot_key, _ = provider_key_info(dest, slots[slot]["provider"])
         if slot_key:
             text = mask_text(text, slot_key)
-        lines.append(text)
+        lines.append(mask_known_keys(dest, text))
     if len(filled) < len(VOTE_SLOTS):
         lines.append("Не заполнены: слот " + ", ".join(
             s for s in VOTE_SLOTS if s not in filled) + ".")

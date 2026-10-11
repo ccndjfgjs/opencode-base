@@ -9721,8 +9721,14 @@ def main() -> int:
               "ни один ключ не попал в доклад тройного ревью")
         check("401" in _vp_all,
               "ошибка упавшего слота не потерялась")
-        check(not _vp_errors,
-              f"упавший слот не отменяет свод двух других: {_vp_errors}")
+        # Упавший слот НЕ отменяет свод двух других — но его ошибка обязана
+# быть видна: раньше здесь стояло `not _vp_errors`, то есть проверка
+# закрепляла молчание. Свод собирался из одной модели, печатался как
+# голосование, а код возврата был 0.
+        check(any("модель-б" in e for e in _vp_errors),
+              f"ошибка упавшего слота названа в ошибках: {_vp_errors}")
+        check("Свод тройного ревью" in _vp_all,
+              "упавший слот не отменяет свод двух других")
         check("Свод тройного ревью" in _vp_all,
               "свод напечатан после трёх запросов")
         check("модель-а, модель-в" in _vp_all,
@@ -9843,6 +9849,100 @@ def main() -> int:
         check(False, f"модуль ревьюера импортируется для проверки 8м: {_vp_imp}")
     finally:
         shutil.rmtree(_vp_dir, ignore_errors=True)
+
+    # ---- 8м-1. Замечания проверяющего к тройному ревью ----
+    # Шесть находок: упавший слот проглатывался, ключ утекал в отказы и
+    # в журнал, числа выпадали из сравнения, свод склеивал разные
+    # замечания. Каждая закрыта проверкой — иначе вернётся молча.
+    echo("\n--- 8м-1. Замечания проверяющего: утечки ключей и качество свода ---")
+    import inspect  # noqa: PLC0415 — по образцу соседних блоков
+    try:
+        # (1) Числа решающие: «120 против 12» и «слот 3 против слота 2»
+        # — разные замечания, а не одно.
+        for _a, _b in (
+            ("Разрешить 5 раундов", "Разрешить 3 раунда"),
+            ("Лимит 120 моделей", "Лимит 12 моделей"),
+            ("слот 1 и слот 3 не связаны", "слот 1 и слот 2 не связаны"),
+        ):
+            _sc = _qr._similar(_qr._normalize_remark(_a),
+                               _qr._normalize_remark(_b))
+            check(_sc < _qr.VOTE_SIMILARITY,
+                  f"числа различают замечания: «{_a}» / «{_b}» → {_sc:.3f}")
+        # Перефразы при этом обязаны по-прежнему склеиваться.
+        for _a, _b in (
+            ("не вызывается installed() в review_vote",
+             "нет проверки installed() в review_vote"),
+            ("нужны тесты на маску ключа", "нужны тесты на маску"),
+        ):
+            _sc2 = _qr._similar(_qr._normalize_remark(_a),
+                                _qr._normalize_remark(_b))
+            check(_sc2 >= _qr.VOTE_SIMILARITY,
+                  f"перефразы склеиваются: «{_a}» / «{_b}» → {_sc2:.3f}")
+
+        # (2) Общая маска по всем провайдерам: ключ, вписанный в поле
+        # «модель», может принадлежать другому провайдеру.
+        _mk_dir = Path(tempfile.mkdtemp(prefix="selftest-votemask-"))
+        try:
+            (_mk_dir / "opencode.jsonc").write_text(json.dumps({
+                "provider": {
+                    "пров-а": {"npm": "@ai-sdk/openai-compatible",
+                               "apiKey": "sk-ключ-ААА-111111",
+                               "baseURL": "https://a.example/v1",
+                               "models": {"m-1": {"name": "m-1"},
+                                          "m-2": {"name": "m-2"}}},
+                    "пров-б": {"npm": "@ai-sdk/openai-compatible",
+                               "apiKey": "sk-ключ-БББ-222222",
+                               "baseURL": "https://b.example/v1",
+                               "models": {"m-9": {"name": "m-9"}}},
+                }}, ensure_ascii=False), encoding="utf-8")
+            _masked = _qr.mask_known_keys(_mk_dir, "Слот 1: пров-а / sk-ключ-БББ-222222")
+            check("sk-ключ-БББ-222222" not in _masked,
+                  f"чужой ключ в имени модели замаскирован: {_masked}")
+            # panel set: отказ не должен печатать ключ, вписанный в модель.
+            _msgs, _errs = _qr.panel_set(_mk_dir, "1", "пров-а", "sk-ключ-БББ-222222")
+            _all_msgs = " ".join(_msgs) + " " + " ".join(_errs)
+            check("sk-ключ-БББ-222222" not in _all_msgs,
+                  f"отказ panel set не печатает ключ: {_all_msgs[:90]}")
+            check("sk-ключ-ААА-111111" not in _all_msgs,
+                  "отказ panel set не печатает и свой ключ")
+            # panel show: ключ, вписанный руками в панель, не показывается.
+            _qr.panel_set(_mk_dir, "1", "пров-а", "m-1")
+            _pf = _qr.panel_file(_mk_dir)
+            if _pf.is_file():
+                _raw = json.loads(_pf.read_text(encoding="utf-8"))
+            else:
+                check(False, "панель записалась на диск (файл vote-panel.json создан)")
+                _raw = {}
+            _raw["2"] = {"provider": "пров-б", "model": "sk-ключ-ААА-111111",
+                         "at": "2026-10-11 00:00:00"}
+            _pf.parent.mkdir(parents=True, exist_ok=True)
+            _pf.write_text(json.dumps(_raw, ensure_ascii=False), encoding="utf-8")
+            _shown = " ".join(_qr.panel_show(_mk_dir))
+            check("sk-ключ-ААА-111111" not in _shown,
+                  f"panel show не показывает ключ чужого провайдера: {_shown[:90]}")
+        finally:
+            shutil.rmtree(_mk_dir, ignore_errors=True)
+
+        # (3) Журнал маскирует команду: модель из панели в неё попадает.
+        _run_src = inspect.getsource(_qr.run)
+        check('mask_text(" ".join(cmd), key)' in _run_src,
+              "журнал маскирует команду перед записью")
+
+        # (4) Ошибка слота видна и меняет код возврата.
+        _vote_src = inspect.getsource(_qr.review_vote)
+        check("errors.append(" in _vote_src,
+              "ошибка упавшего слота попадает в errors (код возврата не 0)")
+        check("не ответил" in _vote_src,
+              "ошибка слота печатается, а не теряется в messages")
+        check("ВНИМАНИЕ" in _vote_src or "ВНИМАНИЕ: ответили" in _vote_src,
+              "неполный свод помечен словами: ответили не все три")
+    except (ImportError, NameError) as _vm_imp:
+        check(False, f"модуль ревьюера импортируется для проверки 8м-1: {_vm_imp}")
+    except Exception as _vm_exc:  # noqa: BLE001 — блок проверок не имеет права
+        # оборвать весь прогон. Так уже случилось: ошибка фикстуры уронила
+        # самопроверку целиком, и упасть оказалось нечему — падал ранний
+        # выход из файла. Проверка обязана сообщить о проблеме и идти дальше.
+        check(False, f"блок проверок 8м-1 упал, не оборвав прогон: {_vm_exc}")
 
     # ---- 8г. Обновление скилла в уже созданной базе
     echo("\n--- 8г. Скилл, который в мастере, но только в старой базе ---")
