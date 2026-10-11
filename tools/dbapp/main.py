@@ -274,6 +274,19 @@ class QwenCheckModels(QThread):
             self.result = exc
 
 
+#: Отвязанные воркеры: окно закрылось, а проверка доживает своя.
+#: Пока поток работает, ссылку обязан кто-то держать — иначе Python
+#: соберёт QThread прямо под работающим потоком, и процесс упадёт.
+_QW_DETACHED_WORKERS: list = []
+
+
+def _qw_detached_worker_finished() -> None:
+    """Отвязанная проверка кончила сама — программе можно выходить."""
+    app = QApplication.instance()
+    if app is not None:
+        app.quit()
+
+
 # ---------------------------------------------------------------- подсказки
 
 
@@ -6452,15 +6465,21 @@ class CapsTab(ScrollPage):
         """Список моделей выбранного провайдера — имена не выдумываются."""
         provider_id = str(self.qw_provider.currentData() or "")
         models: list[str] = []
-        try:
-            found = qwen_review.providers(self._dest() or Path("."))
-        except Exception:  # noqa: BLE001
-            found = []
-        for item in found:
-            if item["id"] == provider_id:
-                models = list(item.get("models") or [])
-                if not item.get("ok"):
-                    models = []
+        dest = self._dest()
+        if dest is not None:
+            # Без выбранной папки настроек конфиг не читаем вовсе: поиск
+            # в текущем каталоге мог подцепить чужой opencode.jsonc, и
+            # список наполнился бы фантомными моделями, тогда как список
+            # провайдеров выше в этой ситуации честно пуст.
+            try:
+                found = qwen_review.providers(dest)
+            except Exception:  # noqa: BLE001
+                found = []
+            for item in found:
+                if item["id"] == provider_id:
+                    models = list(item.get("models") or [])
+                    if not item.get("ok"):
+                        models = []
         self.qw_model.clear()
         for name in models:
             self.qw_model.addItem(name, name)
@@ -6496,8 +6515,12 @@ class CapsTab(ScrollPage):
             return
         if needed > limit:
             needed = limit
-        if needed > self.qw_model.minimumWidth():
-            self.qw_model.setMinimumWidth(needed)
+        # Ставим минимум безусловно, не только вверх: иначе провайдер с
+        # длинными именами поднимет минимум, а после сужения окна он не
+        # упадёт обратно — переполнение возвращалось на узком окне.
+        # Пол снизу — 240: минимум от сборки, меньше которого список
+        # становится нечитаемым.
+        self.qw_model.setMinimumWidth(max(needed, 240))
 
     def _qw_provider_changed(self) -> None:
         """Сменился провайдер — перечитать его модели."""
@@ -6527,19 +6550,45 @@ class CapsTab(ScrollPage):
             return text
         return qwen_review.mask_text(text, key)
 
-    def _qw_render_check(self, results, notes=(), from_cache: bool = False) -> None:
+    def _qw_mask_reason(self, text: str, provider_id: str = "") -> str:
+        """Вычищает ключ из чужого текста перед показом в окне.
+
+        Причины ошибок приходят от провайдеров, и те любят цитировать
+        присланный ключ целиком. check_provider_models чистит причины
+        уже в рабочем потоке, но здесь последний рубеж: маскируется
+        всё, что попало в окно, — и причины, и заметки. Маскируется
+        ключом ИМЕННО того провайдера, чей результат рисуем: если
+        передан provider_id (проверявшийся), берём его, а не текущее
+        значение комбобокса — они могли разойтись.
+        """
+        text = str(text or "")
+        dest = self._dest()
+        provider = str(provider_id or self.qw_provider.currentData() or "")
+        if not dest or not provider:
+            return text
+        try:
+            key, _source = qwen_review.provider_key_info(dest, provider)
+        except Exception:  # noqa: BLE001 — чужие настройки не должны ронять окно
+            return text
+        if not key:
+            return text
+        return qwen_review.mask_text(text, key)
+
+    def _qw_render_check(self, results, notes=(), from_cache: bool = False,
+                         provider_id: str = "") -> None:
         """Рисует состояния моделей. Сети здесь нет: что передано — то и показ.
 
         Результаты — {модель: (состояние, причина)}: ✔ отвечает, ✘ точно
         нет, ? не знаю. Каждая причина перед показом проходит через
-        маску ключа. Список виден, только когда есть что показывать.
+        маску ключа — того провайдера, чей это результат, а не того,
+        кто сейчас выбран. Список виден, только когда есть что показывать.
         """
         self.qw_check_list.clear()
         shown = 0
         for model in sorted(results):
             state, reason = results[model]
             symbol = qwen_review.CHECK_SYMBOL.get(str(state), "?")
-            reason = self._qw_mask_reason(reason)
+            reason = self._qw_mask_reason(reason, provider_id)
             line = f"{symbol} {model}" + (f" — {reason}" if reason else "")
             item = QListWidgetItem(line)
             # Полная строка — в подсказке: список узкий, и по ширине
@@ -6551,8 +6600,9 @@ class CapsTab(ScrollPage):
         self.qw_check_list.setVisible(shown > 0)
         parts = [str(note) for note in notes]
         if from_cache:
-            parts.insert(0, "Показан кэш проверки (24 ч): живая проверка — "
-                            "по кнопке, сейчас по API не били.")
+            parts.insert(0, f"Показан кэш проверки "
+                            f"({qwen_review.CHECK_CACHE_HOURS} ч): живая "
+                            f"проверка — по кнопке, сейчас по API не били.")
         self.qw_check_progress.setText(" ".join(parts))
 
     def _qw_show_cached(self) -> None:
@@ -6591,6 +6641,11 @@ class CapsTab(ScrollPage):
                 "Провайдеры берутся из настроек opencode."
             )
             return
+        # Комбобокс провайдера блокируется до конца проверки: смена
+        # провайдера на лету сделала бы результат непонятным чьим —
+        # модели проверявшегося провайдера читались бы как результат
+        # выбранного.
+        self.qw_provider.setEnabled(False)
         self.btn_qw_check_models.setEnabled(False)
         self.qw_check_progress.setText("Проверяю доступность моделей…")
         self._qw_check_worker = QwenCheckModels(dest, provider, self)
@@ -6605,6 +6660,7 @@ class CapsTab(ScrollPage):
     def _qw_check_models_done(self) -> None:
         """Проверка кончилась: включаем кнопку и рисуем результат."""
         self.btn_qw_check_models.setEnabled(True)
+        self.qw_provider.setEnabled(True)
         worker = self._qw_check_worker
         self._qw_check_worker = None
         result = worker.result if worker is not None else None
@@ -6614,7 +6670,12 @@ class CapsTab(ScrollPage):
             return
         results, notes = result
         notes = [self._qw_mask_reason(note) for note in notes]
-        self._qw_render_check(results, notes)
+        # Рисуем с провайдером, которого проверял воркер: за время
+        # проверки выбор в комбобоксе могли сменить, и маскировать
+        # причины чужим ключом нельзя.
+        self._qw_render_check(
+            results, notes,
+            provider_id=getattr(worker, "_provider", "") if worker else "")
 
     def _qw_check(self) -> None:
         """Живая проверка окружения ревьюера. Ничего не меняет."""
@@ -8100,6 +8161,27 @@ class MainWindow(QMainWindow):
         tab = getattr(self, "update_tab", None)
         if tab is not None and hasattr(tab, "stop"):
             tab.stop()
+        # Проверка моделей живёт в отдельном потоке: убивать её на
+        # середине нельзя — внутри платные запросы, а QThread, убитый
+        # вместе с окном, роняет процесс («Destroyed while thread is
+        # still running»). Отвязываем её сигналы от умирающего окна и
+        # откладываем выход: воркер доначистит кэш и сам завершит
+        # программу своим finished. Значок трея (ниже) остаётся
+        # запасным выходом, если проверка затянется.
+        worker = getattr(self, "_qw_check_worker", None)
+        if worker is not None and worker.isRunning():
+            try:
+                worker.progress.disconnect(self._qw_check_models_progress)
+                worker.finished.disconnect(self._qw_check_models_done)
+            except TypeError:
+                pass
+            worker.setParent(None)
+            # Держим ссылку сами: без неё Python соберёт объект прямо
+            # под работающим потоком.
+            _QW_DETACHED_WORKERS.append(worker)
+            worker.finished.connect(_qw_detached_worker_finished)
+            self._qw_check_worker = None
+            self._qw_quit_pending = True
         super().closeEvent(event)
         # Значок трея намеренно НЕ прячем: он и есть запасной выход.
         # Прятали — и получалось ровно то, на что жаловались: закрыли
@@ -8114,7 +8196,7 @@ class MainWindow(QMainWindow):
         # вызываем сами. Иначе крестик закрывал бы окно, а процесс
         # оставался бы жить в фоне без единого окна.
         app = QApplication.instance()
-        if app is not None:
+        if app is not None and not getattr(self, "_qw_quit_pending", False):
             app.quit()
 
     def minimize_to_tray(self) -> None:

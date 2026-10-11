@@ -149,8 +149,13 @@ MODES: list[dict] = [
 ]
 
 #: Идентификаторы режимов: на них смотрят окно и командная строка.
+# Дефолт у next() обязателен: без него правка MODES без режима с флагом
+# роняла бы импорт модуля StopIteration'ом — вместе с окном и самопроверкой.
 MODE_ONCE = str(MODES[0]["id"])
-MODE_DEBATE = next(str(mode["id"]) for mode in MODES if mode.get("flag"))
+MODE_DEBATE = next(
+    (str(mode["id"]) for mode in MODES if mode.get("flag")),
+    MODE_ONCE,
+)
 
 
 def mode_by_id(mode_id: str) -> dict | None:

@@ -4376,6 +4376,12 @@ def main() -> int:
                     check(int(_said.group(1)) == _n_skills,
                           f"число навыков в инструкции верно: "
                           f"написано {_said.group(1)}, на диске {_n_skills}")
+                # Второе упоминание счётчика («В базе лежит N скиллов»):
+                # раньше правили только первое, а регэксп второе не ловил.
+                _said2 = re.search(r"в базе лежит\s*(\d+)\s*скиллов", _gt.lower())
+                check(bool(_said2) and int(_said2.group(1)) == _n_skills,
+                      f"число навыков верно и во втором упоминании: "
+                      f"написано {_said2.group(1) if _said2 else '—'}, на диске {_n_skills}")
                 _glow = _gt.lower()
                 _unmentioned = [n for n in _dirs if n.lower() not in _glow]
                 check(not _unmentioned,
@@ -8869,6 +8875,13 @@ def main() -> int:
                   "маска показывает первые 4 символа ключа и длину")
             check(_secret not in _mask and len(_mask) < len(_secret),
                   "маска не содержит полного ключа")
+            # Короткий ключ: первые 4 символа короткого ключа — почти весь
+            # ключ, поэтому короткий не показывается даже частично.
+            _short = "abc12345"
+            _short_mask = _qp.mask_key(_short)
+            check(_short_mask == f"*** (длина {len(_short)})"
+                  and _short not in _short_mask,
+                  f"короткий ключ не показывается даже частично: {_short_mask}")
             check(_qp.mask_text("ошибка 401: ключ " + _secret + " неверен",
                                 _secret)
                   == "ошибка 401: ключ " + _mask + " неверен",
@@ -9339,7 +9352,7 @@ def main() -> int:
                     check(any(t.startswith("✔ модель-кэш") for t in _qcm_texts),
                           f"кэш показан в окне с ✔: {_qcm_texts}")
                     check("кэш" in _qcm_tab.qw_check_progress.text()
-                          and "24 ч" in _qcm_tab.qw_check_progress.text(),
+                          and f"{_qr.CHECK_CACHE_HOURS} ч" in _qcm_tab.qw_check_progress.text(),
                           "кэш в окне помечен словами «из кэша (24 ч)»")
                 finally:
                     _qr.check_provider_models = _qcm_was_cm
@@ -9449,10 +9462,30 @@ def main() -> int:
             else:
                 check(_gw_model.minimumWidth() == 240,
                       "на совсем узком окне минимум списка моделей — сборочный 240")
-            # Замерная строка больше не нужна.
+            # Замерная строка больше не нужна; после её снятия минимум
+            # обязан упасть обратно: раньше минимум ставился только
+            # вверх, и переполнение возвращалось после сужения окна.
+            _gw_min_wide = _gw_model.minimumWidth()
             _gw_i = _gw_model.findData("замер")
             if _gw_i >= 0:
                 _gw_model.removeItem(_gw_i)
+            _gw_tab._qw_fit_model_width()
+            check(_gw_model.minimumWidth() <= _gw_min_wide,
+                  f"после сужения списка минимум падает вниз: "
+                  f"было {_gw_min_wide}, стало {_gw_model.minimumWidth()}")
+            # Ревью: закрытие окна и смена провайдера при идущей проверке.
+            _cw_src = _inspect.getsource(type(window).closeEvent)
+            check("_qw_check_worker" in _cw_src
+                  and "_qw_detached_worker_finished" in _cw_src,
+                  "закрытие окна отвязывает проверку моделей, а не убивает её поток")
+            _cm_src = _inspect.getsource(type(_gw_tab)._qw_check_models)
+            _cd_src = _inspect.getsource(type(_gw_tab)._qw_check_models_done)
+            check("qw_provider.setEnabled(False)" in _cm_src,
+                  "на время проверки провайдер блокируется от смены")
+            check("qw_provider.setEnabled(True)" in _cd_src
+                  and "_provider" in _cd_src,
+                  "после проверки провайдер разблокируется и рисуется "
+                  "маской по проверявшемуся провайдеру")
             # Таблица серверов: минимум не раздвигает блок, своя прокрутка
             # включена — пользователь доскроллит до последних колонок.
             _gw_total = sum(_gw_table.columnWidth(c)
