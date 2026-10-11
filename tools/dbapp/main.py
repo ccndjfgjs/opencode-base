@@ -3222,6 +3222,74 @@ class QwenReplyDialog(QDialog):
         self.accept()
 
 
+class QwenSetupDialog(QDialog):
+    """Фразы-триггеры для скилла настройки ревьюера — что сказать агенту.
+
+    Кнопка «Настроить через скилл» сама настройкой не занимается: она
+    показывает человеку фразы, которые он говорит агенту, — и каждую
+    можно скопировать в буфер. Сами команды выполняет скилл
+    qwen-review-setup за пределами этого диалога.
+    """
+
+    #: Фразы-триггеры: что сказать агенту и что это даст.
+    PHRASES = [
+        "«настрой ревьюера» — выбрать провайдера и модель, развернуть, включить",
+        "«настрой тройное ревью» — заполнить панель тремя слотами",
+        "«проверь, какие модели отвечают» — живая проверка доступности",
+        "«ревьюер отвечает 401» — найти причину по ключу",
+    ]
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Настроить ревьюера — через скилл")
+        self.setMinimumWidth(700)
+
+        box = QVBoxLayout(self)
+        box.setSpacing(8)
+        box.addWidget(ui.label(
+            "Настройка выбором в окне передана скиллу: агент сам читает "
+            "статус, узнаёт живые модели, выбирает провайдера по числу живых "
+            "моделей (ничья — спросит), разворачивает и включает. Скажи "
+            "агенту любую из фраз — и он сделает остальное.",
+            wrap=True,
+        ))
+        box.addWidget(ui.label(
+            "Фразы-триггеры (скопируй и вставь агенту):",
+            kind="dim", wrap=True,
+        ))
+        self._copy_buttons: list[QPushButton] = []
+        for phrase in self.PHRASES:
+            row = QHBoxLayout()
+            label = ui.label(phrase, wrap=True)
+            btn = QPushButton("Скопировать")
+            row.addWidget(label, 1)
+            row.addWidget(btn)
+            box.addLayout(row)
+            btn.clicked.connect(
+                lambda _=False, text=phrase, b=btn: self._copy(text, b))
+            self._copy_buttons.append(btn)
+
+        self.qw_setup_status = ui.label("", wrap=True)
+        box.addWidget(self.qw_setup_status)
+
+        row_foot = QHBoxLayout()
+        row_foot.addStretch(1)
+        self.btn_close = QPushButton("Закрыть")
+        self.btn_close.setObjectName("primary")
+        self.btn_close.setDefault(True)
+        self.btn_close.clicked.connect(self.accept)
+        row_foot.addWidget(self.btn_close)
+        box.addLayout(row_foot)
+
+    def _copy(self, text: str, button: QPushButton) -> None:
+        """Кладёт фразу в буфер обмена и говорит об этом."""
+        QApplication.clipboard().setText(text)
+        for _btn in self._copy_buttons:
+            _btn.setText("Скопировать")
+        button.setText("Скопировано ✔")
+        self.qw_setup_status.setText("Фраза в буфере: " + text)
+
+
 class GreenlightScanDialog(QDialog):
     """Что проверять greenlight: папка iOS-проекта и, если есть, собранный .ipa.
 
@@ -3751,9 +3819,9 @@ class CapsTab(ScrollPage):
         # было нельзя. Теперь их два ряда по три, и каждый ряд уже
         # заведомо уже окна.
         what_layout.addWidget(box_gl)
-        # --- qwen-review: второй ревьюер. Не только галочка: сначала
-        # развёртывание Qwen Code, потом выбор модели из провайдеров
-        # opencode, и лишь затем проверка изменений — а «спор» отдельно.
+        # --- qwen-review: второй ревьюер. Настройка выбором провайдера и
+        # развёртывание отдана скиллу qwen-review-setup; в окне остались
+        # статус, проверка доступности и запуск проверки изменений.
         box_qw = QGroupBox("Qwen Code — второй ревьюер (вторая пара глаз)")
         qw_layout = QVBoxLayout(box_qw)
         qw_layout.addWidget(ui.label(
@@ -3775,41 +3843,25 @@ class CapsTab(ScrollPage):
             _lbl = ui.label(_line, kind="dim", wrap=True)
             qw_layout.addWidget(_lbl)
             self.qw_modes_labels.append(_lbl)
+        # Настройка ушла в скилл qwen-review-setup: выбор провайдера и
+        # модели, развёртывание и включение делает агент, а не кнопки
+        # окна. Здесь остались кнопка-подсказка «Настроить через скилл»,
+        # живая проверка доступности и запуск проверки изменений.
         row_qw_pick = QHBoxLayout()
-        row_qw_pick2 = QHBoxLayout()
-        row_qw_pick.addWidget(QLabel("Провайдер:   "))
-        self.qw_provider = QComboBox()
-        self.qw_provider.setMinimumWidth(200)
-        self.qw_provider.currentIndexChanged.connect(self._qw_provider_changed)
-        row_qw_pick.addWidget(self.qw_provider)
-        row_qw_pick.addStretch(1)
-        self.qw_model = QComboBox()
-        # Пока список пуст, его подсказка узкая и бесполезная: имена
-        # моделей появляются позже, и настоящую ширину виджет узнаёт
-        # только после заполнения. Ставим заведомо достаточную ширину,
-        # а точную подгоняем в _qw_fit_model_width после наполнения.
-        self.qw_model.setMinimumWidth(240)
-        row_qw_pick2.addWidget(QLabel("Модель:   "))
-        row_qw_pick2.addWidget(self.qw_model, 1)
-        self.btn_qw_save = QPushButton("Сохранить выбор")
-        self.btn_qw_save.setToolTip(
-            "Запоминает провайдера и модель: программа пишет их в настройки "
-            "Qwen Code в своей папке (личный ~/.qwen не трогается). Ключ "
-            "провайдера сюда не записывается — он уезжает в окружение "
-            "процесса при запуске"
+        self.btn_qw_setup = QPushButton("Настроить через скилл")
+        self.btn_qw_setup.setToolTip(
+            "Фразы-триггеры для агента: «настрой ревьюера», «настрой тройное "
+            "ревью», «проверь, какие модели отвечают», «ревьюер отвечает 401». "
+            "Агент сам выберет провайдера и модель по числу живых моделей, "
+            "развернёт и включит ревьюера"
         )
-        row_qw_pick2.addWidget(self.btn_qw_save)
-        row_qw_pick2.addStretch(1)
-        # Провайдер, модель и кнопка сохранения стояли в один ряд и занимали
-        # 691 пиксель — почти всю ширину окна, а на самом узком окне
-        # список моделей уезжал за правый край вместе с кнопкой. Теперь
-        # провайдер на первой строке, модель и сохранение на второй.
+        row_qw_pick.addWidget(self.btn_qw_setup)
+        row_qw_pick.addStretch(1)
         qw_layout.addLayout(row_qw_pick)
-        qw_layout.addLayout(row_qw_pick2)
-        # --- проверка доступности моделей: кнопка рядом с выбором
-        # провайдера, под ней — прогресс и список состояний ✔/✘/?.
-        # Проверка живёт в отдельном потоке (QwenCheckModels): в момент
-        # нажатия кнопка гаснет, а окно продолжает отвечать.
+        # --- проверка доступности моделей: кнопка, под ней — прогресс и
+        # список состояний ✔/✘/?. Проверка живёт в отдельном потоке
+        # (QwenCheckModels): в момент нажатия кнопка гаснет, а окно
+        # продолжает отвечать.
         row_qw_avail = QHBoxLayout()
         self.btn_qw_check_models = QPushButton("Проверить доступность")
         self.btn_qw_check_models.setToolTip(
@@ -3836,26 +3888,13 @@ class CapsTab(ScrollPage):
         self.qw_hint = ui.label("", kind="dim", wrap=True)
         qw_layout.addWidget(self.qw_hint)
         row_qw_btns = QHBoxLayout()
-        self.btn_qw_check = QPushButton("Проверить окружение")
-        self.btn_qw_check.setToolTip(
-            "Проверка без запуска: отвечает ли qwen, есть ли Node.js нужной "
-            "версии, выбран ли провайдер и модель. Ничего не меняет и никуда "
-            "не звонит"
-        )
-        self.btn_qw_deploy = QPushButton("Развернуть Qwen Code")
-        self.btn_qw_deploy.setToolTip(
-            "Ставит Qwen Code в свою папку рядом с настройками той же "
-            "командой npm, что в README автора, только без -g. Node.js "
-            "программа не ставит: если его нет, скажет прямо. Нужен интернет"
-        )
         self.btn_qw_run = QPushButton("Проверить изменения…")
         self.btn_qw_run.setToolTip(
             "Берёт `git diff` проекта и отдаёт его ревьюеру. Раунды спора "
             "начинаются с этого же нажатия. Кнопка доступна только при "
             "отмеченной галочке qwen-review"
         )
-        for button in (self.btn_qw_check, self.btn_qw_deploy, self.btn_qw_run):
-            row_qw_btns.addWidget(button)
+        row_qw_btns.addWidget(self.btn_qw_run)
         row_qw_btns.addStretch(1)
         qw_layout.addLayout(row_qw_btns)
         # Подпись и подсказка галочки берутся из общего списка режимов
@@ -4399,9 +4438,7 @@ class CapsTab(ScrollPage):
         self.btn_gl_dry.clicked.connect(self._gl_dry)
         self.btn_gl_cloud.clicked.connect(self._gl_cloud)
         self.btn_gl_report.clicked.connect(self._gl_report)
-        self.btn_qw_check.clicked.connect(self._qw_check)
-        self.btn_qw_deploy.clicked.connect(self._qw_deploy)
-        self.btn_qw_save.clicked.connect(self._qw_save)
+        self.btn_qw_setup.clicked.connect(self._qw_setup)
         self.btn_qw_run.clicked.connect(self._qw_run)
         self.btn_qw_reply.clicked.connect(self._qw_reply)
         self.btn_qw_forget.clicked.connect(self._qw_forget)
@@ -5877,14 +5914,13 @@ class CapsTab(ScrollPage):
             else:
                 selection = qw.get("selection") or {}
                 if not qw.get("binary"):
-                    notes.append("Qwen Code: не развёрнут — кнопка «Развернуть Qwen Code».")
+                    notes.append("Qwen Code: не развёрнут — настрой работает скиллом qwen-review-setup.")
                 elif not selection.get("model"):
-                    notes.append("Qwen Code: модель ревьюера не выбрана.")
+                    notes.append("Qwen Code: модель ревьюера не выбрана — настрой через скилл.")
                 else:
                     notes.append("Qwen Code: ревьюер не готов — " + "; ".join(
                         (qw.get("missing") or ["смотри строку ниже"])[:1]) + ".")
             self.btn_qw_run.setEnabled(bool(self.checks["qwen-review"].isChecked()))
-            self._qw_fill_providers(dest)
         # Список источников для pxpipe: читаем здесь, в главном потоке.
         try:
             choices = pxpipe.provider_choices(dest)
@@ -6418,138 +6454,6 @@ class CapsTab(ScrollPage):
             self._warn("Не выбрана папка настроек opencode.")
         return dest
 
-    def _qw_fill_providers(self, dest: Path) -> None:
-        """Заполняет списки провайдеров и моделей из настроек opencode.
-
-        Читается здесь, в главном потоке. Провайдеры не в формате OpenAI не
-        прячутся молча: они перечисляются в подсказке с причиной — «не
-        подходит», а не «пропал».
-        """
-        try:
-            found = qwen_review.providers(dest)
-        except Exception:  # noqa: BLE001 — чужие настройки не должны ронять окно
-            found = []
-        fitting = [item for item in found if item.get("ok")]
-        selection = qwen_review.chosen(dest)
-        want_provider = self.qw_provider.currentData() or selection.get("provider")
-        want_model = self.qw_model.currentData() or selection.get("model")
-
-        self.qw_provider.blockSignals(True)
-        self.qw_provider.clear()
-        for item in fitting:
-            self.qw_provider.addItem(str(item["id"]), str(item["id"]))
-        index = self.qw_provider.findData(want_provider)
-        if index >= 0:
-            self.qw_provider.setCurrentIndex(index)
-        self.qw_provider.blockSignals(False)
-        self._qw_fill_models(want_model)
-
-        unfitting = [item for item in found if not item.get("ok")]
-        parts: list[str] = []
-        if not found:
-            parts.append(
-                "В настройках opencode пока нет провайдеров — сначала "
-                "подключи провайдера (например OmniRoute или мост LMArena)."
-            )
-        elif not fitting:
-            parts.append("Ни один провайдер opencode для ревьюера не подходит:")
-        for item in unfitting[:4]:
-            parts.append(f"«{item['id']}» — {item['why']}")
-        if selection.get("model"):
-            parts.append(
-                f"Сейчас выбран: {selection.get('provider')} / {selection.get('model')}."
-            )
-        self.qw_hint.setText(" ".join(parts))
-
-    def _qw_fill_models(self, want: str = "") -> None:
-        """Список моделей выбранного провайдера — имена не выдумываются."""
-        provider_id = str(self.qw_provider.currentData() or "")
-        models: list[str] = []
-        dest = self._dest()
-        if dest is not None:
-            # Без выбранной папки настроек конфиг не читаем вовсе: поиск
-            # в текущем каталоге мог подцепить чужой opencode.jsonc, и
-            # список наполнился бы фантомными моделями, тогда как список
-            # провайдеров выше в этой ситуации честно пуст.
-            try:
-                found = qwen_review.providers(dest)
-            except Exception:  # noqa: BLE001
-                found = []
-            for item in found:
-                if item["id"] == provider_id:
-                    models = list(item.get("models") or [])
-                    if not item.get("ok"):
-                        models = []
-        self.qw_model.clear()
-        for name in models:
-            self.qw_model.addItem(name, name)
-        index = self.qw_model.findData(want)
-        if index >= 0:
-            self.qw_model.setCurrentIndex(index)
-        self._qw_fit_model_width()
-        self._qw_show_cached()
-
-    def _qw_fit_model_width(self) -> None:
-        """Подгоняет ширину списка моделей под самое длинное имя.
-
-        Список стоит в ряду, который уже не растягивается, поэтому при
-        слишком узком минимуме Qt обрезает подпись модели — имя
-        провайдера читается не до конца и выбрать нельзя. Меряем после
-        заполнения, когда виджет уже знает содержимое, и оставляем
-        запас на стрелку раскрытия.
-
-        Минимум ограничен шириной просмотра вкладки: страница по ширине
-        ужимается, поэтому минимум шире просмотра раздвигал страницу —
-        на узком окне список моделей уезжал за правый край на 174
-        пикселя. Полное имя модели в любом случае видно в раскрытом
-        списке, а не в свёрнутом поле.
-        """
-        needed = self.qw_model.sizeHint().width() + 8
-        # От просмотрной ширины отступаем на подпись «Модель:», кнопку
-        # «Сохранить выбор» и отступы ряда — они стоят рядом и тоже
-        # претендуют на ширину строки.
-        limit = self.viewport().width() - 300
-        if limit < 240:
-            # Совсем узкое окно: минимум 240 от сборки не трогаем, точную
-            # подгонку сделает следующий вызов на нормальной ширине.
-            return
-        if needed > limit:
-            needed = limit
-        # Ставим минимум безусловно, не только вверх: иначе провайдер с
-        # длинными именами поднимет минимум, а после сужения окна он не
-        # упадёт обратно — переполнение возвращалось на узком окне.
-        # Пол снизу — 240: минимум от сборки, меньше которого список
-        # становится нечитаемым.
-        self.qw_model.setMinimumWidth(max(needed, 240))
-
-    def _qw_provider_changed(self) -> None:
-        """Сменился провайдер — перечитать его модели."""
-        self._qw_fill_models()
-        self._qw_show_cached()
-
-    # ---- проверка доступности моделей провайдера
-
-    def _qw_mask_reason(self, text: str) -> str:
-        """Вычищает ключ из чужого текста перед показом в окне.
-
-        Причины ошибок приходят от провайдеров, и те любят цитировать
-        присланный ключ целиком. check_provider_models чистит причины
-        уже в рабочем потоке, но здесь последний рубеж: маскируется
-        всё, что попало в окно, — и причины, и заметки.
-        """
-        text = str(text or "")
-        dest = self._dest()
-        provider = str(self.qw_provider.currentData() or "")
-        if not dest or not provider:
-            return text
-        try:
-            key, _source = qwen_review.provider_key_info(dest, provider)
-        except Exception:  # noqa: BLE001 — чужие настройки не должны ронять окно
-            return text
-        if not key:
-            return text
-        return qwen_review.mask_text(text, key)
-
     def _qw_mask_reason(self, text: str, provider_id: str = "") -> str:
         """Вычищает ключ из чужого текста перед показом в окне.
 
@@ -6558,12 +6462,12 @@ class CapsTab(ScrollPage):
         уже в рабочем потоке, но здесь последний рубеж: маскируется
         всё, что попало в окно, — и причины, и заметки. Маскируется
         ключом ИМЕННО того провайдера, чей результат рисуем: если
-        передан provider_id (проверявшийся), берём его, а не текущее
-        значение комбобокса — они могли разойтись.
+        передан provider_id (проверявшийся), берём его, а не «выбранный
+        в окне» — с выбором в окне теперь работает не оно, а скилл.
         """
         text = str(text or "")
         dest = self._dest()
-        provider = str(provider_id or self.qw_provider.currentData() or "")
+        provider = str(provider_id or "")
         if not dest or not provider:
             return text
         try:
@@ -6573,6 +6477,8 @@ class CapsTab(ScrollPage):
         if not key:
             return text
         return qwen_review.mask_text(text, key)
+
+    # ---- проверка доступности моделей провайдера
 
     def _qw_render_check(self, results, notes=(), from_cache: bool = False,
                          provider_id: str = "") -> None:
@@ -6615,7 +6521,7 @@ class CapsTab(ScrollPage):
         if getattr(self, "_qw_check_worker", None) is not None:
             return
         dest = self._dest()
-        provider = str(self.qw_provider.currentData() or "")
+        provider = str((qwen_review.chosen(dest) or {}).get("provider") or "")
         results = {}
         if dest and provider:
             try:
@@ -6634,18 +6540,14 @@ class CapsTab(ScrollPage):
         dest = self._qw_dest()
         if dest is None:
             return
-        provider = str(self.qw_provider.currentData() or "")
+        provider = str((qwen_review.chosen(dest) or {}).get("provider") or "")
         if not provider:
             self._warn(
                 "Не выбран провайдер: проверять доступность нечего. "
-                "Провайдеры берутся из настроек opencode."
+                "Провайдеры берутся из настроек opencode — настрой выбор "
+                "через скилл: «настрой ревьюера»."
             )
             return
-        # Комбобокс провайдера блокируется до конца проверки: смена
-        # провайдера на лету сделала бы результат непонятным чьим —
-        # модели проверявшегося провайдера читались бы как результат
-        # выбранного.
-        self.qw_provider.setEnabled(False)
         self.btn_qw_check_models.setEnabled(False)
         self.qw_check_progress.setText("Проверяю доступность моделей…")
         self._qw_check_worker = QwenCheckModels(dest, provider, self)
@@ -6660,84 +6562,21 @@ class CapsTab(ScrollPage):
     def _qw_check_models_done(self) -> None:
         """Проверка кончилась: включаем кнопку и рисуем результат."""
         self.btn_qw_check_models.setEnabled(True)
-        self.qw_provider.setEnabled(True)
         worker = self._qw_check_worker
         self._qw_check_worker = None
+        provider_id = str(getattr(worker, "_provider", "") if worker else "")
         result = worker.result if worker is not None else None
         if isinstance(result, Exception):
             self.qw_check_progress.setText(
-                "Проверка прервалась: " + self._qw_mask_reason(str(result)))
+                "Проверка прервалась: "
+                + self._qw_mask_reason(str(result), provider_id))
             return
         results, notes = result
-        notes = [self._qw_mask_reason(note) for note in notes]
-        # Рисуем с провайдером, которого проверял воркер: за время
-        # проверки выбор в комбобоксе могли сменить, и маскировать
-        # причины чужим ключом нельзя.
+        notes = [self._qw_mask_reason(note, provider_id) for note in notes]
+        # Рисуем маской того провайдера, которого проверял воркер: у него
+        # берём и provider_id, чтобы маска была чужого не касалась.
         self._qw_render_check(
-            results, notes,
-            provider_id=getattr(worker, "_provider", "") if worker else "")
-
-    def _qw_check(self) -> None:
-        """Живая проверка окружения ревьюера. Ничего не меняет."""
-        dest = self._qw_dest()
-        if dest is None:
-            return
-
-        def job(progress):
-            data = qwen_review.check(dest)
-            line = ("Живая проверка: " if data.get("binary_ok") else "Живая проверка не прошла: ")
-            text = qwen_review.status_text(dest)
-            if data.get("ready"):
-                return [line + text], []
-            return [line + text], list(data.get("missing") or []) or [text]
-
-        self._start(job, "Qwen Code")
-
-    def _qw_deploy(self) -> None:
-        """Разворачивает Qwen Code в нашу папку тем же npm, что у автора."""
-        dest = self._qw_dest()
-        if dest is None:
-            return
-        if not qwen_review.find_npm():
-            self._warn(
-                "npm не найден: он ставится вместе с Node.js. "
-                + qwen_review.INSTALL_HINT
-            )
-            return
-        answer = QMessageBox.question(
-            self,
-            "Развернуть Qwen Code",
-            "Поставить Qwen Code в свою папку рядом с настройками?\n\n"
-            "Команда та же, что в README автора, только без -g и в наши "
-            "данные. Нужны Node.js 22 или новее и интернет: npm скачает "
-            "пакет. Личный ~/.qwen и чужие папки программа не трогает.",
-        )
-        if answer != QMessageBox.StandardButton.Yes:
-            return
-
-        def job(progress):
-            return qwen_review.deploy(dest, progress=progress)
-
-        self._start(job, "Qwen Code")
-
-    def _qw_save(self) -> None:
-        """Запоминает провайдера и модель для ревьюера."""
-        dest = self._qw_dest()
-        if dest is None:
-            return
-        provider = str(self.qw_provider.currentData() or "")
-        model = str(self.qw_model.currentData() or "")
-        if not provider or not model:
-            self._warn(
-                "Не выбран провайдер и модель ревьюера. Если провайдеров нет — "
-                "сначала подключи провайдера в opencode."
-            )
-            return
-
-        def job(progress):
-            return qwen_review.choose(dest, provider, model, progress=progress)
-
-        self._start(job, "Qwen Code")
+            results, notes, provider_id=provider_id)
 
     def _qw_run(self) -> None:
         """Проверяет изменения вторым ревьюером. Только чтение."""
@@ -6826,6 +6665,15 @@ class CapsTab(ScrollPage):
             return qwen_review.clear_debate(dest)
 
         self._start(job, "Qwen Code")
+
+    def _qw_setup(self) -> None:
+        """Окно фраз-триггеров: что сказать агенту для настройки ревьюера.
+
+        Сама настройка — скилл qwen-review-setup за пределами окна. Здесь
+        только подсказка: фразы, которые человек вставляет агенту.
+        """
+        dialog = QwenSetupDialog(self)
+        dialog.exec()
 
     def _px_confirm(self) -> bool:
         """Спрашивает согласие на сжатие запросов картинками.

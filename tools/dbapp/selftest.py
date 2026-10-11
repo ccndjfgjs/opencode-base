@@ -474,8 +474,8 @@ def main() -> int:
         _qw = _sections["Ревьюеры"].entries[0] if "Ревьюеры" in _sections else None
         check(_qw is not None and _qw.name == "Qwen",
               "в «Ревьюерах» Qwen — он ревьюер, а не модель")
-        check(_qw is not None and "Модель" in [b for b, _h in _qw.actions],
-              "у Qwen есть выбор модели")
+        check(_qw is not None and "Настройка" in [b for b, _h in _qw.actions],
+              "в «Ревьюерах» строки Qwen есть кнопка настройки (через скилл)")
         _bridges = {e.name for e in _sections["Мосты базы"].entries} \
             if "Мосты базы" in _sections else set()
         check(_bridges == {"Мост NCP", "Мост PC"},
@@ -9280,12 +9280,15 @@ def main() -> int:
                 # (в) Живая проверка на синтетике: подменяем работу и
                 # жмём кнопку. Кнопка гаснет на время проверки, потом
                 # включается, результат со состояниями и маской в окне.
+                # Выбор провайдера окно берёт из конфига ревьюера — тот же
+                # файл, что читает скилл настройки, поэтому пишем выбор
+                # сюда, а не в несуществующий комбобокс.
+                _qcm_state_dir = _qcm_dir / "qwen-review-data"
+                _qcm_state_dir.mkdir(parents=True, exist_ok=True)
+                (_qcm_state_dir / "reviewer.json").write_text(json.dumps({
+                    "provider": "провер-", "model": "модель-а",
+                }), encoding="utf-8")
                 _qr.check_provider_models = _qcm_fake
-                _qcm_tab.qw_provider.blockSignals(True)
-                _qcm_tab.qw_provider.addItem("провер-", "провер-")
-                _qcm_tab.qw_provider.setCurrentIndex(
-                    _qcm_tab.qw_provider.findData("провер-"))
-                _qcm_tab.qw_provider.blockSignals(False)
                 _qcm_tab._qw_check_models()
                 _qcm_deadline = _qcm_time.time() + 15.0
                 while (_qcm_tab._qw_check_worker is not None
@@ -9429,65 +9432,69 @@ def main() -> int:
                 check(_qrs_copy.read_bytes() == _qrs_master,
                       f"SKILL.md qwen-review-setup в {_qrs_label} совпадает с мастером")
 
-    # ---- 8л-2. Геометрия узкого окна: комбо моделей и таблица серверов
+    # ---- 8л-2. Геометрия узкого окна: без комбо моделей, таблица серверов
     #
-    # Замечания проверяющего задачи 5: qw_model переполнял узкое окно на
-    # 174 пикселя из-за длинных имён моделей, а таблица серверов (и список
-    # навыков) были шире узкого просмотра без своей горизонтальной
-    # прокрутки. Проверка числами, без показа окна.
-    echo("\n--- 8л-2. Геометрия: комбо моделей и таблица серверов ---")
+    # Замечания проверяющего задачи 3: qw_model/qw_provider ушли с вкладки,
+    # и подгонять их ширину больше нечего; вместо чека на комбо проверяем,
+    # что комбо действительно нет, и что новая кнопка «Настроить через
+    # скилл» на месте и связана. Таблица серверов (и список навыков)
+    # остались, как были. Проверка числами, без показа окна.
+    echo("\n--- 8л-2. Геометрия: без комбо, кнопка скилла, таблица серверов ---")
     try:
         from PyQt6.QtCore import Qt as _qGeoQt
         from PyQt6.QtWidgets import QListWidget as _qGeoList
 
         _gw_tab = getattr(window, "caps_tab", None)
-        _gw_model = getattr(_gw_tab, "qw_model", None)
         _gw_table = getattr(_gw_tab, "reg_table", None)
-        if _gw_tab is None or _gw_model is None or _gw_table is None:
+        if _gw_tab is None or _gw_table is None:
             check(False, "вкладка opencode собрана для замера геометрии")
         else:
-            # Имитируем длинное имя модели: подгонка ширины обязана
-            # упереться в просмотр, а не раздвинуть страницу.
-            _gw_model.blockSignals(True)
-            _gw_wide = "длинное-имя-модели-от-провайдера-" * 4
-            _gw_model.addItem(_gw_wide, "замер")
-            _gw_model.setCurrentIndex(_gw_model.count() - 1)
-            _gw_model.blockSignals(False)
-            _gw_tab._qw_fit_model_width()
-            _gw_vp = _gw_tab.viewport().width()
-            if _gw_vp >= 540:
-                check(_gw_model.minimumWidth() <= _gw_vp,
-                      f"минимум списка моделей не шире просмотра: "
-                      f"{_gw_model.minimumWidth()} при {_gw_vp}")
-            else:
-                check(_gw_model.minimumWidth() == 240,
-                      "на совсем узком окне минимум списка моделей — сборочный 240")
-            # Замерная строка больше не нужна; после её снятия минимум
-            # обязан упасть обратно: раньше минимум ставился только
-            # вверх, и переполнение возвращалось после сужения окна.
-            _gw_min_wide = _gw_model.minimumWidth()
-            _gw_i = _gw_model.findData("замер")
-            if _gw_i >= 0:
-                _gw_model.removeItem(_gw_i)
-            _gw_tab._qw_fit_model_width()
-            check(_gw_model.minimumWidth() <= _gw_min_wide,
-                  f"после сужения списка минимум падает вниз: "
-                  f"было {_gw_min_wide}, стало {_gw_model.minimumWidth()}")
-            # Ревью: закрытие окна и смена провайдера при идущей проверке.
-            _cw_src = _inspect.getsource(type(window).closeEvent)
-            check("_qw_check_worker" in _cw_src
-                  and "_qw_detached_worker_finished" in _cw_src,
-                  "закрытие окна отвязывает проверку моделей, а не убивает её поток")
-            _cm_src = _inspect.getsource(type(_gw_tab)._qw_check_models)
-            _cd_src = _inspect.getsource(type(_gw_tab)._qw_check_models_done)
-            check("qw_provider.setEnabled(False)" in _cm_src,
-                  "на время проверки провайдер блокируется от смены")
-            check("qw_provider.setEnabled(True)" in _cd_src
-                  and "_provider" in _cd_src,
-                  "после проверки провайдер разблокируется и рисуется "
-                  "маской по проверявшемуся провайдеру")
-            # Таблица серверов: минимум не раздвигает блок, своя прокрутка
-            # включена — пользователь доскроллит до последних колонок.
+            # Комбобоксы провайдера и модели вместе с кнопкой сохранения
+            # ушли: их больше нигде нет.
+            check(not hasattr(_gw_tab, "qw_provider"),
+                  "комбобокс провайдера убран с вкладки")
+            check(not hasattr(_gw_tab, "qw_model"),
+                  "комбобокс моделей убран с вкладки")
+            check(not hasattr(_gw_tab, "btn_qw_save")
+                  and not hasattr(_gw_tab, "btn_qw_check")
+                  and not hasattr(_gw_tab, "btn_qw_deploy"),
+                  "кнопок сохранения, проверки окружения и развёртывания нет")
+            # Новая кнопка «Настроить через скилл» на месте и связана.
+            _gw_setup = getattr(_gw_tab, "btn_qw_setup", None)
+            check(_gw_setup is not None
+                  and _gw_setup.text() == "Настроить через скилл",
+                  "кнопка «Настроить через скилл» на месте")
+            check(_gw_setup is not None
+                  and _gw_setup.receivers(_gw_setup.clicked) >= 1,
+                  "кнопка «Настроить через скилл» связана с обработчиком")
+            # Проверка «Проверить доступность» без выбранного провайдера
+            # (в настройках никто не выбран) обязана отказать словами и не
+            # трогать сеть: воркер не создаётся.
+            _g_dir = Path(tempfile.mkdtemp(prefix="selftest-qwnopro-"))
+            _g_was_dest = _gw_tab.dest_edit.text()
+            _g_warns: list[str] = []
+            _g_was_warn = _gw_tab._warn
+            _gw_tab._warn = lambda text: _g_warns.append(str(text))
+
+            def _g_stub(*_a, **_k):
+                raise AssertionError("сети в отказе без провайдера быть не должно")
+
+            _g_no_network = _qr.check_provider_models
+            _qr.check_provider_models = _g_stub  # сети в проверке быть не должно
+            try:
+                _gw_tab.dest_edit.setText(str(_g_dir))
+                _gw_tab._qw_check_models()
+                check(_gw_tab._qw_check_worker is None,
+                      "без выбранного провайдера проверка не запускается")
+                check(any("Не выбран провайдер" in w for w in _g_warns),
+                      "без провайдера отказ словами, а не пустой прогон")
+            finally:
+                _qr.check_provider_models = _g_no_network
+                _gw_tab._warn = _g_was_warn
+                _gw_tab.dest_edit.setText(_g_was_dest)
+                shutil.rmtree(_g_dir, ignore_errors=True)
+            # Геометрия: без комбо некому переполнять узкое окно — правым
+            # краем тут смотрели и остались серверы и навыки.
             _gw_total = sum(_gw_table.columnWidth(c)
                             for c in range(_gw_table.columnCount()))
             check(_gw_table.minimumWidth() <= _gw_total,
@@ -9504,6 +9511,20 @@ def main() -> int:
                 check(_gw_list.horizontalScrollBarPolicy()
                       == _qGeoQt.ScrollBarPolicy.ScrollBarAlwaysOff,
                       "у списка навыков прокрутки вбок нет: строки переносятся сами")
+            # Ревью: закрытие окна и проверка без комбобокса провайдера.
+            _cw_src = _inspect.getsource(type(window).closeEvent)
+            check("_qw_check_worker" in _cw_src
+                  and "_qw_detached_worker_finished" in _cw_src,
+                  "закрытие окна отвязывает проверку моделей, а не убивает её поток")
+            _cm_src = _inspect.getsource(type(_gw_tab)._qw_check_models)
+            _cd_src = _inspect.getsource(type(_gw_tab)._qw_check_models_done)
+            check("qw_provider" not in _cm_src and "qw_provider" not in _cd_src,
+                  "проверка больше не знает комбобокса провайдера")
+            check("chosen" in _cm_src,
+                  "провайдер для проверки берётся из qwen_review.chosen")
+            check("qw_check_models.setEnabled" in _cm_src
+                  and "qw_check_models.setEnabled" in _cd_src,
+                  "кнопка проверки гаснет на время и включается по концу")
             _gw_tab._reg_fit_columns()
     except Exception as _gw_exc:  # noqa: BLE001 — замер не должен ронять проверку
         check(False, f"замер геометрии упал: {_gw_exc}")

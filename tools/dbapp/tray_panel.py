@@ -391,7 +391,7 @@ def _reviewer_entries(window, dest) -> list:
         state, kind = f"выбрана {model}", "ok"
     else:
         state, kind = "модель не выбрана", "warn"
-    actions = [("Модель", lambda: _focus_qwen_model(window)),
+    actions = [("Настройка", lambda: _focus_qwen_setup(window)),
                ("Журнал", lambda d=dest: _open_qwen_log(window, d))]
     return [Entry("Qwen", state, kind, actions)]
 
@@ -411,8 +411,8 @@ def _open_qwen_log(window, dest: Path) -> None:
         _open_folder(path.parent)
 
 
-def _focus_qwen_model(window) -> None:
-    """Открыть вкладку opencode и поставить курсор в выбор модели."""
+def _focus_qwen_setup(window) -> None:
+    """Открыть вкладку opencode и поставить курсор на «Настроить через скилл»."""
     window.showNormal()
     window.raise_()
     caps = getattr(window, "caps_tab", None)
@@ -422,13 +422,9 @@ def _focus_qwen_model(window) -> None:
         if window.tabs.widget(i) is caps:
             window.tabs.setCurrentIndex(i)
             break
-    combo = getattr(caps, "qw_model", None)
-    if combo is not None:
-        combo.setFocus()
-        try:
-            combo.showPopup()
-        except Exception:
-            pass
+    button = getattr(caps, "btn_qw_setup", None)
+    if button is not None:
+        button.setFocus()
 
 
 def collect(window, base) -> list:
