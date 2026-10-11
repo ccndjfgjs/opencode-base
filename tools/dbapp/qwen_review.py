@@ -1162,7 +1162,10 @@ def run(dest: Path, project: Path, prompt: str, diff_text: str,
     if log:
         # Команда уходит в журнал строкой — и в ней сидит `-м <модель>`
         # из панели, а модель человек мог вписать руками вместе с ключом.
-        log.write("$ " + mask_text(" ".join(cmd), key) + "\n")
+        # Маска СВОИМ ключом не хватает: в имя модели могли вписать ключ
+        # ДРУГОГО провайдера, и он ушёл бы в журнал целиком.
+        _cmd_line = mask_known_keys(Path(dest), " ".join(cmd))
+        log.write("$ " + _cmd_line + "\n")
         if err:
             log.write(err if err.endswith("\n") else err + "\n")
         log.write(f"===== код {code} =====\n")
@@ -1521,6 +1524,14 @@ def _similar(a: str, b: str) -> float:
     right_numbers = set(re.findall(r"\d+", b))
     if left_numbers and right_numbers and left_numbers != right_numbers:
         return 0.0
+    # Слитные части (прод-а, my-key, installed() — всё с дефисом или
+    # подчёркиванием) обязаны совпадать. «прод-а» и «прод-в» отличаются
+    # одной буквой, а всё остальное в них общее: без этой проверки свод
+    # объявлял замечания разных провайдеров одним и тем же.
+    left_glued = set(re.findall(r"\S*[-_]\S*", a))
+    right_glued = set(re.findall(r"\S*[-_]\S*", b))
+    if left_glued and right_glued and left_glued != right_glued:
+        return 0.0
     left = _content_words(a)
     right = _content_words(b)
     if not left or not right:
@@ -1560,13 +1571,13 @@ def _normalize_remark(text: str) -> str:
     text = re.sub(r"[_\-]", "\x00", text, flags=re.UNICODE)
     text = re.sub(r"[^\w\s\x00]+", " ", text, flags=re.UNICODE)
     text = re.sub(r"\s+", " ", text).strip()
-    # Дефис возвращается как РАЗДЕЛИТЕЛЬ, а не как часть слова: иначе
-    # «прод-а» и «прод-в» отличаются одним символом, а всё остальное в
-    # них совпадает — и свод объявлял замечания разных провайдеров одним
-    # и тем же (0.5 при пороге 0.5). Теперь это два разных токена, и
-    # пересечение у них пустое. Пара «прод-а»/«прод-б» при этом не
-    # рассыпается: сличаются по набору слов, а не посимвольно.
-    return text.replace("\x00 ", " ").replace("\x00", " ")
+    # Дефис возвращается КАК ЧАСТЬ СЛОВА: «прод-а» и «прод-в» обязаны
+    # остаться разными токенами. Разбивать их на «прод» + «а» нельзя —
+    # тогда оба сворачиваются в одно слово «прод» и замечания разных
+    # провайдеров снова слипаются (регрессия 0.000 → 1.000). Различает
+    # их не разбивка, а проверка ниже: разные слитные части = разные
+    # замечания.
+    return text.replace("\x00", "-")
 
 
 def summarize_vote(reviews: list[tuple[str, str]]) -> list[dict]:
