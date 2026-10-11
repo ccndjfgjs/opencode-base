@@ -72,6 +72,8 @@ python tools/dbapp/qwen_review.py choose <провайдер> <модель>
 python tools/dbapp/qwen_review.py deploy                  # развернуть Qwen Code
 python tools/dbapp/qwen_review.py review <папка> [--base main]
 python tools/dbapp/qwen_review.py review <папка> --reply "возражение" --rounds 3
+python tools/dbapp/qwen_review.py review <папка> --mode vote   # тройное ревью
+python tools/dbapp/qwen_review.py panel show|set|clear         # слоты панели vote
 python tools/dbapp/qwen_review.py forget                  # забыть ход спора
 ```
 
@@ -86,10 +88,11 @@ python tools/dbapp/qwen_review.py forget                  # забыть ход 
   `@retsenzent-qwen` — `edit: deny`, а из команд разрешена только одна:
   `python tools/dbapp/qwen_review.py …`. Замечания — словами, правки —
   за основным агентом и человеком.
-- **Спор — не победа.** Отдельный режим, по умолчанию выключен, не больше
-  трёх раундов (предел 5). За пределом раундов программа не решает сама:
-  она показывает человеку оба довода и спорный фрагмент, и решает человек.
-  Расход токенов виден по раундам.
+- **Тройное ревью (`vote`) несовместимо со спором.** Три модели из панели
+  собирают замечания, возражений и раундов у них нет. `--reply` вместе с
+  `--mode vote` программа отвергает: «Спор с тройным ревью не совмещается».
+  Если человек просит «тройное ревью спора» — объясни, что режимы разные,
+  и спроси, какой нужен.
 - **Код уходит провайдеру.** Если выбран мост LMArena — это публичная
   площадка: приватный код и секреты туда не отправляют, окно говорит об
   этом прямо.

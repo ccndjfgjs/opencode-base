@@ -49,6 +49,26 @@ def say(text: str) -> None:
     print(f"[browsers-bridge] {text}", file=sys.stderr, flush=True)
 
 
+def read_token(settings: Path) -> str:
+    """Читает токен расширения Playwright из файла рядом с настройками.
+
+    В режиме «мои сессии» расширение Playwright спрашивает одобрение на
+    каждое подключение. Токен из расширения убирает этот запрос — он
+    передаётся серверу переменной окружения PLAYWRIGHT_MCP_EXTENSION_TOKEN.
+    Файл хранится рядом с настройками, как пароль OBS, и закрыт от git.
+    """
+    path = settings / "mcp-browsers-token.txt"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+    for line in text.splitlines():
+        line = line.strip()
+        if line and not line.startswith(("токен", "PLAYWRIGHT")):
+            return line
+    return ""
+
+
 def main() -> int:
     try:
         import browsers  # noqa: PLC0415 — рядом лежит
@@ -76,14 +96,22 @@ def main() -> int:
 
     args = [npx, *[str(part) for part in browsers.command(settings, choice)[1:]]]
     argv = browsers._wrap_cmd(args)  # noqa: SLF001 — общая обёртка для .cmd на Windows
-    say(f"запускаю мост: {browsers.description(choice)}")
+    env = dict(os.environ)
     if choice.profile == "sessions":
         say("режим «мои сессии»: нужен запущенный Chrome или Edge с "
             "расширением Playwright")
+        token = read_token(settings)
+        if token:
+            env["PLAYWRIGHT_MCP_EXTENSION_TOKEN"] = token
+            say("токен расширения прочитан, одобрение подключения отключено")
+        else:
+            say(f"токен не найден: {settings / 'mcp-browsers-token.txt'} — "
+                "при каждом подключении Chrome будет спрашивать одобрение")
+    say(f"запускаю мост: {browsers.description(choice)}")
     cwd = SERVER_DIR if SERVER_DIR.is_dir() else settings
     try:
         proc = subprocess.Popen(
-            argv, cwd=str(cwd),
+            argv, cwd=str(cwd), env=env,
             stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr,
             startupinfo=hidden_startupinfo(),
         )
