@@ -246,6 +246,34 @@ class Worker(QThread):
         self.line.emit(text, "info")
 
 
+class QwenCheckModels(QThread):
+    """Проверка доступности моделей провайдера — в стороне от окна.
+
+    Отдельный поток, а не общий Worker: у проверки свой прогресс
+    («Проверено X из Y») и свой результат — справочник состояний,
+    который рисуется в своей области карточки Qwen, а не в общем
+    журнале. Обработчик кнопки только запускает поток:
+    check_provider_models зовётся здесь, в run(), и GUI-поток
+    не блокируется.
+    """
+
+    progress = pyqtSignal(str)
+
+    def __init__(self, dest, provider_id: str, parent=None) -> None:
+        super().__init__(parent)
+        self._dest = dest
+        self._provider = provider_id
+        self.result: object = None
+
+    def run(self) -> None:  # noqa: D102
+        try:
+            self.result = qwen_review.check_provider_models(
+                self._dest, self._provider,
+                progress=lambda text: self.progress.emit(text))
+        except Exception as exc:  # noqa: BLE001 — причина в окно, а не падение
+            self.result = exc
+
+
 # ---------------------------------------------------------------- подсказки
 
 
@@ -3413,6 +3441,7 @@ class CapsTab(ScrollPage):
 
     def __init__(self, parent=None) -> None:
         self._worker: Worker | None = None
+        self._qw_check_worker: QwenCheckModels | None = None
         self._what = ""
         inner = QWidget()
         super().__init__(inner, parent)
@@ -3723,6 +3752,16 @@ class CapsTab(ScrollPage):
             "запуска и в окно и журналы не попадает.",
             kind="dim", wrap=True,
         ))
+        # --- режимы ревьюера: список строится из общего qwen_review.MODES,
+        # а не хардкодом: добавился режим в списке — появился и здесь.
+        qw_layout.addWidget(ui.label("Режимы ревьюера:", kind="dim", wrap=True))
+        self.qw_modes_labels: list[QLabel] = []
+        for _mode in qwen_review.MODES:
+            _line = "• " + str(_mode.get("name") or "") + " — " \
+                + str(_mode.get("description") or "")
+            _lbl = ui.label(_line, kind="dim", wrap=True)
+            qw_layout.addWidget(_lbl)
+            self.qw_modes_labels.append(_lbl)
         row_qw_pick = QHBoxLayout()
         row_qw_pick2 = QHBoxLayout()
         row_qw_pick.addWidget(QLabel("Провайдер:   "))
@@ -3754,6 +3793,33 @@ class CapsTab(ScrollPage):
         # провайдер на первой строке, модель и сохранение на второй.
         qw_layout.addLayout(row_qw_pick)
         qw_layout.addLayout(row_qw_pick2)
+        # --- проверка доступности моделей: кнопка рядом с выбором
+        # провайдера, под ней — прогресс и список состояний ✔/✘/?.
+        # Проверка живёт в отдельном потоке (QwenCheckModels): в момент
+        # нажатия кнопка гаснет, а окно продолжает отвечать.
+        row_qw_avail = QHBoxLayout()
+        self.btn_qw_check_models = QPushButton("Проверить доступность")
+        self.btn_qw_check_models.setToolTip(
+            "Задаёт один минимальный вопрос каждой модели выбранного "
+            "провайдера и показывает, кто отвечает (✔), кто отказал "
+            "окончательно (✘ — 401, 404) и кто неизвестен (? — 429, "
+            "таймаут). Это тратит токены и бьёт по API: не больше "
+            "120 запросов за прогон. Результат запоминается на сутки: "
+            "повторный просмотр без кнопки идёт из кэша"
+        )
+        row_qw_avail.addWidget(self.btn_qw_check_models)
+        row_qw_avail.addStretch(1)
+        qw_layout.addLayout(row_qw_avail)
+        self.qw_check_progress = ui.label("", kind="dim", wrap=True)
+        qw_layout.addWidget(self.qw_check_progress)
+        # Список состояний моделей. Своя высота с потолком: провайдеров
+        # бывают сотни моделей, и без потолка страница выросла бы на
+        # экран, а с потолком список крутится внутри себя сам.
+        self.qw_check_list = QListWidget()
+        self.qw_check_list.setWordWrap(True)
+        self.qw_check_list.setMaximumHeight(150)
+        self.qw_check_list.setVisible(False)
+        qw_layout.addWidget(self.qw_check_list)
         self.qw_hint = ui.label("", kind="dim", wrap=True)
         qw_layout.addWidget(self.qw_hint)
         row_qw_btns = QHBoxLayout()
@@ -4326,6 +4392,7 @@ class CapsTab(ScrollPage):
         self.btn_qw_run.clicked.connect(self._qw_run)
         self.btn_qw_reply.clicked.connect(self._qw_reply)
         self.btn_qw_forget.clicked.connect(self._qw_forget)
+        self.btn_qw_check_models.clicked.connect(self._qw_check_models)
         self.qw_debate.toggled.connect(self._qw_debate_toggled)
         self.reg_table.currentCellChanged.connect(
             lambda *_: self._reg_show_detail()
@@ -6387,6 +6454,7 @@ class CapsTab(ScrollPage):
         if index >= 0:
             self.qw_model.setCurrentIndex(index)
         self._qw_fit_model_width()
+        self._qw_show_cached()
 
     def _qw_fit_model_width(self) -> None:
         """Подгоняет ширину списка моделей под самое длинное имя.
@@ -6404,6 +6472,119 @@ class CapsTab(ScrollPage):
     def _qw_provider_changed(self) -> None:
         """Сменился провайдер — перечитать его модели."""
         self._qw_fill_models()
+        self._qw_show_cached()
+
+    # ---- проверка доступности моделей провайдера
+
+    def _qw_mask_reason(self, text: str) -> str:
+        """Вычищает ключ из чужого текста перед показом в окне.
+
+        Причины ошибок приходят от провайдеров, и те любят цитировать
+        присланный ключ целиком. check_provider_models чистит причины
+        уже в рабочем потоке, но здесь последний рубеж: маскируется
+        всё, что попало в окно, — и причины, и заметки.
+        """
+        text = str(text or "")
+        dest = self._dest()
+        provider = str(self.qw_provider.currentData() or "")
+        if not dest or not provider:
+            return text
+        try:
+            key, _source = qwen_review.provider_key_info(dest, provider)
+        except Exception:  # noqa: BLE001 — чужие настройки не должны ронять окно
+            return text
+        if not key:
+            return text
+        return qwen_review.mask_text(text, key)
+
+    def _qw_render_check(self, results, notes=(), from_cache: bool = False) -> None:
+        """Рисует состояния моделей. Сети здесь нет: что передано — то и показ.
+
+        Результаты — {модель: (состояние, причина)}: ✔ отвечает, ✘ точно
+        нет, ? не знаю. Каждая причина перед показом проходит через
+        маску ключа. Список виден, только когда есть что показывать.
+        """
+        self.qw_check_list.clear()
+        shown = 0
+        for model in sorted(results):
+            state, reason = results[model]
+            symbol = qwen_review.CHECK_SYMBOL.get(str(state), "?")
+            reason = self._qw_mask_reason(reason)
+            line = f"{symbol} {model}" + (f" — {reason}" if reason else "")
+            item = QListWidgetItem(line)
+            # Полная строка — в подсказке: список узкий, и по ширине
+            # длинную причину он переносит, но подпись в строке может
+            # всё равно не влезть — тогда она хотя бы в подсказке.
+            item.setToolTip(line)
+            self.qw_check_list.addItem(item)
+            shown += 1
+        self.qw_check_list.setVisible(shown > 0)
+        parts = [str(note) for note in notes]
+        if from_cache:
+            parts.insert(0, "Показан кэш проверки (24 ч): живая проверка — "
+                            "по кнопке, сейчас по API не били.")
+        self.qw_check_progress.setText(" ".join(parts))
+
+    def _qw_show_cached(self) -> None:
+        """Кэш проверки (24 ч) — без сети, с пометкой «из кэша».
+
+        Читается в GUI-потоке: это чтение своего файла, не запрос к
+        провайдеру. Пока идёт живая проверка, кэш не перерисовывается,
+        чтобы не затирать живой прогресс.
+        """
+        if getattr(self, "_qw_check_worker", None) is not None:
+            return
+        dest = self._dest()
+        provider = str(self.qw_provider.currentData() or "")
+        results = {}
+        if dest and provider:
+            try:
+                results = qwen_review.cached_states(dest, provider)
+            except Exception:  # noqa: BLE001
+                results = {}
+        self._qw_render_check(results, from_cache=bool(results))
+
+    def _qw_check_models(self) -> None:
+        """Запускает проверку моделей в отдельном потоке.
+
+        Сам обработчик сети не касается: он только собирает выбор
+        провайдера и стартует QwenCheckModels. Кнопка гаснет до конца
+        проверки — второе нажатие не может удвоить расход токенов.
+        """
+        dest = self._qw_dest()
+        if dest is None:
+            return
+        provider = str(self.qw_provider.currentData() or "")
+        if not provider:
+            self._warn(
+                "Не выбран провайдер: проверять доступность нечего. "
+                "Провайдеры берутся из настроек opencode."
+            )
+            return
+        self.btn_qw_check_models.setEnabled(False)
+        self.qw_check_progress.setText("Проверяю доступность моделей…")
+        self._qw_check_worker = QwenCheckModels(dest, provider, self)
+        self._qw_check_worker.progress.connect(self._qw_check_models_progress)
+        self._qw_check_worker.finished.connect(self._qw_check_models_done)
+        self._qw_check_worker.start()
+
+    def _qw_check_models_progress(self, text: str) -> None:
+        """Прогресс из рабочего потока: «Проверено X из Y»."""
+        self.qw_check_progress.setText(text)
+
+    def _qw_check_models_done(self) -> None:
+        """Проверка кончилась: включаем кнопку и рисуем результат."""
+        self.btn_qw_check_models.setEnabled(True)
+        worker = self._qw_check_worker
+        self._qw_check_worker = None
+        result = worker.result if worker is not None else None
+        if isinstance(result, Exception):
+            self.qw_check_progress.setText(
+                "Проверка прервалась: " + self._qw_mask_reason(str(result)))
+            return
+        results, notes = result
+        notes = [self._qw_mask_reason(note) for note in notes]
+        self._qw_render_check(results, notes)
 
     def _qw_check(self) -> None:
         """Живая проверка окружения ревьюера. Ничего не меняет."""

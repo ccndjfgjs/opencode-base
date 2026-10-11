@@ -616,6 +616,30 @@ def check_provider_models(dest: Path, provider_id: str, progress=None,
     return results, notes
 
 
+def cached_states(dest: Path, provider_id: str,
+                  cache_hours: float = CHECK_CACHE_HOURS,
+                  ) -> dict[str, tuple[str, str]]:
+    """Свежие записи кэша проверки — без сети, для показа в окне.
+
+    Окно рисует состояния сразу после выбора провайдера: из кэша, без
+    единого запроса. Живая проверка — только по кнопке. Причины здесь
+    уже вычищены mask_text при записи: в кэше ключа нет, а в окне
+    причины ещё раз чистятся на всякий случай — у вызывающего кода
+    есть ключ и mask_text под рукой.
+    """
+    cache = _load_check_cache(Path(dest))
+    stored = (cache.get("providers") or {}).get(str(provider_id)) or {}
+    stored = stored.get("models") or {}
+    out: dict[str, tuple[str, str]] = {}
+    if not isinstance(stored, dict):
+        return out
+    for model, entry in stored.items():
+        if isinstance(entry, dict) and _cache_entry_fresh(entry, cache_hours):
+            out[str(model)] = (str(entry.get("state") or CHECK_UNKNOWN),
+                               str(entry.get("reason") or ""))
+    return out
+
+
 def choose(dest: Path, provider_id: str, model: str,
            progress=None) -> tuple[list[str], list[str]]:
     """Запоминает выбор провайдера и модели и пишет настройки Qwen Code.

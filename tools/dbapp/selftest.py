@@ -9191,6 +9191,165 @@ def main() -> int:
     except (ImportError, NameError):
         check(False, "модуль ревьюера импортируется для проверки режимов")
 
+    # ---- 8л. Окно: кнопка проверки моделей, режимы из MODES, кэш, маска
+    #
+    # Сети нет: живая check_provider_models подменяется синтетической
+    # (та же подпись, те же три состояния), кэш пишется руками во
+    # временную папку. Проверяется поведение окна: кнопка гаснет на
+    # время проверки, работа идёт в отдельном потоке, результат
+    # показывается со состояниями и маскированной причиной.
+    echo("\n--- 8л. Окно: проверка доступности моделей ---")
+    try:
+        import time as _qcm_time
+        import inspect as _qcm_inspect
+        from PyQt6.QtCore import QThread as _QThread
+        from PyQt6.QtWidgets import QListWidget as _QListWidget
+
+        _qcm_tab = getattr(window, "caps_tab", None)
+        _qcm_btn = getattr(_qcm_tab, "btn_qw_check_models", None)
+        if _qcm_tab is None or _qcm_btn is None or _qr is None:
+            check(False, "кнопка «Проверить доступность» на месте")
+        else:
+            # (а) Кнопка есть и связана с обработчиком.
+            check(_qcm_btn.receivers(_qcm_btn.clicked) >= 1,
+                  "кнопка «Проверить доступность» связана с обработчиком")
+
+            # (б) Список режимов построен из MODES: по метке на каждый
+            # режим, текст — имя и описание из данных, не хардкод.
+            _qcm_labels = getattr(_qcm_tab, "qw_modes_labels", [])
+            check(len(_qcm_labels) == len(_qr.MODES),
+                  f"в окне по метке на каждый режим MODES: {len(_qcm_labels)}")
+            for _mode in _qr.MODES:
+                _want = ("• " + str(_mode.get("name") or "") + " — "
+                         + str(_mode.get("description") or ""))
+                check(any(lbl.text() == _want for lbl in _qcm_labels),
+                      f"режим {_mode.get('id')}: в окне имя и описание из MODES")
+
+            # Синтетический ключ и подмена сети. Подпись подмены — как у
+            # настоящей: (dest, provider_id, progress=...).
+            _qcm_key = "sk-синт-ключ-918273645987"
+            _qcm_mask = _qp.mask_key(_qcm_key)
+            _qcm_calls: list[str] = []
+
+            def _qcm_fake(dest, provider_id, progress=None, **_kw):
+                _qcm_calls.append(str(provider_id))
+                progress("Проверено 1 из 3: модель-а ✔")
+                return ({
+                    "модель-а": (_qr.CHECK_OK, ""),
+                    "модель-01б": (_qr.CHECK_NO, "HTTP 401: ключ "
+                                   + _qcm_key + " отвергнут"),
+                    "модель-в": (_qr.CHECK_UNKNOWN, "сеть или таймаут: пропало"),
+                }, ["в кэше найден ключ " + _qcm_key])
+
+            _qcm_was_cm = _qr.check_provider_models
+            _qcm_dir = Path(tempfile.mkdtemp(prefix="selftest-qwcheck-"))
+            (_qcm_dir / "opencode.jsonc").write_text(
+                '{"provider": {"провер-": {"npm": "@ai-sdk/openai-compatible",'
+                ' "apiKey": "' + _qcm_key + '"}}}', encoding="utf-8")
+            _qcm_dest_was = _qcm_tab.dest_edit.text()
+            _qcm_tab.dest_edit.setText(str(_qcm_dir))
+            try:
+                # (г) Проверка живёт в отдельном потоке: обработчик клика
+                # её не зовёт, а только запускает QThread-воркер.
+                _qcm_handler_src = _qcm_inspect.getsource(
+                    type(_qcm_tab)._qw_check_models)
+                check("QwenCheckModels(" in _qcm_handler_src
+                      and "check_provider_models" not in _qcm_handler_src,
+                      "обработчик кнопки только запускает поток, сети в нём нет")
+                _qcm_worker_cls = getattr(app_main, "QwenCheckModels", None)
+                check(_qcm_worker_cls is not None
+                      and issubclass(_qcm_worker_cls, _QThread),
+                      "проверка моделей идёт в QThread, а не в обработчике клика")
+                check("check_provider_models" in _qcm_inspect.getsource(
+                          _qcm_worker_cls.run),
+                      "check_provider_models зовётся в run() рабочего потока")
+
+                # (в) Живая проверка на синтетике: подменяем работу и
+                # жмём кнопку. Кнопка гаснет на время проверки, потом
+                # включается, результат со состояниями и маской в окне.
+                _qr.check_provider_models = _qcm_fake
+                _qcm_tab.qw_provider.blockSignals(True)
+                _qcm_tab.qw_provider.addItem("провер-", "провер-")
+                _qcm_tab.qw_provider.setCurrentIndex(
+                    _qcm_tab.qw_provider.findData("провер-"))
+                _qcm_tab.qw_provider.blockSignals(False)
+                _qcm_tab._qw_check_models()
+                _qcm_deadline = _qcm_time.time() + 15.0
+                while (_qcm_tab._qw_check_worker is not None
+                       and _qcm_time.time() < _qcm_deadline):
+                    app.processEvents()
+                    _qcm_time.sleep(0.02)
+                for _ in range(5):
+                    app.processEvents()
+                check(len(_qcm_calls) == 1 and _qcm_calls[0] == "провер-",
+                      f"проверка вызвалась с выбранным провайдером: {_qcm_calls}")
+                check(_qcm_btn.isEnabled(),
+                      "кнопка проверки включается после конца работы")
+                _qcm_list = getattr(_qcm_tab, "qw_check_list", None)
+                # Окно в самопроверке намеренно не показывается, поэтому
+                # isVisible() всегда False. Проверяем видимость «внутри
+                # окна»: setVisible(True) после результатов и setVisible(False)
+                # когда пусто, без показа самого окна.
+                check(isinstance(_qcm_list, _QListWidget)
+                      and _qcm_list.isVisibleTo(_qcm_tab),
+                      "область результата появилась и видна после проверки")
+                _qcm_lines = [_qcm_list.item(i).text()
+                              for i in range(_qcm_list.count())] if _qcm_list else []
+                check(len(_qcm_lines) == 3,
+                      f"в списке результата все три модели: {len(_qcm_lines)}")
+                check(any(t.startswith("✔ ") for t in _qcm_lines),
+                      "модель, ответившая ok, показана с ✔")
+                check(any(t.startswith("✘ ") for t in _qcm_lines),
+                      "модель с отказом 401 показана с ✘")
+                check(any(t.startswith("? ") for t in _qcm_lines),
+                      "модель в неизвестном состоянии показана с ?")
+                check(all(_qcm_key not in t for t in _qcm_lines)
+                      and any(_qcm_mask in t for t in _qcm_lines),
+                      "причина ошибки в окне маскирована: полного ключа нет")
+                check(_qcm_key not in _qcm_tab.qw_check_progress.text()
+                      and _qcm_mask in _qcm_tab.qw_check_progress.text(),
+                      "заметки проверки в окне тоже маскированы")
+
+                # (в, кэш) Кэш читается и рисуется без сети и без кнопки.
+                _qcm_cache = {
+                    "providers": {"провер-": {"models": {
+                        "модель-кэш": {
+                            "state": _qr.CHECK_OK, "reason": "", "at": _qcm_time.time()},
+                        "модель-старая": {
+                            "state": _qr.CHECK_NO, "reason": "HTTP 404",
+                            "at": _qcm_time.time() - 25 * 3600},
+                    }}}}
+                (_qcm_dir / "qwen-review-data").mkdir(parents=True, exist_ok=True)
+                (_qcm_dir / "qwen-review-data" / "model-check.json").write_text(
+                    json.dumps(_qcm_cache, ensure_ascii=False), encoding="utf-8")
+                _qcm_fresh = _qr.cached_states(_qcm_dir, "провер-")
+                check(list(_qcm_fresh) == ["модель-кэш"],
+                      f"кэш отдаёт только свежие записи: {list(_qcm_fresh)}")
+                check(_qcm_fresh["модель-кэш"][0] == _qr.CHECK_OK,
+                      "состояние из кэша читается без сети")
+
+                def _qcm_no_network(*_a, **_k):
+                    raise AssertionError("сети в показе кэша быть не должно")
+
+                _qr.check_provider_models = _qcm_no_network
+                try:
+                    _qcm_tab._qw_show_cached()
+                    _qcm_texts = [_qcm_list.item(i).text()
+                                  for i in range(_qcm_list.count())]
+                    check(any(t.startswith("✔ модель-кэш") for t in _qcm_texts),
+                          f"кэш показан в окне с ✔: {_qcm_texts}")
+                    check("кэш" in _qcm_tab.qw_check_progress.text()
+                          and "24 ч" in _qcm_tab.qw_check_progress.text(),
+                          "кэш в окне помечен словами «из кэша (24 ч)»")
+                finally:
+                    _qr.check_provider_models = _qcm_was_cm
+            finally:
+                _qr.check_provider_models = _qcm_was_cm
+                _qcm_tab.dest_edit.setText(_qcm_dest_was)
+                shutil.rmtree(_qcm_dir, ignore_errors=True)
+    except (ImportError, NameError):
+        check(False, "модуль ревьюера импортируется для проверки окна")
+
     # ---- 8г. Обновление скилла в уже созданной базе
     echo("\n--- 8г. Скилл, который в мастере, но только в старой базе ---")
     _src_sk = core.program_root()
