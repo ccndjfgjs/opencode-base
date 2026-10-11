@@ -9350,6 +9350,131 @@ def main() -> int:
     except (ImportError, NameError):
         check(False, "модуль ревьюера импортируется для проверки окна")
 
+    # ---- 8л-1. Скилл qwen-review-setup: описание, ссылка, копии
+    #
+    # Скилл настройки ревьюера должен быть описан, упомянут в индексе,
+    # совпадать во всех копиях, а скилл qwen-review — ссылаться на него.
+    echo("\n--- 8л-1. Скилл qwen-review-setup: описание, ссылка, копии ---")
+    _qrs_dir = core.program_root() / "skills" / "qwen-review-setup"
+    _qrs_file = _qrs_dir / "SKILL.md"
+    check(_qrs_file.is_file(),
+          "скилл qwen-review-setup лежит в skills/qwen-review-setup/")
+    if _qrs_file.is_file():
+        _qrs_text = _qrs_file.read_text(encoding="utf-8")
+        check(_qrs_text.startswith("---")
+              and "name: qwen-review-setup" in _qrs_text[:400],
+              "в шапке скилла qwen-review-setup есть имя")
+        check("MODES" in _qrs_text and "401" in _qrs_text and "120" in _qrs_text,
+              "в скилле названы режимы MODES, разбор 401 и потолок 120")
+        # Описание навыков знает про скилл (таблица и раздел).
+        _qrs_desc = core.program_root() / "skills" / "_ОПИСАНИЕ-НАВЫКОВ.md"
+        if _qrs_desc.is_file():
+            _qrs_dtext = _qrs_desc.read_text(encoding="utf-8")
+            check("| `qwen-review-setup` |" in _qrs_dtext,
+                  "в сводной таблице описаний есть строка qwen-review-setup")
+            check("### `qwen-review-setup`" in _qrs_dtext,
+                  "в описаниях есть раздел qwen-review-setup")
+        # Индекс скиллов знает про скилл: запись с when/trigger/result.
+        _qrs_idx = core.program_file("skills-index.json")
+        if _qrs_idx.is_file():
+            try:
+                _qrs_idata = json.loads(_qrs_idx.read_text(encoding="utf-8"))
+                _qrs_items = (_qrs_idata if isinstance(_qrs_idata, list)
+                              else _qrs_idata.get("skills", []))
+                _qrs_entry = next((x for x in _qrs_items
+                                   if str(x.get("name")) == "qwen-review-setup"),
+                                  None)
+                check(_qrs_entry is not None
+                      and bool(_qrs_entry.get("when"))
+                      and bool(_qrs_entry.get("trigger"))
+                      and bool(_qrs_entry.get("result")),
+                      "в skills-index.json есть запись про qwen-review-setup")
+            except (OSError, ValueError) as _qrs_exc:
+                check(False, f"skills-index.json не читается: {_qrs_exc}")
+        # Скилл-ревьюер ссылается на скилл-настройку.
+        _qrr_file = core.program_root() / "skills" / "qwen-review" / "SKILL.md"
+        if _qrr_file.is_file():
+            check("qwen-review-setup" in _qrr_file.read_text(encoding="utf-8"),
+                  "в скилле qwen-review есть перекрёстная ссылка на qwen-review-setup")
+        # Копии совпадают с мастером: живая база и настройки opencode.
+        # Где копии нет — так и должно быть до первого подключения:
+        # ругаемся только на расхождение.
+        _qrs_master = _qrs_file.read_bytes()
+        _qrs_copies: list[tuple[str, Path]] = []
+        if core.app_root() != core.program_root():
+            _qrs_copies.append(("живая база", core.app_root() / "skills"))
+        try:
+            _qrs_prog = core.PROGRAMS_BY_ID.get("opencode")
+            _qrs_conf = _qrs_prog.config_dir() if _qrs_prog else None
+        except Exception:  # noqa: BLE001 — настройки могут не открыться, это не сбой
+            _qrs_conf = None
+        if _qrs_conf:
+            _qrs_copies.append(("настройки opencode", Path(_qrs_conf) / "skills"))
+        for _qrs_label, _qrs_skills in _qrs_copies:
+            _qrs_copy = _qrs_skills / "qwen-review-setup" / "SKILL.md"
+            if _qrs_copy.is_file():
+                check(_qrs_copy.read_bytes() == _qrs_master,
+                      f"SKILL.md qwen-review-setup в {_qrs_label} совпадает с мастером")
+
+    # ---- 8л-2. Геометрия узкого окна: комбо моделей и таблица серверов
+    #
+    # Замечания проверяющего задачи 5: qw_model переполнял узкое окно на
+    # 174 пикселя из-за длинных имён моделей, а таблица серверов (и список
+    # навыков) были шире узкого просмотра без своей горизонтальной
+    # прокрутки. Проверка числами, без показа окна.
+    echo("\n--- 8л-2. Геометрия: комбо моделей и таблица серверов ---")
+    try:
+        from PyQt6.QtCore import Qt as _qGeoQt
+        from PyQt6.QtWidgets import QListWidget as _qGeoList
+
+        _gw_tab = getattr(window, "caps_tab", None)
+        _gw_model = getattr(_gw_tab, "qw_model", None)
+        _gw_table = getattr(_gw_tab, "reg_table", None)
+        if _gw_tab is None or _gw_model is None or _gw_table is None:
+            check(False, "вкладка opencode собрана для замера геометрии")
+        else:
+            # Имитируем длинное имя модели: подгонка ширины обязана
+            # упереться в просмотр, а не раздвинуть страницу.
+            _gw_model.blockSignals(True)
+            _gw_wide = "длинное-имя-модели-от-провайдера-" * 4
+            _gw_model.addItem(_gw_wide, "замер")
+            _gw_model.setCurrentIndex(_gw_model.count() - 1)
+            _gw_model.blockSignals(False)
+            _gw_tab._qw_fit_model_width()
+            _gw_vp = _gw_tab.viewport().width()
+            if _gw_vp >= 540:
+                check(_gw_model.minimumWidth() <= _gw_vp,
+                      f"минимум списка моделей не шире просмотра: "
+                      f"{_gw_model.minimumWidth()} при {_gw_vp}")
+            else:
+                check(_gw_model.minimumWidth() == 240,
+                      "на совсем узком окне минимум списка моделей — сборочный 240")
+            # Замерная строка больше не нужна.
+            _gw_i = _gw_model.findData("замер")
+            if _gw_i >= 0:
+                _gw_model.removeItem(_gw_i)
+            # Таблица серверов: минимум не раздвигает блок, своя прокрутка
+            # включена — пользователь доскроллит до последних колонок.
+            _gw_total = sum(_gw_table.columnWidth(c)
+                            for c in range(_gw_table.columnCount()))
+            check(_gw_table.minimumWidth() <= _gw_total,
+                  "минимум таблицы серверов не больше суммы её колонок")
+            check(_gw_table.horizontalScrollBarPolicy()
+                  == _qGeoQt.ScrollBarPolicy.ScrollBarAsNeeded,
+                  "у таблицы серверов доступна своя горизонтальная прокрутка")
+            _gw_list = getattr(_gw_tab, "caps_skills_list", None)
+            if isinstance(_gw_list := getattr(_gw_tab, "caps_skills_list", None),
+                          _qGeoList):
+                # Список навыков переносит строки сам (core.skill_item_text),
+                # поэтому прокрутки вбок у него нет намеренно; проверяем,
+                # что так и осталось.
+                check(_gw_list.horizontalScrollBarPolicy()
+                      == _qGeoQt.ScrollBarPolicy.ScrollBarAlwaysOff,
+                      "у списка навыков прокрутки вбок нет: строки переносятся сами")
+            _gw_tab._reg_fit_columns()
+    except Exception as _gw_exc:  # noqa: BLE001 — замер не должен ронять проверку
+        check(False, f"замер геометрии упал: {_gw_exc}")
+
     # ---- 8г. Обновление скилла в уже созданной базе
     echo("\n--- 8г. Скилл, который в мастере, но только в старой базе ---")
     _src_sk = core.program_root()
