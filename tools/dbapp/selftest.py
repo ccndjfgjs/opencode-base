@@ -9508,6 +9508,342 @@ def main() -> int:
     except Exception as _gw_exc:  # noqa: BLE001 — замер не должен ронять проверку
         check(False, f"замер геометрии упал: {_gw_exc}")
 
+    # ---- 8м. Тройное ревью: панель, свод голосования, три ключа
+    #
+    # Сети и ревьюера здесь нет: run подменяется синтетикой, ключи
+    # провайдеров — настоящие строки в настройках opencode, а ответы
+    # моделей — заготовки, одна из которых цитирует ключ в 401 так,
+    # как это любят делать провайдеры.
+    echo("\n--- 8м. Тройное ревью: панель, свод, три ключа ---")
+    _vp_dir = Path(tempfile.mkdtemp(prefix="selftest-votepanel-"))
+    try:
+        # (а) Панель живёт рядом с выбором ревьюера и ходом спора.
+        check(_qr.panel_file(_vp_dir).name == "vote-panel.json",
+              f"панель тройного ревью — файл vote-panel.json: "
+              f"{_qr.panel_file(_vp_dir).name}")
+        check(_qr.panel_file(_vp_dir).parent == _qr.state_file(_vp_dir).parent
+              == _qr.debate_file(_vp_dir).parent,
+              "панель лежит в той же папке, что выбор ревьюера и ход спора")
+        check(_qr.VOTE_SLOTS == ("1", "2", "3"),
+              f"в панели три слота: {_qr.VOTE_SLOTS}")
+
+        # (б) Пустая панель, битый файл и чужой формат — пустое, не падение.
+        check(_qr.panel(_vp_dir) == {},
+              "на пустой папке панель пуста, а не ошибка")
+        _qp_file = _qr.panel_file(_vp_dir)
+        _qr.data_dir(_vp_dir).mkdir(parents=True, exist_ok=True)
+        _qp_file.write_text("{это не json", encoding="utf-8")
+        check(_qr.panel(_vp_dir) == {},
+              "битый файл панели читается как пустая панель, а не падает")
+        _qp_file.write_text('["список", "а не словарь"]', encoding="utf-8")
+        check(_qr.panel(_vp_dir) == {},
+              "чужой формат панели читается как пустая панель")
+        _qr.panel_file(_vp_dir).unlink(missing_ok=True)
+
+        # (в) Три провайдера с разными ключами и моделями — как в жизни.
+        _vp_keys = {"голос-а": "sk-голос-а-111111111",
+                    "голос-б": "sk-голос-б-222222222",
+                    "голос-в": "sk-голос-в-333333333"}
+        _vp_cfg = {"provider": {}}
+        for _name, _key in _vp_keys.items():
+            _vp_cfg["provider"][_name] = {
+                "npm": "@ai-sdk/openai-compatible",
+                "apiKey": _key,
+                "options": {"baseURL": f"https://{_name}.test/v1"},
+                "models": {f"модель-{_name[-1]}": {"name": f"модель-{_name[-1]}"}},
+            }
+        (_vp_dir / "opencode.jsonc").write_text(
+            json.dumps(_vp_cfg, ensure_ascii=False), encoding="utf-8")
+        _vp_slot_model = {"1": "модель-а", "2": "модель-б", "3": "модель-в"}
+        for _slot, _name in (("1", "голос-а"), ("2", "голос-б"), ("3", "голос-в")):
+            _vp_mess, _vp_errs = _qr.panel_set(
+                _vp_dir, _slot, _name, _vp_slot_model[_slot])
+            check(not _vp_errs,
+                  f"слот {_slot} панели записался: {_vp_errs}")
+        _vp_panel = _qr.panel(_vp_dir)
+        check(set(_vp_panel) == set(_qr.VOTE_SLOTS)
+              and _vp_panel["2"]["provider"] == "голос-б",
+              f"панель прочиталась обратно: {_vp_panel}")
+
+        # (г) Ключа в файле панели нет — там только имена.
+        _vp_text = _qr.panel_file(_vp_dir).read_text(encoding="utf-8")
+        check(not any(key in _vp_text for key in _vp_keys.values()),
+              "в файле панели нет ни одного ключа провайдера")
+
+        # (д) Чужие имена не проходят: панель с выдуманным провайдером
+        # упала бы позже, на первом же запросе.
+        _vp_bad_p, _vp_bad_e = _qr.panel_set(
+            _vp_dir, "1", "нет-такого", "модель-а")
+        check(_vp_bad_p == [] and "нет-такого" in (_vp_bad_e[0] if _vp_bad_e else ""),
+              f"выдуманный провайдер отвергнут словами: {_vp_bad_e}")
+        _vp_bad_p, _vp_bad_e = _qr.panel_set(
+            _vp_dir, "1", "голос-а", "нет-такой-модели")
+        check(_vp_bad_p == [] and "модели" in (_vp_bad_e[0] if _vp_bad_e else ""),
+              f"выдуманная модель отвергнута словами: {_vp_bad_e}")
+        _vp_bad_p, _vp_bad_e = _qr.panel_set(
+            _vp_dir, "9", "голос-а", "модель-а")
+        check(_vp_bad_p == [] and "9" in (_vp_bad_e[0] if _vp_bad_e else ""),
+              f"слот вне 1|2|3 отвергнут словами: {_vp_bad_e}")
+        check(_qr.panel(_vp_dir) == _vp_panel,
+              "неудачные попытки записи панель не испортили")
+
+        # (е) panel show показывает три слота и маскирует ключ СВОЕГО
+        # слота: ключ, вставленный в имя модели руками, на экран не
+        # выходит — но и чужой ключ маска не тащит наружу.
+        _vp_leak_key = _vp_keys["голос-б"]
+        _vp_raw = json.loads(_qr.panel_file(_vp_dir).read_text(encoding="utf-8"))
+        _vp_raw["2"]["model"] = _vp_leak_key
+        _qr.panel_file(_vp_dir).write_text(
+            json.dumps(_vp_raw, ensure_ascii=False), encoding="utf-8")
+        _vp_shown = "\n".join(_qr.panel_show(_vp_dir))
+        check(_vp_leak_key not in _vp_shown,
+              "panel show маскирует ключ, подставленный в имя модели")
+        check("голос-а / модель-а" in _vp_shown
+              and "голос-в / модель-в" in _vp_shown
+              and not any(key in _vp_shown
+                          for key in (_vp_keys["голос-а"], _vp_keys["голос-в"])),
+              f"остальные слоты в panel show показаны как есть: {_vp_shown}")
+        # Возвращаем панель в нормальный вид для следующих проверок.
+        _qr.panel_set(_vp_dir, "2", "голос-б", "модель-б")
+        check(_qr.panel(_vp_dir) == _vp_panel, "панель вернулась в нужный вид")
+
+        # (ж) Свод — чистая функция: три ответа, общая проблема у двух
+        # моделей и два уникальных замечания. Дубликат идёт сверху и
+        # помечен обеими моделями.
+        _vp_reviews = [
+            ("модель-а",
+             "- В review_vote нет проверки installed(), при выключенном "
+             "ревьюере уходят три запроса впустую.\n"
+             "- В panel_show ключ слота не маскируется."),
+            ("модель-б",
+             "- Нет проверки installed(): из-за этого при выключенном "
+             "ревьюере делаются три запроса впустую.\n"
+             "- Порог VOTE_SIMILARITY подобран на глаз."),
+            ("модель-в",
+             "- Порог схожести замечаний нигде не измерен."),
+        ]
+        _vp_groups = _qr.summarize_vote(_vp_reviews)
+        check(len(_vp_groups) == 4,
+              f"свод разложил четыре замечания: {[g['text'][:28] for g in _vp_groups]}")
+        _vp_dups = [g for g in _vp_groups if g["count"] > 1]
+        check(len(_vp_dups) == 1
+              and set(_vp_dups[0]["models"]) == {"модель-а", "модель-б"},
+              f"общая проблема узнана у двух моделей: {_vp_dups}")
+        check(_vp_groups and _vp_groups[0] is _vp_dups[0],
+              "дубликат стоит сверху свода")
+        check("installed" in _vp_dups[0]["text"],
+              f"в дубликате видна суть, а не огрызок: {_vp_dups[0]['text']}")
+        _vp_lines = _qr.format_vote_summary(_vp_reviews)
+        _vp_head = "\n".join(_vp_lines)
+        check("повторили несколько моделей" in _vp_head
+              and "модель-а, модель-б" in _vp_head,
+              "в словах свода дубликат помечен обеими моделями")
+        check(_vp_head.index("повторили несколько моделей")
+              < _vp_head.index("Уникальные замечания"),
+              "уникальные замечания идут после дубликатов")
+        # Служебные слова не склеивают разные замечания: обе фразы
+        # проходят через «в», «не» и «на», но смысл у них разный.
+        check(len(_vp_dups) == 1,
+              "замечания с общими служебными словами не склеены в одно")
+        check(_qr.summarize_vote([]) == [],
+              "на пустом входе свод пуст, а не падает")
+        check(any("без нареканий" in line
+                  for line in _qr.format_vote_summary([("модель-а", "")])),
+              "молчание моделей сказано словами")
+
+        # (з) Свод не ходит в сеть и не читает файлы: та же функция на
+        # том же входе даёт тот же ответ.
+        _vp_again = _qr.summarize_vote(_vp_reviews)
+        check(_vp_again == _vp_groups, "свод повторяем: сети и файлов в нём нет")
+
+        # (и) review_vote: три вызова с переопределением провайдера и
+        # модели, diff собирается ОДИН раз, ключ каждого слота маскирует
+        # только свой вывод — в том числе 401 с цитатой ключа.
+        _vp_calls: list[tuple] = []
+        _vp_diffs: list[str] = []
+
+        def _vp_fake_run(dest, project, prompt, diff_text, progress=None,
+                         command=None, timeout=900, override=None):
+            _pid = str((override or {}).get("provider") or "")
+            _mdl = str((override or {}).get("model") or "")
+            _vp_calls.append((_pid, _mdl))
+            _vp_diffs.append(str(diff_text))
+            if _pid == "голос-б":
+                # Провайдер цитирует присланный ключ целиком.
+                return ([], ["Ревьюер ответил ошибкой: HTTP 401 Invalid "
+                             "API key " + _vp_keys[_pid]], {"error": "401"})
+            _text = ("- В review_vote нет проверки installed(), при "
+                     "выключенном ревьюере уходят три запроса впустую.\n"
+                     f"- Замечание только от {_pid}.")
+            return ([], [], {"text": _text,
+                             "usage": {"input_tokens": 11, "output_tokens": 7,
+                                       "total_tokens": 18}})
+
+        _vp_was = (_qr.installed, _qr.collect, _qr.run)
+        _qr.installed = lambda dest: True
+        _qr.collect = lambda project, base="": (
+            {"diff": "ДИФФ", "stat": "1 файл", "untracked": [],
+             "base": "HEAD"}, "")
+
+        def _vp_counting_collect(project, base=""):
+            _vp_diffs.append("сбор")
+            return ({"diff": "ДИФФ", "stat": "1 файл", "untracked": [],
+                     "base": "HEAD"}, "")
+
+        _qr.collect = _vp_counting_collect
+        _qr.run = _vp_fake_run
+        try:
+            _vp_messages, _vp_errors = _qr.review_vote(_vp_dir, _vp_dir, "")
+        finally:
+            (_qr.installed, _qr.collect, _qr.run) = _vp_was
+        check([pid for pid, _mdl in _vp_calls]
+              == ["голос-а", "голос-б", "голос-в"],
+              f"три вызова, по провайдеру из панели: {_vp_calls}")
+        check([mdl for _pid, mdl in _vp_calls]
+              == ["модель-а", "модель-б", "модель-в"],
+              f"у каждого вызова своя модель: {_vp_calls}")
+        check(len([d for d in _vp_diffs if d == "сбор"]) == 1,
+              f"diff собирается один раз на три запроса: {_vp_diffs}")
+        _vp_sent = [d for d in _vp_diffs if d != "сбор"]
+        check(len(_vp_sent) == 3 and len(set(_vp_sent)) == 1
+              and "ДИФФ" in _vp_sent[0],
+              f"все три слота получили один и тот же diff: {_vp_sent}")
+        _vp_all = "\n".join(_vp_messages) + "\n".join(_vp_errors)
+        check("Запросов сделано: 3" in _vp_all,
+              "в докладе сказано, что запросов было три")
+        check("Токены модель-а" in _vp_all and "Токены модель-в" in _vp_all
+              and "Токены модель-б" not in _vp_all,
+              "токены по каждой модели свои: упавший слот не показывает "
+              "чужой расход")
+        # Главное требование маскирования: 401 цитирует ключ второго
+        # слота, и в выводе ключа быть не должно.
+        check(not any(key in _vp_all for key in _vp_keys.values()),
+              "ни один ключ не попал в доклад тройного ревью")
+        check("401" in _vp_all,
+              "ошибка упавшего слота не потерялась")
+        check(not _vp_errors,
+              f"упавший слот не отменяет свод двух других: {_vp_errors}")
+        check("Свод тройного ревью" in _vp_all,
+              "свод напечатан после трёх запросов")
+        check("модель-а, модель-в" in _vp_all,
+              f"общее замечание помечено двумя ответившими моделями")
+
+        # (к) Каждый слот ходит по своему адресу и своему ключу: три
+        # провайдера — три разных адреса. Проверяем на подменённом run_env.
+        _vp_envs: list[dict] = []
+        _vp_was_env = _qr.run_env
+
+        def _vp_spy_env(dest=None, extra=None):
+            # Ссылку, а не копию: run() дописывает ключ и адрес ПОСЛЕ
+            # run_env, и копия на момент вызова была бы пустой.
+            env = _vp_was_env(dest, extra)
+            _vp_envs.append(env)
+            return env
+
+        _qr.run_env = _vp_spy_env
+        _vp_was_bin = _qr.find_binary
+        _vp_was_sub = _qr.subprocess
+        _qr.find_binary = lambda dest=None: (_vp_dir / "qwen.cmd", "подмена")
+        # Запуск ревьюёра подменён: процесс не нужен, нужны только
+        # окружение и адрес, которые он получил бы. Всё возвращается
+        # на место — иначе следующие разделы поехали бы.
+        _qr.subprocess = type("S", (), {
+            "SubprocessError": _vp_was_sub.SubprocessError,
+            "TimeoutExpired": _vp_was_sub.TimeoutExpired,
+            "Popen": _vp_was_sub.Popen,
+            "run": staticmethod(
+                lambda *a, **k: type("R", (), {
+                    "returncode": 0,
+                    "stdout": json.dumps([{"type": "result",
+                                           "result": "- Замечание."}]),
+                    "stderr": ""})())})
+        try:
+            for _slot, _name in (("1", "голос-а"), ("2", "голос-б"),
+                                 ("3", "голос-в")):
+                _qr.run(_vp_dir, _vp_dir, "П", "ДИФФ",
+                        override={"provider": _name,
+                                  "model": _vp_slot_model[_slot]})
+        finally:
+            _qr.run_env = _vp_was_env
+            _qr.find_binary = _vp_was_bin
+            _qr.subprocess = _vp_was_sub
+        check(len(_vp_envs) == 3
+              and [env.get("OPENAI_BASE_URL") for env in _vp_envs]
+              == ["https://голос-а.test/v1", "https://голос-б.test/v1",
+                  "https://голос-в.test/v1"],
+              f"каждый слот ушёл по адресу своего провайдера: "
+              f"{[e.get('OPENAI_BASE_URL') for e in _vp_envs]}")
+        check([env.get("OPENAI_API_KEY") for env in _vp_envs]
+              == [_vp_keys["голос-а"], _vp_keys["голос-б"], _vp_keys["голос-в"]],
+              "каждый слот получил ключ своего провайдера")
+
+        # (л) Пустая панель — отказ словами с подсказкой, а не тишина
+        # и не попытка собрать панель самой.
+        _vp_empty = Path(tempfile.mkdtemp(prefix="selftest-voteempty-"))
+        try:
+            _qr.installed = lambda dest: True
+            try:
+                _vp_m2, _vp_e2 = _qr.review_vote(_vp_empty, _vp_empty, "")
+            finally:
+                _qr.installed = _vp_was[0]
+            check(_vp_m2 == [] and _vp_e2
+                  and "настрой тройное ревью" in " ".join(_vp_e2),
+                  f"пустая панель — отказ с подсказкой: {_vp_e2}")
+            check(not _qr.panel_file(_vp_empty).exists(),
+                  "пустая панель не собирается сама")
+        finally:
+            shutil.rmtree(_vp_empty, ignore_errors=True)
+
+        # (м) CLI: --mode vote виден в help, спор с ним несовместим,
+        # подкоманды panel работают.
+        _vp_cli = Path(tempfile.mkdtemp(prefix="selftest-votecli-"))
+        try:
+
+            def _vp_run_cli(argv: list[str]) -> tuple[int, str]:
+                import io as _vp_io
+                from contextlib import redirect_stdout as _vp_redirect
+
+                buf = _vp_io.StringIO()
+                with _vp_redirect(buf):
+                    code = _qr._main(argv)
+                return code, buf.getvalue()
+
+            _vp_rej_code, _vp_rej_out = _vp_run_cli(
+                ["review", "проект", "--mode", "vote", "--reply", "возражение",
+                 "--dest", str(_vp_cli)])
+            check(_vp_rej_code == 1 and "не совмещается" in _vp_rej_out,
+                  f"спор с тройным ревью не совмещается, код 1: {_vp_rej_out}")
+            _vp_show_code, _vp_show_out = _vp_run_cli(
+                ["panel", "show", "--dest", str(_vp_dir)])
+            check(_vp_show_code == 0 and "Слот 1" in _vp_show_out
+                  and "Слот 3" in _vp_show_out,
+                  f"panel show печатает все три слота: {_vp_show_out}")
+            _vp_set_code, _vp_set_out = _vp_run_cli(
+                ["panel", "set", "1", "голос-а", "модель-а",
+                 "--dest", str(_vp_dir)])
+            check(_vp_set_code == 0 and "Слот 1" in _vp_set_out,
+                  f"panel set пишет слот из командной строки: {_vp_set_out}")
+            _vp_bare_code, _vp_bare_out = _vp_run_cli(
+                ["panel", "set", "1", "--dest", str(_vp_dir)])
+            check(_vp_bare_code == 1 and "нужны" in _vp_bare_out,
+                  f"panel set без провайдера и модели отвергнут словами: "
+                  f"{_vp_bare_out}")
+            _vp_clear_code, _vp_clear_out = _vp_run_cli(
+                ["panel", "clear", "--dest", str(_vp_dir)])
+            check(_vp_clear_code == 0 and _qr.panel(_vp_dir) == {},
+                  f"panel clear опустошает панель: {_vp_clear_out}")
+            _vp_empty_code, _vp_empty_out = _vp_run_cli(
+                ["panel", "show", "--dest", str(_vp_dir)])
+            check(_vp_empty_code == 1 and "настрой тройное ревью" in _vp_empty_out,
+                  f"пустая панель в panel show — код 1 и подсказка: "
+                  f"{_vp_empty_out}")
+        finally:
+            shutil.rmtree(_vp_cli, ignore_errors=True)
+    except (ImportError, NameError) as _vp_imp:
+        check(False, f"модуль ревьюера импортируется для проверки 8м: {_vp_imp}")
+    finally:
+        shutil.rmtree(_vp_dir, ignore_errors=True)
+
     # ---- 8г. Обновление скилла в уже созданной базе
     echo("\n--- 8г. Скилл, который в мастере, но только в старой базе ---")
     _src_sk = core.program_root()

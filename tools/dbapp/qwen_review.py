@@ -146,6 +146,28 @@ MODES: list[dict] = [
             f"число раундов от 1 до {MAX_ROUNDS}",
         ],
     },
+    {
+        # Режим тройного ревью стоит СТРОГО в конце списка. mode_from_flag
+        # возвращает первый режим без флага, и если «vote» окажется раньше
+        # «once», снятая галочка спора начнёт означать vote — и молча
+        # сломает и окно, и все старые вызовы командной строки.
+        "id": "vote",
+        "name": "Тройное ревью",
+        "description": (
+            "Три модели ревьюера (слоты панели тройного ревью) смотрят "
+            "один и тот же git diff. Совпавшие замечания нескольких "
+            "моделей поднимаются наверх списка, уникальные идут с меткой "
+            "чьи. Спор с этим режимом несовместим: замечания просто "
+            "собираются, возражений и раундов нет."
+        ),
+        "flag": False,
+        "label": "тройное ревью — три модели смотрят один diff",
+        "requires": [
+            "отмеченная галочка qwen-review",
+            "заполненная панель тройного ревью: три слота, в каждом "
+            "провайдер и модель",
+        ],
+    },
 ]
 
 #: Идентификаторы режимов: на них смотрят окно и командная строка.
@@ -155,6 +177,10 @@ MODE_ONCE = str(MODES[0]["id"])
 MODE_DEBATE = next(
     (str(mode["id"]) for mode in MODES if mode.get("flag")),
     MODE_ONCE,
+)
+MODE_VOTE = next(
+    (str(mode["id"]) for mode in MODES if str(mode.get("id")) == "vote"),
+    "",
 )
 
 
@@ -273,6 +299,11 @@ def state_file(dest: Path) -> Path:
 def debate_file(dest: Path) -> Path:
     """Ход спора: раунды, доводы и расход токенов."""
     return data_dir(dest) / "debate.json"
+
+
+def panel_file(dest: Path) -> Path:
+    """Панель тройного ревью: три слота (провайдер, модель) без ключа."""
+    return data_dir(dest) / "vote-panel.json"
 
 
 # ------------------------------------------------------------------ бинарник
@@ -1035,12 +1066,18 @@ def build_prompt(data: dict, extra: str = "") -> str:
 
 def run(dest: Path, project: Path, prompt: str, diff_text: str,
         progress=None, command: list[str] | None = None,
-        timeout: int = 900) -> tuple[list[str], list[str], dict]:
+        timeout: int = 900, override: dict | None = None,
+        ) -> tuple[list[str], list[str], dict]:
     """Запускает Qwen Code в headless-режиме и разбирает его ответ.
 
     Режим — только чтение (`--approval-mode plan`): ревьюер не правит файлы
     и не запускает команды. Ответ забирается в JSON: оттуда же берётся
     расход токенов. Ключ уезжает окружением процесса, а не аргументом.
+
+    `override` подменяет выбранное ранее (провайдер, модель, base_url) для
+    одного запуска — этим пользуется тройное ревью: три слота панели ходят
+    к трём разным провайдерам, не трогая сохранённый выбор одиночного
+    ревьюера. Ключ при этом берётся по ИМЕННО подменённому провайдеру.
     """
     messages: list[str] = []
     errors: list[str] = []
@@ -1052,6 +1089,18 @@ def run(dest: Path, project: Path, prompt: str, diff_text: str,
 
     dest = Path(dest)
     selection = chosen(dest)
+    if override:
+        patch = {str(k): v for k, v in dict(override).items()
+                 if k in ("provider", "model", "base_url")}
+        selection = {**selection, **patch}
+        # Адрес берём у ПЕРЕОПРЕДЕЛЁННОГО провайдера, а не у прежнего
+        # выбранного: у каждого свой адрес, и без этого запрос второго
+        # слота тройного ревью ушёл бы к первому.
+        if patch.get("provider") and not patch.get("base_url"):
+            own = next((item for item in providers(dest)
+                        if str(item.get("id")) == str(patch["provider"])), None)
+            if own is not None:
+                selection["base_url"] = str(own.get("base_url") or "")
     binary, _where = find_binary(dest)
     if binary is None:
         return messages, ["Qwen Code не развёрнут и не найден в PATH."], {}
@@ -1282,14 +1331,416 @@ def review(dest: Path, project: Path, base: str = "", reply: str = "",
     return messages, errors
 
 
-def clear_debate(dest: Path) -> tuple[list[str], list[str]]:
-    """Забывает ход спора: следующий запуск начнёт счёт заново."""
+    total = sum(int((item or {}).get("total_tokens") or 0)
+                for item in state.get("rounds_spent", []))
+    say(f"Раундов пройдено: {state['round']} из {limit}; токенов за спор: {total}.")
+    if state["round"] >= limit:
+        say(NO_AGREEMENT)
+    return messages, errors
+
+
+# ------------------------------------------------------------------ тройное ревью
+
+VOTE_PROMPT = (
+    "Ты — один из трёх независимых ревьюеров. Ниже изменения кода "
+    "(git diff). Проверь их и верни замечания по важности: сначала "
+    "ломающее, потом мелочи. Каждое замечание — одна строка: файл, место, "
+    "что не так и как лучше. Ничего не правь, файлы не меняй. Отвечай "
+    "по-русски, коротко, без похвал."
+)
+
+
+def review_vote(dest: Path, project: Path, base: str = "",
+                progress=None, command: list[str] | None = None,
+                ) -> tuple[list[str], list[str]]:
+    """Тройное ревью: три модели из панели смотрят один и тот же diff.
+
+    Diff собирается ОДИН раз и раздаётся всем трём слотам; каждый слот
+    ходит к СВОЕМУ провайдеру с ЕГО ключом, и всё, что он присылает —
+    текст, ошибки, токены, — маскируется ключом ИМЕННО его провайдера:
+    в тройном ревью ключей три, и одним общим mask_text не обойтись.
+    Провалившаяся модель не отменяет свод двух других — её ошибка
+    попадает в доклад своей строкой.
+    """
+    messages: list[str] = []
+    errors: list[str] = []
+
+    def say(text: str) -> None:
+        messages.append(text)
+        if progress:
+            progress(text)
+
+    dest = Path(dest)
+    if not installed(dest):
+        return messages, [
+            "Ревьюер выключен: отметь галочку «Qwen Code — второй ревьюер» "
+            "на вкладке opencode."
+        ]
+    slots = panel(dest)
+    if len(slots) < len(VOTE_SLOTS):
+        empty = ", ".join(s for s in VOTE_SLOTS if s not in slots)
+        return messages, [
+            "Панель тройного ревью не заполнена"
+            + (f" (пусты слот {', '.join(s for s in VOTE_SLOTS if s not in slots)})"
+               if slots and len(slots) < len(VOTE_SLOTS) else "")
+            + ". Скажи агенту: настрой тройное ревью."
+        ]
+
+    data, bad = collect(Path(project), base)
+    if bad:
+        return messages, [bad]
+
+    # Ключи собираем заранее: у каждого слота СВОЙ провайдер, значит и
+    # ключ свой. Один общий mask_text тут недостаточен — провайдер
+    # цитирует в 401 именно тот ключ, что ему прислали.
+    for slot in VOTE_SLOTS:
+        key, key_source = provider_key_info(dest, slots[slot]["provider"])
+        if not key:
+            return messages, [
+                f"У провайдера «{slots[slot]['provider']}» (слот {slot}) нет "
+                f"ключа: {key_source or 'в настройках opencode нет apiKey'}. "
+                "Тройное ревью не запускалось."
+            ]
+        slots[slot]["key"] = key
+
+    reviews: list[tuple[str, str]] = []
+    # Текст запроса собирается ОДИН раз и уходит всем трём слотам: diff
+    # пересобирать перед каждым запросом незачем, а три разных текста
+    # на одном diff сделали бы свод бессмысленным — модели спорили бы
+    # не о том.
+    prompt_text = build_prompt(data)
+    for slot in VOTE_SLOTS:
+        provider = slots[slot]["provider"]
+        model = slots[slot]["model"]
+        key = slots[slot]["key"]
+        say(f"Слот {slot}: ревью уходит к {provider} / {model}.")
+        slot_messages, errs, result = run(
+            dest, Path(project), VOTE_PROMPT, prompt_text,
+            progress=None, command=command,
+            override={"provider": provider, "model": model},
+        )
+        # Маска СВОИМ ключом: у слота свой провайдер, и чужой ключ тут
+        # бессилен — провайдер цитирует именно тот ключ, что ему прислали.
+        slot_messages = [mask_text(str(item), key) for item in slot_messages]
+        slot_errors = [mask_text(str(item), key) for item in errs]
+        if slot_errors:
+            messages.extend(slot_errors)
+            continue
+        reviews.append((model, result.get("text") or ""))
+        usage = result.get("usage") or {}
+        if usage:
+            say(f"Токены {model}: вход {usage.get('input_tokens', '?')}, "
+                f"выход {usage.get('output_tokens', '?')}, "
+                f"всего {usage.get('total_tokens', '?')}.")
+    say("Запросов сделано: 3.")
+    if not reviews:
+        return messages, errors + [
+            "Ни одна из трёх моделей не ответила: смотри ошибки выше."]
+    say("")
+    say("Свод тройного ревью:")
+    for line in format_vote_summary(reviews):
+        say(line)
+    # Последний рубеж: итоговый доклад маскируем всеми тремя ключами
+    # по очереди — в свод или в имена моделей мог проехать чужой вывод.
+    for slot in VOTE_SLOTS:
+        key = slots[slot]["key"]
+        messages = [mask_text(str(item), key) for item in messages]
+    return messages, errors
+
+
+# ------------------------------------------------------------------ свод тройного ревью
+
+#: Слова, по которым замечания НЕ сравниваются. Русский текст без них
+#: держится на глаголах и оборотах: «нет проверки installed()» и «нет
+#: тестов на маску» пересекаются по словам «нет», «на», «в» — и свод
+#: объявлял их одним замечанием. Смысловые слова (имена функций, файлов,
+#: ошибок) остаются, и именно по ним замечания различаются.
+VOTE_STOPWORDS = frozenset("""
+    а без бы был была были было быть в вам вас весь во вот все всех вы где
+    да даже для до его если есть еще же за здесь и из или им их к как ко
+    когда кто ли но на над надо наш не него нее нет ни них но ну о об однако
+    он она они оно от очень по под после при про с со так также такой там то
+    тогда того тоже только том тот ту у уже хотя чего чей чем через что
+    чтобы чуть эта эти это этот я
+""".split())
+
+
+def _content_words(text: str) -> set:
+    """Значимые слова замечания: нормализованные и без служебных.
+
+    Одних служебных слов почти нет у любой русской фразы, поэтому «нет
+    проверки installed()» и «нет тестов на маску» выглядели одинаково
+    похожими. Смысловые слова у них разные, и после их отбрасывания
+    пересечение пусто — как и должно быть.
+    """
+    return {word for word in _normalize_remark(text).split()
+            if word not in VOTE_STOPWORDS and len(word) > 2}
+
+
+def _similar(a: str, b: str) -> float:
+    """Похожи ли две нормализованные строки, по шкале от 0 до 1.
+
+    Сравниваются ЗНАЧИМЫЕ слова, а не буквы: две модели описывают одно и
+    то же разными словами («не вызывается installed()» и «нет проверки
+    installed()»), и посимвольное сходство для них низкое. Значимые слова
+    у совсем разных замечаний не пересекаются вовсе, поэтому свод не
+    склеивает «нужны тесты» с «нужны тесты на маску ключа».
+    """
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0
+    left = _content_words(a)
+    right = _content_words(b)
+    if not left or not right:
+        return 0.0
+    common = len(left & right)
+    if not common:
+        return 0.0
+    # Берём МЕНЬШЕЕ из двух мер, а не среднее: длинная фраза, целиком
+    # накрывшая короткую, иначе выдавала себя за то же самое замечание
+    # («второе замечание только у модели А» склеивалось с «совсем другое
+    # замечание, только у модели В» — общее слово «замечание», а суть
+    # разная). Склеиваются только действительно одни и те же замечания.
+    jaccard = common / len(left | right)
+    contain = common / min(len(left), len(right))
+    return min(jaccard, contain)
+
+
+#: Порог, выше которого замечания двух моделей считаются одним и тем же.
+#: Замерен на синтетике: настоящие перефразы дают 0.56–1.0, заведомо
+#: разные замечания — 0.0 и 0.4. Ниже 0.5 свод начал бы склеивать
+#: несвязанное, выше 0.6 перестал бы узнавать перефразы.
+VOTE_SIMILARITY = 0.5
+
+
+def _normalize_remark(text: str) -> str:
+    """Нормализация замечания: регистр, пунктуация, пробелы — в сторону.
+
+    Модели по-разному ставят точки, кавычки и регистр, но это одно и то
+    же замечание. Числа не трогаем: «5 раундов» и «3 раунда» — разные
+    замечания по существу.
+
+    Дефис и подчёркивание НЕ разделяют слово: иначе «прод-а» и «прод-в»
+    превращались в «прод а» и «прод в», а дальше в «прод» — и свод
+    объявлял замечания разных провайдеров одним и тем же.
+    """
+    text = str(text or "").strip().lower()
+    text = re.sub(r"[_\-]", "\x00", text, flags=re.UNICODE)
+    text = re.sub(r"[^\w\s\x00]+", " ", text, flags=re.UNICODE)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text.replace("\x00", "-")
+
+
+def summarize_vote(reviews: list[tuple[str, str]]) -> list[dict]:
+    """Свод замечаний трёх моделей. Чистая функция: сети и файлов нет.
+
+    Вход — список пар (модель, текст ответа). Текст режется на замечания
+    по строкам; строки группируются по похожести значимых слов (см.
+    _similar). Выход — список групп {text, models, count}: замечания,
+    которые повторили две и больше моделей, идут первыми, уникальные —
+    после, и у каждой группы видно, чьи это глаза. count — число РАЗНЫХ
+    моделей: одна модель, повторившая себя дважды, дубликатом не считается.
+
+    Из группы наверх идёт самая длинная формулировка: короткая обрезанная
+    строка читалась бы как огрызок, а за ней терялся бы остальной смысл.
+    """
+    groups: list[dict] = []
+    for model, text in reviews:
+        for raw_line in str(text or "").splitlines():
+            line = raw_line.strip().lstrip("-•* ").strip()
+            if not line:
+                continue
+            norm = _normalize_remark(line)
+            if not norm:
+                continue
+            # Ищем самую похожую группу, а не первую подходящую: иначе
+            # строка, случайно задевшая чужую группу, приклеивалась бы
+            # не к той, с кем говорит одно и то же.
+            best: dict | None = None
+            best_score = 0.0
+            for group in groups:
+                score = _similar(norm, group["norm"])
+                if score > best_score:
+                    best, best_score = group, score
+            if best is None or best_score < VOTE_SIMILARITY:
+                groups.append({"norm": norm, "text": line,
+                               "models": [str(model)], "count": 1})
+            elif str(model) not in best["models"]:
+                best["models"].append(str(model))
+                best["count"] = len(best["models"])
+                # Формулировку группы берём самую длинную: короткая
+                # обрезанная строка читалась бы как огрызок.
+                if len(line) > len(best["text"]):
+                    best["text"] = line
+    # Порядок: сначала то, что повторили несколько моделей, потом своё;
+    # внутри каждой части — самая длинная формулировка, она читается
+    # целиком, короткая огрызком.
+    groups.sort(key=lambda group: (-group["count"], -len(group["text"])))
+    return [
+        {"text": group["text"], "models": list(group["models"]),
+         "count": group["count"]}
+        for group in groups
+    ]
+
+
+def format_vote_summary(reviews: list[tuple[str, str]]) -> list[str]:
+    """Свод словами: дубликаты сверху с метками моделей, уникальные — свои.
+
+    Тоже чистая функция над summarize_vote: сети нет, файлы не читаются.
+    """
+    groups = summarize_vote(reviews)
+    if not groups:
+        return ["Замечаний нет: все модели ответили без нареканий."]
+    lines: list[str] = []
+    duplicates = [group for group in groups if group["count"] > 1]
+    unique = [group for group in groups if group["count"] == 1]
+    if duplicates:
+        lines.append(f"Замечания, которые повторили несколько моделей "
+                     f"({len(duplicates)}):")
+        for group in duplicates:
+            lines.append(f"  - {group['text']} [{', '.join(group['models'])}]")
+    if unique:
+        if duplicates:
+            lines.append("")
+        lines.append(f"Уникальные замечания ({len(unique)}):")
+        for group in unique:
+            lines.append(f"  - {group['text']} — {group['models'][0]}")
+    return lines
+
+
+# ------------------------------------------------------------------ панель тройного ревью
+
+#: Слоты панели тройного ревью. Три модели смотрят один diff; в каждом
+#: слоте свои провайдер и модель — потому и три разных ключа.
+VOTE_SLOTS = ("1", "2", "3")
+
+
+def panel(dest: Path) -> dict:
+    """Панель тройного ревью с диска. {слот: {"provider", "model"}}.
+
+    Пустые и незаполненные слоты не показываются. Файл битый — пустая
+    панель, а не падение.
+    """
+    try:
+        data = json.loads(panel_file(dest).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out: dict = {}
+    for slot in VOTE_SLOTS:
+        entry = data.get(slot)
+        if isinstance(entry, dict) and entry.get("provider") and entry.get("model"):
+            out[slot] = {
+                "provider": str(entry["provider"]),
+                "model": str(entry["model"]),
+            }
+    return out
+
+
+def panel_set(dest: Path, slot: str, provider: str, model: str,
+              progress=None) -> tuple[list[str], list[str]]:
+    """Записывает один слот панели. Пустые провайдер и модель — очистка.
+
+    Ключ сюда не пишется вовсе: панель хранит только имена. Ключи
+    берутся из настроек opencode при запуске — как у одиночного ревью.
+
+    Имена всё же маскируются ключом СВОЕГО провайдера перед записью:
+    ключ, вставленный в поле модели по невнимательности, иначе уехал бы
+    в файл панели и оттуда в `panel show`. У каждого слота своя маска,
+    иначе один общий mask_text на всех утащил бы чужой ключ наружу.
+    """
+    dest = Path(dest)
+    slot = str(slot or "").strip()
+    if slot not in VOTE_SLOTS:
+        return [], [f"Слот «{slot or '?'}» не входит в {', '.join(VOTE_SLOTS)}."]
+    provider = (provider or "").strip()
+    model = (model or "").strip()
+    try:
+        data = json.loads(panel_file(dest).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    if provider and model:
+        # Имена пишем только те, что реально есть в настройках: панель с
+        # выдуманным провайдером упала бы позже, на первом же запросе.
+        known = {item["id"]: item for item in providers(dest)}
+        if provider not in known:
+            return [], [f"Провайдера «{provider}» в настройках opencode нет."]
+        if model not in (known[provider].get("models") or []):
+            return [], [
+                f"У провайдера «{provider}» нет модели «{model}». "
+                "Посмотри список командой providers."
+            ]
+        # Маска СВОИМ ключом слота: ключ, вставленный в имя модели или
+        # провайдера, не должен уехать ни в файл панели, ни в сообщение.
+        _slot_key, _ = provider_key_info(dest, provider)
+        if _slot_key:
+            provider = mask_text(provider, _slot_key)
+            model = mask_text(model, _slot_key)
+        data[slot] = {"provider": provider, "model": model,
+                      "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+        message = f"Слот {slot} панели тройного ревью: {provider} / {model}."
+    else:
+        data.pop(slot, None)
+        message = f"Слот {slot} очищен."
+    errors: list[str] = []
+    try:
+        data_dir(dest).mkdir(parents=True, exist_ok=True)
+        panel_file(dest).write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except OSError as exc:
+        return [], [f"Панель тройного ревью не записалась: {exc}"]
+    # Сообщение возвращается и печатается: команда без progress
+    # отработала бы молча, и человек не видел бы, что слот записан.
+    if progress:
+        progress(message)
+    return [message], errors
+
+
+def panel_clear(dest: Path, progress=None) -> tuple[list[str], list[str]]:
+    """Опустошает все три слота панели тройного ревью."""
     dest = Path(dest)
     try:
-        debate_file(dest).unlink(missing_ok=True)
+        panel_file(dest).unlink(missing_ok=True)
     except OSError as exc:
-        return [], [f"Ход спора не убрался: {exc}"]
-    return ["Ход спора забыт: следующий запуск начнёт счёт раундов заново."], []
+        return [], [f"Панель тройного ревью не убралась: {exc}"]
+    message = "Панель тройного ревью очищена: все три слота пусты."
+    if progress:
+        progress(message)
+    return [message], []
+
+
+def panel_show(dest: Path) -> list[str]:
+    """Панель тройного ревью словами. Пустая — с подсказкой, что делать.
+
+    Строки маскируются ключом СВОЕГО слота: панель пишется руками и
+    правляется руками, ключ, вставленный в имя модели, не должен
+    показаться на экране. Одна маска на все три слота тут не годится —
+    она бы вытащила наружу чужой ключ.
+    """
+    slots = panel(dest)
+    if not slots:
+        return [
+            "Панель тройного ревью пуста: ни один слот не заполнен. "
+            "Скажи агенту: настрой тройное ревью."
+        ]
+    filled = {str(k) for k in slots}
+    lines: list[str] = []
+    for slot in VOTE_SLOTS:
+        if slot not in filled:
+            continue
+        text = f"Слот {slot}: {slots[slot]['provider']} / {slots[slot]['model']}"
+        slot_key, _ = provider_key_info(dest, slots[slot]["provider"])
+        if slot_key:
+            text = mask_text(text, slot_key)
+        lines.append(text)
+    if len(filled) < len(VOTE_SLOTS):
+        lines.append("Не заполнены: слот " + ", ".join(
+            s for s in VOTE_SLOTS if s not in filled) + ".")
+    return lines
 
 
 # ------------------------------------------------------------------ манифест
@@ -1411,6 +1862,14 @@ def _main(argv: list[str]) -> int:
              + " (без указания решает --reply: есть возражение — спор)")
     p_review.add_argument("--dest", default="")
 
+    p_panel = sub.add_parser("panel", help="панель тройного ревью: show|set|clear")
+    p_panel.add_argument("action", choices=["show", "set", "clear"],
+                         help="show — показать, set — записать слот, clear — очистить всё")
+    p_panel.add_argument("slot", nargs="?", default="", help="слот: 1, 2 или 3")
+    p_panel.add_argument("provider", nargs="?", default="", help="провайдер из настроек opencode")
+    p_panel.add_argument("model", nargs="?", default="", help="модель провайдера")
+    p_panel.add_argument("--dest", default="")
+
     args = parser.parse_args(argv)
     dest = _config_dir(getattr(args, "dest", ""))
 
@@ -1460,9 +1919,30 @@ def _main(argv: list[str]) -> int:
     if args.what == "forget":
         messages, errors = clear_debate(dest)
         return done(errors)
+    if args.what == "panel":
+        if args.action == "show":
+            for line in panel_show(dest):
+                _say(line)
+            return 0 if panel(dest) else 1
+        if args.action == "clear":
+            messages, errors = panel_clear(dest, progress=say)
+            return done(errors)
+        # set: слот, провайдер и модель обязательны.
+        if not args.slot or not args.provider or not args.model:
+            _say("Для panel set нужны: слот (1|2|3), провайдер и модель. "
+                 "Пример: panel set 1 dahl qwen3-coder")
+            return 1
+        # progress=say обязателен: без него сообщение о записи слота
+        # никто не печатает — команда отрабатывает молча (ровно тот
+        # случай «код 0 и ни одного слова», который уже ловили трижды).
+        messages, errors = panel_set(
+            dest, args.slot, args.provider, args.model, progress=say)
+        return done(errors)
     if args.what == "review":
         # Явный режим из общего списка. Несовместимая пара «once + возражение»
         # отвергается словами: в разовой проверке возражений не бывает.
+        # «vote + возражение» так же несовместим: тройное ревью только
+        # собирает замечания, спорить в нём не с кем.
         mode = str(getattr(args, "mode", "") or "")
         if mode:
             _mode_name = (mode_by_id(mode) or {}).get("name") or mode
@@ -1470,6 +1950,16 @@ def _main(argv: list[str]) -> int:
                 _say(f"В режиме «{_mode_name}» возражений не бывает: "
                      "убери --reply или выбери режим " + MODE_DEBATE + ".")
                 return 1
+            if mode == MODE_VOTE and args.reply:
+                _say(f"Спор с тройным ревью не совмещается: в режиме "
+                     f"«{_mode_name}» три модели только собирают замечания, "
+                     f"возражений и раундов нет. Убери --reply или выбери "
+                     f"режим {MODE_DEBATE}.")
+                return 1
+        if mode == MODE_VOTE:
+            messages, errors = review_vote(
+                dest, Path(args.project), args.base, progress=say)
+            return done(errors)
         messages, errors = review(
             dest, Path(args.project), args.base, reply=args.reply,
             rounds=args.rounds, progress=say,
