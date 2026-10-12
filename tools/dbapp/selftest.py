@@ -5406,6 +5406,64 @@ def main() -> int:
             check((_br.profile_dir(_br_tmp, "chrome").parent / "check.png").is_file(),
                   "снимок экрана лёг файлом рядом с профилем")
 
+            # В «моих сессиях» вкладка не наша: проверка обязана только
+            # читать. Chrome не пускает обычную вкладку на адрес с
+            # данными — подделка ниже отказывает ровно так же, и если
+            # проверка полезет переходить, она это увидит.
+            _br.write_choice(_br_tmp,
+                             _br.Choice(browser="chrome", profile="sessions"))
+            _br_sess_lines = [
+                "import json, sys",
+                "TOOLS = [{'name': 'browser_tabs'}, {'name': 'browser_evaluate'}]",
+                "def answer_for(message):",
+                "    params = message.get('params') or {}",
+                "    name = params.get('name')",
+                "    if name == 'browser_tabs':",
+                "        return {'content': [{'type': 'text',",
+                "                 'text': '### Result' + chr(10)",
+                "                       + '- 0: (current) [Моя вкладка]'}]}",
+                "    if name == 'browser_evaluate':",
+                "        return {'content': [{'type': 'text',",
+                "                 'text': '### Result' + chr(10) + chr(34)",
+                "                       + 'Моя вкладка' + chr(34)}]}",
+                "    return {'isError': True, 'content': [{'type': 'text',",
+                "             'text': 'net::ERR_ABORTED'}]}",
+                "for line in sys.stdin:",
+                "    line = line.strip()",
+                "    if not line:",
+                "        continue",
+                "    message = json.loads(line)",
+                "    method = message.get('method')",
+                "    if method == 'initialize':",
+                "        answer = {'serverInfo': {'name': 'Playwright', 'version': '9.9.9'}}",
+                "    elif method == 'tools/list':",
+                "        answer = {'tools': TOOLS}",
+                "    elif method == 'tools/call':",
+                "        answer = answer_for(message)",
+                "    else:",
+                "        continue",
+                "    sys.stdout.write(json.dumps(",
+                "        {'jsonrpc': '2.0', 'id': message['id'], 'result': answer})",
+                "        + chr(10))",
+                "    sys.stdout.flush()",
+            ]
+            _br_sess = _br_tmp / "подделка_сессии.py"
+            _br_sess.write_text(chr(10).join(_br_sess_lines) + chr(10),
+                                encoding="utf-8")
+            _br_ok4, _br_note4 = _br.probe(
+                _br_tmp, timeout=30, command=[sys.executable, str(_br_sess)])
+            check(_br_ok4,
+                  f"«мои сессии»: проверка проходит, не переходя по вкладке: "
+                  f"{_br_note4}")
+            check("подключение к твоим вкладкам живое" in _br_note4,
+                  f"и говорит про живое подключение: {_br_note4}")
+            check("ERR_ABORTED" not in _br_note4,
+                  f"то есть никуда не полезла: {_br_note4}")
+            check("снимок" not in _br_note4,
+                  f"и снимок чужого экрана не делала: {_br_note4}")
+            _br.write_choice(_br_tmp,
+                             _br.Choice(browser="chrome", profile="separate"))
+
             # Тот же протокол, другое имя сервера: чужой мост за Playwright
             # выдавать нельзя, и проверка обязана это заметить.
             _br_other = _br_tmp / "подделка_чужая.py"
