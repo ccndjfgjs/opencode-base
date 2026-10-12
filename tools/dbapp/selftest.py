@@ -5311,6 +5311,29 @@ def main() -> int:
             check(_br.read_choice(_br_tmp).browser == "chrome",
                   "выбор читается обратно")
 
+            # Токен расширения: лежит рядом с настройками, переживает
+            # круг «записали-прочитали», а пустое поле его убирает.
+            # Главное здесь — защита от пояснения, принятого за токен:
+            # из-за этого подключение молча не работало.
+            check(_br.token_path(_br_tmp) == _br_tmp / "mcp-browsers-token.txt",
+                  "файл токена — рядом с настройками, не в репозитории")
+            _br_tok = "SELFTEST-TOKEN_abc123"
+            _br_ok, _br_note = _br.write_token(_br_tmp, _br_tok)
+            check(_br_ok and _br.read_token(_br_tmp) == _br_tok,
+                  f"токен сохраняется и читается обратно: {_br_note}")
+            _br.write_token(_br_tmp, "")
+            check(_br.read_token(_br_tmp) == "",
+                  "пустое поле убирает токен — подключение пойдёт через "
+                  "вопрос одобрения в Chrome")
+            _br.token_path(_br_tmp).write_text(
+                "# Токен расширения Playwright.\n"
+                "подключении. Хранится отдельно от opencode.jsonc, потому\n"
+                "что конфиг открыт и переносится.\n",
+                encoding="utf-8")
+            check(_br.read_token(_br_tmp) == "",
+                  "пояснение из файла токена не уезжает в сервер как токен: "
+                  f"{_br.read_token(_br_tmp)!r}")
+
             # Живая проверка: поддельный сервер отвечает как настоящий
             # Playwright MCP. Открывать настоящий браузер для этого не нужно.
             _br_fake_lines = [

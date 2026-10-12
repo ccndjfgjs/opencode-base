@@ -2721,8 +2721,9 @@ class BrowserChoiceDialog(QDialog):
         if sessions:
             if not self.token_field.text().strip():
                 self.token_status.setText(
-                    "Токен пуст: скопируй токен из расширения Playwright "
-                    "и нажми «Вставить»."
+                    "Токен не нужен: Chrome спросит одобрение при "
+                    "подключении, и достаточно один раз нажать «да». "
+                    "Вставь токен, если не хочешь вопроса каждый раз."
                 )
             else:
                 self.token_status.setText("Токен вставлен: будет без запроса одобрения.")
@@ -2745,14 +2746,6 @@ class BrowserChoiceDialog(QDialog):
         self._refresh()
 
     def _save(self) -> None:
-        if self._current_profile() == "sessions" and not \
-                self.token_field.text().strip():
-            self.status.setStyleSheet(f"color: {ui.ERROR};")
-            self.status.setText("Вставьте токен: в режиме «мои сессии» без "
-                                "токена Chrome будет спрашивать одобрение "
-                                "при каждом подключении. Вставь токен или "
-                                "выбери другой профиль.")
-            return
         messages, errors = browsers.write_choice(self.dest, self._build_choice())
         if errors:
             # Окно не закрывается: человек должен видеть, что именно не так,
@@ -2760,11 +2753,9 @@ class BrowserChoiceDialog(QDialog):
             self.status.setText("Не записано. " + " ".join(errors))
             return
         # Токен сохраняем только в режиме «мои сессии» (поле вовсе скрыто
-        # в других профилях, но защитимся и проверкой). Пустой токен не
-        # трогаем: не стираем то, что уже вписано, если человек не решил
-        # убрать его явно (кнопки «Убрать» в окне нет — есть файл).
-        if self._current_profile() == "sessions" and \
-                self.token_field.text().strip():
+        # в других профилях, но защитимся и проверкой). Поле — источник
+        # правды: пустое поле означает «токен не нужен», и файл очищается.
+        if self._current_profile() == "sessions":
             _saved, _note = browsers.write_token(self.dest,
                                                  self.token_field.text().strip())
             self.token_status.setText(_note)
