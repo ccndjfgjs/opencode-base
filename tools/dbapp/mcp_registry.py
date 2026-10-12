@@ -448,6 +448,21 @@ def set_installed_version(base: Path, server_id: str, version: str,
 # --------------------------------------------------------------- проверки
 
 
+def _hidden_startupinfo():
+    """Окно консоли не показывать. Подробности — в core.hidden_startupinfo.
+
+    Отдельная обёртка, потому что модуль проверяют и запускают без
+    главного окна программы: тогда core может быть недоступен, и
+    молча пропустить скрытие хуже, чем не спрятать вовсе.
+    """
+    try:
+        from core import hidden_startupinfo
+
+        return hidden_startupinfo()
+    except Exception:
+        return None
+
+
 def _run(command: str, args: list[str]) -> tuple[bool, str]:
     """Запускает команду проверки. Ничего не устанавливает и не меняет.
 
@@ -461,10 +476,17 @@ def _run(command: str, args: list[str]) -> tuple[bool, str]:
     if exe.lower().endswith((".cmd", ".bat")):
         argv = [os.environ.get("COMSPEC") or "cmd.exe", "/c", exe, *args]
     try:
+        # Окно консоли прячем: проверка требований дёргает node и npx для
+        # каждого сервера, и каждая такая проба на миг открывала чёрное
+        # окно. Измерено на запуске программы: 24 видимых окна за 17 секунд
+        # — двенадцать серверов по две пробы. Здесь только capture_output,
+        # потоки подставлены явными трубами, поэтому STARTUPINFO безопасен
+        # и не рвёт обмен, в отличие от CREATE_NO_WINDOW.
         done = subprocess.run(
             argv,
             capture_output=True, text=True, timeout=CHECK_TIMEOUT,
             encoding="utf-8", errors="replace",
+            startupinfo=_hidden_startupinfo(),
         )
     except (OSError, subprocess.SubprocessError):
         return False, ""
@@ -692,8 +714,46 @@ def load_extra_programs(base: Path) -> list[ProgramInstall]:
     return out
 
 
+#: Разобранный реестр: ключ — отпечаток файла, значение — серверы.
+_LOADED: dict[tuple, list] = {}
+
+
+def _registry_key(base: Path) -> tuple | None:
+    """Отпечаток файла реестра: содержимое, размер и время изменения.
+
+    None, если файла нет или он не читается: тогда кэш не нужен, всё
+    равно разбирать нечего.
+    """
+    path = registry_path(base)
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return (str(path), stat.st_size, stat.st_mtime_ns)
+
+
 def load_servers(base: Path) -> list[Server]:
-    """Читает реестр и проверяет требования каждого сервера."""
+    """Читает реестр и проверяет требования каждого сервера.
+
+    Результат запоминается на время работы программы, и ключ — сам
+    файл реестра: его содержимое, размер и время изменения. Проверка
+    требований зовёт node и npx, это медленно: измерено, что одна
+    проверка всех серверов занимает около секунды, а при запуске
+    реестр читается пять раз, и каждое чтение платило полной
+    проверкой заново. На старте программы это была половина всего
+    времени до появления окна.
+
+    Почему ключ по файлу, а не по спецификации требования. Проверка
+    зависит не только от записи в реестре, но и от того, что стоит на
+    машине. Кэш по спецификации устарел бы молча и показал бы
+    неверное «готово». Ключ по файлу реестра этого не делает: правка
+    реестра меняет ключ, и всё перепроверяется само.
+    """
+    key = _registry_key(base)
+    if key is not None:
+        cached = _LOADED.get(key)
+        if cached is not None:
+            return list(cached)
     data = load_registry(base)
     result: list[Server] = []
     for spec in data.get("servers") or []:
@@ -712,6 +772,8 @@ def load_servers(base: Path) -> list[Server]:
             if isinstance(item, dict):
                 server.requirements.append(check_requirement(item))
         result.append(server)
+    if key is not None:
+        _LOADED[key] = list(result)
     return result
 
 
@@ -845,6 +907,40 @@ def resolve_command(command: list[str]) -> list[str]:
     return out
 
 
+def quiet_command(command: list[str]) -> list[str]:
+    """Оборачивает команду запуска так, чтобы окна консоли не было.
+
+    Зачем. Серверы MCP говорят с opencode через стандартные потоки,
+    поэтому их приходится запускать консольными программами — npx,
+    uvx, python.exe. На каждом таком запуске Windows выделяет консоль,
+    и при старте мостов на экране появляется до десятка чёрных окон
+    cmd, причём они живут вместе с серверами.
+
+    Обёртка — наш лаунчер под оконным Python: он скрывает окно и
+    передаёт потоки ребёнку как есть. Проверено живьём обменом
+    JSON-RPC: три запроса — три верных ответа.
+
+    Повторная обёртка не добавляется: команда, уже ведущая через
+    quiet_launcher, остаётся как есть.
+    """
+    if not command or command[0].lower().endswith(".py"):
+        return list(command)
+    if any("quiet_launcher" in part for part in command):
+        return list(command)
+    from core import find_python, program_root
+    from pathlib import Path
+
+    python = str(find_python() or "python")
+    # pythonw лежит рядом с тем же интерпретатором и не создаёт
+    # консоль вообще. Если его нет — берём обычный python: лаунчер
+    # всё равно скроет окно, но без окна вовсе лучше.
+    pythonw = Path(python).with_name("pythonw.exe")
+    runner = str(pythonw) if pythonw.is_file() else python
+    launcher = (Path(program_root()) / "tools" / "dbapp" / "launchers"
+                / "quiet_launcher.py")
+    return [runner, str(launcher), *command]
+
+
 def build_block(server: Server, manual: dict | None = None) -> str:
     """Кусок JSONC для секции mcp в opencode.jsonc. Пусто, если нечего.
 
@@ -871,7 +967,8 @@ def build_block(server: Server, manual: dict | None = None) -> str:
         )
         if not command:
             return ""
-        body = {"type": "local", "command": command, "enabled": True}
+        body = {"type": "local", "command": quiet_command(command),
+                "enabled": True}
     inner = json.dumps(body, ensure_ascii=False, indent=2).splitlines()
     # Первая строка — «{», последняя — «}». Их не берём: свои скобки мы
     # ставим сами, вместе с именем сервера. Если взять и их, в настройках
@@ -932,7 +1029,11 @@ def warm_up(server: Server, progress=None) -> str:
     conn = server.raw.get("connection")
     if not isinstance(conn, dict) or not conn.get("warm_up"):
         return ""
-    command = [str(part) for part in (conn.get("command") or [])]
+    # Плейсхолдеры разрешаются так же, как при записи в настройки. Без
+    # этого прогрев у моста, который запускается лаунчером, пытался бы
+    # запустить «{DBAPP_PYTHON}» — то есть ничего, — и сервер выглядел бы
+    # неработающим на ровном месте.
+    command = resolve_command([str(part) for part in (conn.get("command") or [])])
     if not command:
         return ""
 
@@ -969,6 +1070,135 @@ def warm_up(server: Server, progress=None) -> str:
                     stream.close()
                 except OSError:
                     pass
+
+
+def _replace_command_array(block: str, command: list[str]) -> str | None:
+    """Меняет только массив command внутри нашего блока.
+
+    Зачем так узко. Общая перезапись блока целиком тут не годится: в
+    настройках после наших меток остаются одиночные запятые от прежних
+    правок, и полная перезапись на них ломает файл — проверено, ошибка
+    выходила «после обновления файл не читается — откат», и переписывался
+    один сервер из десяти. Точечная замена массива структуру файла не
+    трогает вовсе.
+
+    None, если массива в блоке нет.
+    """
+    at = block.find('"command"')
+    if at == -1:
+        return None
+    open_at = block.find("[", at)
+    if open_at == -1:
+        return None
+    # Ищем закрывающую скобку, считая вложенность и не считая скобки
+    # внутри строк: в путях Windows скобок нет, но полагаться на это
+    # при разборе чужого файла нельзя.
+    depth = 0
+    close_at = -1
+    in_string = False
+    escaped = False
+    for pos in range(open_at, len(block)):
+        ch = block[pos]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "[{":
+            depth += 1
+        elif ch in "]}":
+            depth -= 1
+            if depth == 0:
+                close_at = pos
+                break
+    if close_at == -1:
+        return None
+
+    # Отступ элементов берём у уже написанных, иначе блок «поедет».
+    indent = ""
+    for line in block[open_at:close_at].splitlines()[1:2]:
+        indent = line[: len(line) - len(line.lstrip())]
+    items = ",\n".join(
+        f"{indent}{json.dumps(part, ensure_ascii=False)}" for part in command
+    )
+    return block[: open_at + 1] + "\n" + items + "\n" + block[close_at:]
+
+
+def quiet_migrate(dest: Path, servers: list[Server]) -> tuple[list[str], str]:
+    """Переписывает наши старые блоки так, чтобы окна не появлялись.
+
+    Зачем. Обёртка в quiet_command попадает в настройки только при
+    включении сервера. Уже включённые серверы остались со старой
+    командой, и opencode по ней запускал npx и python.exe как обычно —
+    то есть окна cmd продолжали открываться. Обёртка при этом
+    добавлена была, просто никто её не применял к уже готовому файлу.
+
+    Переписываются только наши собственные блоки — те, что между
+    метками BEGIN/END. Чужие записи в mcp не трогаются: это не наш
+    файл, а общий настройки пользователя.
+
+    Возвращает (сообщения, что делать дальше). Если ничего менять не
+    пришлось — второй элемент пустой.
+    """
+    from opencode_caps import BEGIN_TPL, END_TPL, check_jsonc
+
+    messages: list[str] = []
+    cfg = Path(dest) / "opencode.jsonc"
+    try:
+        text = cfg.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return [], ""
+
+    changed: list[str] = []
+    for server in servers:
+        begin = BEGIN_TPL.format(name=f"mcp.{server.id}")
+        end = END_TPL.format(name=f"mcp.{server.id}")
+        at = text.find(begin)
+        if at == -1:
+            continue  # блока нет — сервер не включён, трогать нечего
+        stop = text.find(end, at)
+        if stop == -1:
+            continue  # метка не закрыта — лезем руками, а не программой
+        block = text[at:stop + len(end)]
+        if "quiet_launcher" in block:
+            continue  # уже обёрнут
+        raw = server.raw.get("connection") or {}
+        if raw.get("url") or raw.get("manual_config"):
+            continue  # удалённые и ручные настройки не наша забота
+        command = quiet_command(
+            resolve_command([str(part) for part in (raw.get("command") or [])])
+        )
+        if not command:
+            continue
+        new_block = _replace_command_array(block, command)
+        if new_block is None:
+            continue
+        candidate = text[:at] + new_block + text[stop + len(end):]
+        if not check_jsonc(candidate):
+            continue  # после правки файл не читается — не трогаем вовсе
+        text = candidate
+        changed.append(server.name)
+
+    if not changed:
+        return [], ""
+    try:
+        backup = _write_config(dest, text)
+    except OSError as exc:
+        return [f"Не смог сохранить настройки: {exc}"], ""
+    messages.append(
+        "Переписаны на команды без окна консоли: " + ", ".join(changed)
+    )
+    messages.append(f"Прежняя версия сохранена: {backup}")
+    messages.append(
+        "Перезапусти opencode: серверы сейчас работают по старым командам, "
+        "окна кончатся только после перезапуска."
+    )
+    return messages, "restart"
 
 
 def enable(dest: Path, server: Server, progress=None) -> tuple[list[str], list[str]]:

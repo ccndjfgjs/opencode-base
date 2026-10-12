@@ -30,6 +30,9 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+
+from core import hidden_startupinfo  # noqa: E402 — путь задаётся строкой выше
 #: Папка с установленным мостом лежит рядом с лаунчером, внутри thirdparty.
 NODE_DIR = HERE.parent.parent / "thirdparty" / "obs-mcp-node"
 ENTRY = NODE_DIR / "node_modules" / "obs-mcp" / "build" / "index.js"
@@ -103,6 +106,7 @@ def main() -> int:
         proc = subprocess.Popen(
             [node, str(ENTRY)], cwd=str(NODE_DIR), env=env,
             stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr,
+            startupinfo=hidden_startupinfo(),
         )
     except OSError as exc:
         say(f"мост не запустился: {exc}")

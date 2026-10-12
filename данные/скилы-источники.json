@@ -1,0 +1,132 @@
+{
+  "description": "Откуда взяли скилы, пришедшие от авторов. Список заполнен по адресам, которые указаны в шапках самих файлов.",
+  "note": "Скилы здесь — адаптированные переводы. Автоматическая замена на оригинал сотрёт перевод, поэтому программа только показывает разницу и ничего не применяет сама.",
+  "sources": [
+    {
+      "skill": "better-accessibility",
+      "repo": "jakubkrehel/skills",
+      "path": "skills/better-accessibility",
+      "license": "—"
+    },
+    {
+      "skill": "better-colors",
+      "repo": "jakubkrehel/skills",
+      "path": "skills/better-colors",
+      "license": "—"
+    },
+    {
+      "skill": "better-interface",
+      "repo": "jakubkrehel/skills",
+      "path": "skills/better-interface",
+      "license": "—"
+    },
+    {
+      "skill": "better-layout",
+      "repo": "jakubkrehel/skills",
+      "path": "skills/better-layout",
+      "license": "—"
+    },
+    {
+      "skill": "better-typography",
+      "repo": "jakubkrehel/skills",
+      "path": "skills/better-typography",
+      "license": "—"
+    },
+    {
+      "skill": "better-ui",
+      "repo": "jakubkrehel/skills",
+      "path": "skills/better-ui",
+      "license": "—"
+    },
+    {
+      "skill": "better-writing",
+      "repo": "jakubkrehel/skills",
+      "path": "skills/better-writing",
+      "license": "—"
+    },
+    {
+      "skill": "brainstorming",
+      "repo": "obra/superpowers",
+      "path": "skills/brainstorming",
+      "license": "—"
+    },
+    {
+      "skill": "break",
+      "repo": "jakubkrehel/skills",
+      "path": "skills/break",
+      "license": "—"
+    },
+    {
+      "skill": "canvas-design",
+      "repo": "anthropics/skills",
+      "path": "skills/canvas-design",
+      "license": "—"
+    },
+    {
+      "skill": "executing-plans",
+      "repo": "obra/superpowers",
+      "path": "skills/executing-plans",
+      "license": "—"
+    },
+    {
+      "skill": "explain-interface",
+      "repo": "jakubkrehel/skills",
+      "path": "skills/explain-interface",
+      "license": "—"
+    },
+    {
+      "skill": "frontend-design",
+      "repo": "anthropics/skills",
+      "path": "skills/frontend-design",
+      "license": "—"
+    },
+    {
+      "skill": "greenlight",
+      "repo": "RevylAI/greenlight",
+      "path": "",
+      "license": "—"
+    },
+    {
+      "skill": "interface-review",
+      "repo": "jakubkrehel/skills",
+      "path": "skills/interface-review",
+      "license": "—"
+    },
+    {
+      "skill": "kill-ai-slop",
+      "repo": "yetone/kill-ai-slop",
+      "path": "",
+      "license": "—"
+    },
+    {
+      "skill": "systematic-debugging",
+      "repo": "obra/superpowers",
+      "path": "skills/systematic-debugging",
+      "license": "—"
+    },
+    {
+      "skill": "test-driven-development",
+      "repo": "obra/superpowers",
+      "path": "skills/test-driven-development",
+      "license": "—"
+    },
+    {
+      "skill": "variant",
+      "repo": "jakubkrehel/skills",
+      "path": "skills/variant",
+      "license": "—"
+    },
+    {
+      "skill": "verification-before-completion",
+      "repo": "obra/superpowers",
+      "path": "skills/verification-before-completion",
+      "license": "—"
+    },
+    {
+      "skill": "writing-plans",
+      "repo": "obra/superpowers",
+      "path": "skills/writing-plans",
+      "license": "—"
+    }
+  ]
+}

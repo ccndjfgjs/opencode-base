@@ -126,6 +126,33 @@ class Program:
         return any(place.is_dir() for place in self._detect_only_places())
 
 
+def hidden_startupinfo():
+    """Запуск, при котором у процесса не показывается окно консоли.
+
+    Windows: без этого каждый запуск npx, npm и uvx из проверок
+    поднимает чёрное окно cmd на весь ход работы.
+
+    Именно STARTUPINFO со скрытием, а не CREATE_NO_WINDOW. Разница
+    проверена на живых запусках: с CREATE_NO_WINDOW ребёнок отрабатывает,
+    но вывод в подставленную трубу теряется — для мостов MCP это
+    смертельно, они говорят через стандартные потоки. С STARTUPINFO и
+    SW_HIDE окно скрыто, а потоки остаются рабочими.
+
+    На других системах STARTUPINFO не существует: там возвращаем None,
+    и subprocess ведёт себя как обычно.
+
+    Отдельно отмечено: окна, которые открывает opencode, запуская
+    серверы MCP, программа закрыть не может — их порождает не она, а
+    opencode. Здесь речь о процессах, которые запускаем мы сами.
+    """
+    if os.name != "nt":
+        return None
+    info = subprocess.STARTUPINFO()
+    info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    info.wShowWindow = subprocess.SW_HIDE
+    return info
+
+
 def dsh_home() -> Path:
     """Домашняя папка Harness: переменная DSH_HOME, иначе ~/.dsh."""
     env = os.environ.get("DSH_HOME", "").strip().strip('"')
@@ -379,6 +406,17 @@ def install_plugin(base: Path, dest: Path, progress=None) -> tuple[list[str], li
                 errors.append(f"Не удалось сохранить копию {name}: {exc}")
         say(f"Прежние настройки сохранены ({len(old)} шт.)")
 
+    # Прежний AGENTS.md запоминаем ещё и текстом: файл настроек будет
+    # перезаписан из базы, а правила caveman, поставленные галочкой на
+    # вкладке opencode, лежат именно в нём. Без этого блока человек видел
+    # бы «включено», а ответы приходили бы обычным текстом.
+    agents_before = ""
+    if (dest / "AGENTS.md").is_file():
+        try:
+            agents_before = (dest / "AGENTS.md").read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            agents_before = ""
+
     # Файлы настроек. opencode.jsonc не перезаписываем поверх живущего
     # в программе: там могут быть провайдеры и мосты. Его разберём
     # отдельно — переведём на эту базу, ничего не стирая.
@@ -394,6 +432,15 @@ def install_plugin(base: Path, dest: Path, progress=None) -> tuple[list[str], li
             except OSError as exc:
                 errors.append(f"Не удалось скопировать {name}: {exc}")
     say(f"Файлы настроек: {copied} из {len(CONFIG_FILES) - 1}")
+
+    if agents_before:
+        try:
+            import caveman  # noqa: PLC0415 — рядом лежит, круга нет
+
+            if caveman.rescue(dest, agents_before):
+                say("Правила caveman сохранены в AGENTS.md")
+        except (OSError, ValueError):
+            pass
 
     # opencode.jsonc: если в программе его ещё нет, кладём образец из базы.
     # Если уже есть — переписываем только пути, оставляя остальные
@@ -4052,10 +4099,15 @@ def python_works(path: Path) -> bool:
     if "WindowsApps" in text:
         return False
     try:
+        # Проверка идёт при каждом запуске программы, по нескольку
+        # кандидатов, и каждая без этого открывала чёрное окно.
+        # capture_output подставляет трубы явно, поэтому STARTUPINFO
+        # со скрытием окна безопасен и ничего не рвёт.
         done = subprocess.run(
             [text, "-c", "import sys; print(sys.version_info[:2])"],
             capture_output=True,
             timeout=30,
+            startupinfo=hidden_startupinfo(),
         )
     except (OSError, subprocess.SubprocessError):
         return False

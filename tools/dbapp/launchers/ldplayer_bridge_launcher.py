@@ -28,6 +28,9 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+
+from core import hidden_startupinfo  # noqa: E402 — путь задаётся строкой выше
 SERVER_DIR = HERE.parent.parent / "thirdparty" / "mcp-ldplayer"
 
 #: Где может стоять LDPlayer. Первый существующий и передаётся мосту.
@@ -73,6 +76,7 @@ def main() -> int:
              "--ldplayer-path", str(installed)],
             cwd=str(SERVER_DIR), env=env,
             stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr,
+            startupinfo=hidden_startupinfo(),
         )
     except OSError as exc:
         say(f"мост не запустился: {exc}")

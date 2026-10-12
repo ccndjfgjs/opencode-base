@@ -20,13 +20,25 @@ if __package__ in (None, ""):
     import opencode_caps  # type: ignore[import-not-found]
     import android_studio  # type: ignore[import-not-found]
     import bridges  # type: ignore[import-not-found]
+    import browsers  # type: ignore[import-not-found]
+    import caveman  # type: ignore[import-not-found]
+    import dbhub  # type: ignore[import-not-found]
+    import lmarena  # type: ignore[import-not-found]
+    import auto_improve  # type: ignore[import-not-found]
+    import greenlight  # type: ignore[import-not-found]
+    import qwen_review  # type: ignore[import-not-found]
+    import omniroute  # type: ignore[import-not-found]
+    import pxpipe  # type: ignore[import-not-found]
+    import rtk  # type: ignore[import-not-found]
     import program_cards  # type: ignore[import-not-found]
     import winget_install  # type: ignore[import-not-found]
 else:  # запуск как модуль
-    from . import (core, ui, mcp_registry, opencode_caps, android_studio, bridges,
-                   program_cards, winget_install)
+    from . import (core, ui, mcp_registry, opencode_caps, android_studio,
+                   auto_improve, bridges, browsers, caveman, dbhub, greenlight,
+                   lmarena, omniroute, program_cards, pxpipe, qwen_review, rtk,
+                   winget_install)
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QFontMetrics
 from PyQt6.QtWidgets import (
     QApplication,
@@ -36,6 +48,7 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -48,10 +61,12 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSpinBox,
+    QSystemTrayIcon,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
+    QFrame,
     QWidget,
 )
 
@@ -108,11 +123,20 @@ class ScrollPage(QScrollArea):
         # колесо мыши должно крутить содержимое, а не «залипать» на краях
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         inner.setAutoFillBackground(False)
-        # страницу запрещаем сжимать: её высота — это её настоящая высота.
-        # Иначе Qt подгоняет её под окно и рисует элементы друг поверх друга.
+        # Страницу запрещаем сжимать по высоте: её высота — это её
+        # настоящая высота. Иначе Qt подгоняет её под окно и рисует
+        # элементы друг поверх друга.
         inner.setMinimumHeight(inner.sizeHint().height())
+        inner.setMinimumWidth(0)
+        # По ширине страница обязана ужиматься вместе с окном. Раньше
+        # стояло Preferred, и это означало «хочу шириной со своё
+        # содержимое»: при окне 895 внутренний виджет был 825 при
+        # просмотре 665, и подписи уезжали за правый край наравне с
+        # рамкой, а их концы просто пропадали. По горизонтали здесь
+        # та же политика Minimum, что и по высоте: содержимое может
+        # стать любой ширины, лишнее уходит в перенос строк.
         inner.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
+            QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Minimum
         )
         self._inner = inner
 
@@ -126,15 +150,79 @@ class ScrollPage(QScrollArea):
         self.refresh_height()
 
     def refresh_height(self) -> None:
-        """Держит минимальную высоту страницы по её содержимому."""
+        """Держит минимальную высоту страницы по её содержимому.
+
+        Заодно ограничивает ширину. Без этого страница брала ширину
+        по своему содержимому и оказывалась шире окна: измерено, при
+        окне 895 просмотр был 665, а внутренний виджет 825. Ряды с
+        длинными подписями и таблицами уезжали за правый край, и
+        концы подписей просто пропадали. Максимальная ширина заставляет
+        Qt сжать содержимое до его минимумов, а горизонтальной
+        прокрутки у страницы нет намеренно.
+        """
+        limit = self.viewport().width()
+        if limit > 0 and self._inner.maximumWidth() != limit:
+            self._inner.setMaximumWidth(limit)
+        self._wrap_rows_later()
+        self._fit_wrapped()
         layout = self._inner.layout()
         if layout is None:
             return
+        layout.activate()
         need = layout.minimumSize().height()
         hint = layout.sizeHint().height()
         value = max(need, hint)
         if self._inner.minimumHeight() != value:
             self._inner.setMinimumHeight(value)
+
+    def _wrap_rows_later(self) -> None:
+        """Переносит ряды кнопок, но не сейчас, а следующим тактом.
+
+        Перестроение раскладки прямо во время сборки окна роняет Qt на
+       мертвь: проверено, окно падало с 0xC0000409 ещё на создании.
+        Поэтому работа уходит в отдельный такт цикла событий, когда
+        раскладки уже никто не считает, и делается один раз на страницу
+        — иначе она переписывала бы саму себя при каждой смене ширины.
+        """
+        if getattr(self, "_rows_wrapped", False):
+            return
+        self._rows_wrapped = True
+
+        def do_wrap() -> None:
+            try:
+                ui.wrap_button_rows(self._inner)
+                self.refresh_height()
+            except Exception:  # noqa: BLE001
+                # Не сломанный ряд — не повод ронять программу: остаётся
+                # как было, лишь часть подписей при узком окне срежется.
+                self._rows_wrapped = False
+
+        QTimer.singleShot(0, do_wrap)
+
+    def _fit_wrapped(self) -> None:
+        """Растягивает переносимые подписи под их текст.
+
+        Qt не пересчитывает высоту подписи с переносом строк, когда
+        страницу сжали по ширине: слова переносятся на новую строку,
+        а рамка подписи остаётся от прежней ширины — и последняя
+        строка обрезается пополам, прямо посреди букв. Измерено на
+        вкладке «Программы»: 16 подписей, самая короткая имела высоту
+        6 пикселей при нужных 36, то есть текст не был виден вообще.
+
+        Считать высоту надо у каждой подписи по её собственной
+        ширине, потому что длина текста разная, и после обрезки надо
+        пересчитать раскладку — иначе высота страницы будет посчитана
+        по старым, обрезанным подписям.
+
+        Минимальная высота, а не фиксированная: при расширении окна
+        строки снова встанут в одну, и подпись сама станет ниже.
+        """
+        for label in self._inner.findChildren(QLabel):
+            if not label.wordWrap() or label.width() <= 0:
+                continue
+            needed = label.heightForWidth(label.width())
+            if needed > 0 and label.minimumHeight() != needed:
+                label.setMinimumHeight(needed)
 
 
 class Worker(QThread):
@@ -156,6 +244,47 @@ class Worker(QThread):
 
     def _progress(self, text: str) -> None:
         self.line.emit(text, "info")
+
+
+class QwenCheckModels(QThread):
+    """Проверка доступности моделей провайдера — в стороне от окна.
+
+    Отдельный поток, а не общий Worker: у проверки свой прогресс
+    («Проверено X из Y») и свой результат — справочник состояний,
+    который рисуется в своей области карточки Qwen, а не в общем
+    журнале. Обработчик кнопки только запускает поток:
+    check_provider_models зовётся здесь, в run(), и GUI-поток
+    не блокируется.
+    """
+
+    progress = pyqtSignal(str)
+
+    def __init__(self, dest, provider_id: str, parent=None) -> None:
+        super().__init__(parent)
+        self._dest = dest
+        self._provider = provider_id
+        self.result: object = None
+
+    def run(self) -> None:  # noqa: D102
+        try:
+            self.result = qwen_review.check_provider_models(
+                self._dest, self._provider,
+                progress=lambda text: self.progress.emit(text))
+        except Exception as exc:  # noqa: BLE001 — причина в окно, а не падение
+            self.result = exc
+
+
+#: Отвязанные воркеры: окно закрылось, а проверка доживает своя.
+#: Пока поток работает, ссылку обязан кто-то держать — иначе Python
+#: соберёт QThread прямо под работающим потоком, и процесс упадёт.
+_QW_DETACHED_WORKERS: list = []
+
+
+def _qw_detached_worker_finished() -> None:
+    """Отвязанная проверка кончила сама — программе можно выходить."""
+    app = QApplication.instance()
+    if app is not None:
+        app.quit()
 
 
 # ---------------------------------------------------------------- подсказки
@@ -272,8 +401,7 @@ class CreateTab(ScrollPage):
         # Решение человека о чувствительных данных. По умолчанию
         # выключено: без прямой просьбы секретное не пишется.
         self.chk_sensitive = QCheckBox(
-            "Разрешить в этой базе пароли и ключи "
-            "(иначе нейросеть откажется их записывать)"
+            "Разрешить в этой базе пароли и ключи"
         )
         self.chk_sensitive.setToolTip(
             "Сними галочку — нейросеть не будет записывать пароли, ключи "
@@ -2270,11 +2398,1198 @@ class ObsPasswordDialog(QDialog):
         return self._path
 
 
+class DbhubConnectionDialog(QDialog):
+    """Окно подключения к базе для DBHub.
+
+    Спрашиваем только то, без чего мост нечего запускать: как звать
+    подключение, к какой базе и по какой строке. Отдельного поля под
+    пароль нет намеренно: пароль берётся из строки подключения и уезжает
+    в свой файл, а в конфиг попадает ссылка на переменную. Так секрет не
+    остаётся в файле, который открыт и переносится между компьютерами.
+
+    Файл подключений ведёт программа: он лежит рядом с настройками
+    opencode и в репозиторий не попадает. Дописать второй источник можно
+    тем же окном — список уже добавленных виден наверху.
+    """
+
+    def __init__(self, dest: Path, parent=None) -> None:
+        super().__init__(parent)
+        self.dest = Path(dest)
+        self.messages: list[str] = []
+        self.setWindowTitle("Подключение к базе для DBHub")
+        self.setMinimumWidth(640)
+
+        box = QVBoxLayout(self)
+        box.setSpacing(8)
+        box.addWidget(ui.label(
+            "DBHub умеет PostgreSQL, MySQL, MariaDB, SQL Server, Oracle и "
+            "SQLite. Строку подключения возьми у себя: у каждой базы она "
+            "своя. Пароль, если он есть в строке, программа вынет и "
+            "положит отдельным файлом рядом с настройками — в конфиге "
+            "останется только ссылка на него.",
+            wrap=True,
+        ))
+
+        old = dbhub.read_sources(self.dest)
+        if old:
+            names = ", ".join(f"{s.id} ({s.db_type})" for s in old)
+            box.addWidget(ui.label(f"Уже добавлено: {names}", kind="dim", wrap=True))
+
+        form = QVBoxLayout()
+        form.setSpacing(4)
+
+        row_name = QHBoxLayout()
+        row_name.addWidget(ui.label("Имя подключения:", kind="title"))
+        self.name = QLineEdit()
+        self.name.setPlaceholderText("латиницей, без пробелов: sklad, main-db")
+        row_name.addWidget(self.name, 1)
+        form.addLayout(row_name)
+
+        row_type = QHBoxLayout()
+        row_type.addWidget(ui.label("Тип базы:", kind="title"))
+        self.db_type = QComboBox()
+        for key, title, _schemes in dbhub.DB_TYPES:
+            self.db_type.addItem(title, key)
+        self.db_type.currentIndexChanged.connect(self._refresh_example)
+        row_type.addWidget(self.db_type, 1)
+        form.addLayout(row_type)
+
+        row_dsn = QHBoxLayout()
+        row_dsn.addWidget(ui.label("Строка подключения:", kind="title"))
+        self.dsn = QLineEdit()
+        row_dsn.addWidget(self.dsn, 1)
+        form.addLayout(row_dsn)
+        box.addLayout(form)
+
+        row_limits = QHBoxLayout()
+        self.readonly = QCheckBox("Только чтение")
+        self.readonly.setChecked(True)
+        self.readonly.setToolTip(
+            "Запросы на изменение данных будут отклонены. Снять галочку — "
+            "значит разрешить серверу менять базу"
+        )
+        row_limits.addWidget(self.readonly)
+        row_limits.addSpacing(16)
+        row_limits.addWidget(ui.label("Строк в ответе:", kind="title"))
+        self.max_rows = QSpinBox()
+        self.max_rows.setRange(10, 100000)
+        self.max_rows.setValue(dbhub.DEFAULT_MAX_ROWS)
+        self.max_rows.setSingleStep(100)
+        self.max_rows.setToolTip(
+            "Сколько строк сервер отдаст в одном ответе. Ограничение "
+            "касается execute_sql: без него один неосторожный запрос "
+            "вернёт таблицу целиком"
+        )
+        row_limits.addWidget(self.max_rows)
+        row_limits.addStretch(1)
+        box.addLayout(row_limits)
+
+        self.example = ui.label("", kind="dim", wrap=True)
+        box.addWidget(self.example)
+
+        self.status = ui.label("", wrap=True)
+        box.addWidget(self.status)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.btn_cancel = QPushButton("Отмена")
+        self.btn_cancel.clicked.connect(self.reject)
+        self.btn_ok = QPushButton("Записать")
+        self.btn_ok.setObjectName("primary")
+        self.btn_ok.setDefault(True)
+        self.btn_ok.clicked.connect(self._save)
+        row.addWidget(self.btn_cancel)
+        row.addWidget(self.btn_ok)
+        box.addLayout(row)
+
+        self._refresh_example()
+
+    def _current_type(self) -> str:
+        return str(self.db_type.currentData() or "")
+
+    def _refresh_example(self) -> None:
+        key = self._current_type()
+        example = dbhub.DSN_EXAMPLES.get(key, "")
+        self.dsn.setPlaceholderText(example)
+        self.example.setText(
+            f"Пример для этой базы: {example}. Такой адрес — образец формы, "
+            "а не настоящий: подставь свой хост, базу и пользователя."
+            if example else ""
+        )
+
+    def _save(self) -> None:
+        messages, errors = dbhub.add_source(
+            self.dest, self.name.text(), self._current_type(),
+            self.dsn.text(), self.readonly.isChecked(), self.max_rows.value(),
+        )
+        if errors:
+            # Окно не закрывается: человек должен видеть, что именно не так,
+            # и поправить хотя бы то, что поправимо с клавиатуры.
+            self.status.setText("Не записано. " + " ".join(errors))
+            return
+        self.messages = messages
+        self.accept()
+
+
+class BrowserChoiceDialog(QDialog):
+    """Окно выбора браузера для моста Playwright MCP.
+
+    Спрашиваем то, без чего мост не запустить: каким браузером водит
+    нейросеть, куда класть его профиль и показывать ли окно. Меню браузеров
+    у Playwright своё и не совпадает с тем, что стоит у человека: Chrome и
+    Edge берутся по каналу, Яндекс.Браузер — только по пути к browser.exe,
+    а Firefox — не тот, что стоит у человека, а своя сборка Playwright.
+    Про последнее окно говорит прямо, а не ставит галочку «Firefox»,
+    за которой ничего нет.
+
+    Выбор ложится файлом рядом с настройками opencode. В самих настройках
+    остаётся только команда лаунчера: смена браузера их не переписывает.
+    """
+
+    def __init__(self, dest: Path, parent=None) -> None:
+        super().__init__(parent)
+        self.dest = Path(dest)
+        self.messages: list[str] = []
+        self.setWindowTitle("Браузер для нейросети")
+        self.setMinimumWidth(700)
+        self.choice = browsers.read_choice(self.dest)
+
+        box = QVBoxLayout(self)
+        box.setSpacing(8)
+        box.addWidget(ui.label(
+            "Нейросеть будет открывать страницы в выбранном браузере. По "
+            "умолчанию у неё свой профиль, поэтому твои вкладки и входы в "
+            "своих аккаунтах она не увидит. Режим «мои сессии» — только "
+            "явным выбором и только с расширением Playwright.",
+            wrap=True,
+        ))
+
+        row_browser = QHBoxLayout()
+        row_browser.addWidget(ui.label("Браузер:", kind="title"))
+        self.browser_box = QComboBox()
+        for item in browsers.BROWSERS:
+            self.browser_box.addItem(item.title, item.key)
+        index = self.browser_box.findData(self.choice.browser)
+        if index >= 0:
+            self.browser_box.setCurrentIndex(index)
+        self.browser_box.currentIndexChanged.connect(self._refresh)
+        row_browser.addWidget(self.browser_box, 1)
+        box.addLayout(row_browser)
+
+        self.browser_hint = ui.label("", kind="dim", wrap=True)
+        box.addWidget(self.browser_hint)
+
+        row_path = QHBoxLayout()
+        row_path.addWidget(ui.label("Путь к browser.exe:", kind="title"))
+        self.path = QLineEdit(self.choice.executable)
+        self.path.setPlaceholderText(
+            "для Яндекс.Браузера: ...\\Yandex\\YandexBrowser\\Application\\browser.exe"
+        )
+        self.path.textChanged.connect(self._refresh)
+        row_path.addWidget(self.path, 1)
+        self.btn_browse = QPushButton("Обзор…")
+        self.btn_browse.clicked.connect(self._browse)
+        row_path.addWidget(self.btn_browse)
+        box.addLayout(row_path)
+
+        row_profile = QHBoxLayout()
+        row_profile.addWidget(ui.label("Профиль:", kind="title"))
+        self.profile_box = QComboBox()
+        for key, title in browsers.PROFILE_MODES:
+            self.profile_box.addItem(title, key)
+        index = self.profile_box.findData(self.choice.profile)
+        if index >= 0:
+            self.profile_box.setCurrentIndex(index)
+        self.profile_box.currentIndexChanged.connect(self._refresh)
+        row_profile.addWidget(self.profile_box, 1)
+        box.addLayout(row_profile)
+
+        row_token = QHBoxLayout()
+        row_token.addWidget(ui.label("Токен расширения:", kind="title"))
+        self.token_field = QLineEdit(browsers.read_token(self.dest))
+        self.token_field.setPlaceholderText(
+            "Вставь токен из расширения Playwright — и Chrome перестанет "
+            "спрашивать одобрение"
+        )
+        self.token_field.setObjectName("password")
+        self.token_field.setEchoMode(QLineEdit.EchoMode.Password)
+        self.token_field.textChanged.connect(self._refresh)
+        row_token.addWidget(self.token_field, 1)
+        self.btn_token_paste = QPushButton("Вставить")
+        self.btn_token_paste.setToolTip(
+            "Токен из буфера обмена. Нажми «Вставить токен», когда в буфере "
+            "будет токен из расширения Playwright"
+        )
+        self.btn_token_paste.clicked.connect(self._fill_token)
+        row_token.addWidget(self.btn_token_paste)
+        self.btn_token_show = QPushButton("Показать")
+        self.btn_token_show.setCheckable(True)
+        self.btn_token_show.toggled.connect(self._toggle_token)
+        row_token.addWidget(self.btn_token_show)
+        box.addLayout(row_token)
+
+        self.token_status = ui.label("", wrap=True)
+        box.addWidget(self.token_status)
+
+        self.headless = QCheckBox("Скрыть окно браузера — работать без него")
+        self.headless.setChecked(self.choice.headless)
+        self.headless.setToolTip(
+            "С окном видно, что делает нейросеть, и можно вмешаться. Без "
+            "окна работа идёт незаметно"
+        )
+        self.headless.stateChanged.connect(self._refresh)
+        box.addWidget(self.headless)
+
+        self.download = QCheckBox(
+            "Скачать сборку Firefox для Playwright, около 90 МБ"
+        )
+        self.download.setChecked(self.choice.download_firefox)
+        self.download.setToolTip(
+            "Твой Firefox не подойдёт: Playwright водит только свою сборку. "
+            "Скачивание идёт командой npx playwright install firefox"
+        )
+        box.addWidget(self.download)
+
+        self.command_hint = ui.label("", kind="dim", wrap=True)
+        box.addWidget(self.command_hint)
+
+        self.status = ui.label("", wrap=True)
+        box.addWidget(self.status)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.btn_cancel = QPushButton("Отмена")
+        self.btn_cancel.clicked.connect(self.reject)
+        self.btn_ok = QPushButton("Записать")
+        self.btn_ok.setObjectName("primary")
+        self.btn_ok.setDefault(True)
+        self.btn_ok.clicked.connect(self._save)
+        row.addWidget(self.btn_cancel)
+        row.addWidget(self.btn_ok)
+        box.addLayout(row)
+
+        self._refresh()
+
+    def _current_key(self) -> str:
+        return str(self.browser_box.currentData() or "chrome")
+
+    def _current_profile(self) -> str:
+        return str(self.profile_box.currentData() or "separate")
+
+    def _build_choice(self) -> browsers.Choice:
+        return browsers.Choice(
+            browser=self._current_key(),
+            executable=self.path.text().strip(),
+            profile=self._current_profile(),
+            headless=self.headless.isChecked(),
+            download_firefox=self.download.isChecked(),
+            checked=self.choice.checked,
+        )
+
+    def _browse(self) -> None:
+        start = self.path.text().strip()
+        if not start:
+            found = browsers.installed_path(self._current_key())
+            start = str(found) if found else ""
+        chosen, _filter = QFileDialog.getOpenFileName(
+            self, "Где лежит browser.exe", start,
+            "Программы (*.exe);;Все файлы (*)",
+        )
+        if chosen:
+            self.path.setText(chosen)
+
+    def _refresh(self) -> None:
+        key = self._current_key()
+        item = browsers.browser(key)
+        profile = self._current_profile()
+        self.browser_hint.setText(
+            item.note + " " + browsers.hint(key, self._build_choice())
+        )
+        # Путь нужен только там, где браузер запускается по файлу. У
+        # остальных он бы только путал: Playwright их и так найдёт.
+        needs_path = item.kind == "path"
+        self.path.setEnabled(needs_path)
+        self.btn_browse.setEnabled(needs_path)
+        self.download.setEnabled(
+            item.kind == "playwright" and browsers.playwright_firefox_dir() is None
+        )
+        self.headless.setEnabled(profile != "sessions")
+        sessions = profile == "sessions"
+        self.token_field.setVisible(sessions)
+        self.btn_token_show.setVisible(sessions)
+        self.btn_token_paste.setVisible(sessions)
+        if sessions:
+            if not self.token_field.text().strip():
+                self.token_status.setText(
+                    "Токен пуст: скопируй токен из расширения Playwright "
+                    "и нажми «Вставить»."
+                )
+            else:
+                self.token_status.setText("Токен вставлен: будет без запроса одобрения.")
+        self.command_hint.setText(
+            "Запуск: " + " ".join(browsers.command(self.dest, self._build_choice()))
+            + ". Профиль: "
+            + str(browsers.profile_dir(self.dest, key))
+        )
+
+    def _toggle_token(self, show: bool) -> None:
+        mode = (QLineEdit.EchoMode.Normal if show
+                else QLineEdit.EchoMode.Password)
+        self.token_field.setEchoMode(mode)
+
+    def _fill_token(self) -> None:
+        self.token_field.setText(
+            QApplication.clipboard().text().strip()
+            if QApplication.clipboard() else ""
+        )
+        self._refresh()
+
+    def _save(self) -> None:
+        if self._current_profile() == "sessions" and not \
+                self.token_field.text().strip():
+            self.status.setStyleSheet(f"color: {ui.ERROR};")
+            self.status.setText("Вставьте токен: в режиме «мои сессии» без "
+                                "токена Chrome будет спрашивать одобрение "
+                                "при каждом подключении. Вставь токен или "
+                                "выбери другой профиль.")
+            return
+        messages, errors = browsers.write_choice(self.dest, self._build_choice())
+        if errors:
+            # Окно не закрывается: человек должен видеть, что именно не так,
+            # и поправить это здесь же.
+            self.status.setText("Не записано. " + " ".join(errors))
+            return
+        # Токен сохраняем только в режиме «мои сессии» (поле вовсе скрыто
+        # в других профилях, но защитимся и проверкой). Пустой токен не
+        # трогаем: не стираем то, что уже вписано, если человек не решил
+        # убрать его явно (кнопки «Убрать» в окне нет — есть файл).
+        if self._current_profile() == "sessions" and \
+                self.token_field.text().strip():
+            _saved, _note = browsers.write_token(self.dest,
+                                                 self.token_field.text().strip())
+            self.token_status.setText(_note)
+            if not _saved:
+                self.status.setText("Токен не записался: " + self.token_status.text())
+                return
+        self.messages = messages
+        self.accept()
+
+
+class LmarenaWarningDialog(QDialog):
+    """Предупреждения моста LMArena — до первого запуска.
+
+    Мост работает через веб-сервис арены, а не через её официальный API,
+    и запросы уходят на публичную площадку. Поэтому мост выключен по
+    умолчанию, а это окно показывается каждый раз перед тем, как его
+    поднять или вписать в настройки: согласие должно быть осознанным, а
+    не «я когда-то нажал галочку». Текст предупреждений держится в
+    lmarena.WARNINGS — там же, откуда его берут скилл и самопроверка.
+    """
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Мост LMArena: что важно знать")
+        self.setMinimumWidth(680)
+
+        box = QVBoxLayout(self)
+        box.setSpacing(8)
+        box.addWidget(ui.label(
+            "Мост LMArena — программа к сервису Arena (arena.ai). Он "
+            "включается только по явному согласию и по умолчанию выключен. "
+            "Перед первым запуском прочитай, на что идёшь:",
+            wrap=True,
+        ))
+        for number, warning in enumerate(lmarena.WARNINGS, start=1):
+            box.addWidget(ui.label(f"{number}. {warning}", wrap=True))
+
+        box.addWidget(ui.label(
+            "Нажми «Согласен» — и дальше программа сделает ровно то, что "
+            "написано на кнопке. «Отмена» не делает ничего.",
+            kind="dim",
+            wrap=True,
+        ))
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.btn_cancel = QPushButton("Отмена")
+        self.btn_cancel.clicked.connect(self.reject)
+        self.btn_ok = QPushButton("Согласен")
+        self.btn_ok.setObjectName("primary")
+        self.btn_ok.setDefault(True)
+        self.btn_ok.clicked.connect(self.accept)
+        row.addWidget(self.btn_cancel)
+        row.addWidget(self.btn_ok)
+        box.addLayout(row)
+
+
+class PxpipeWarningDialog(QDialog):
+    """Предупреждение pxpipe — до запуска прокси и до галочки.
+
+    pxpipe переписывает часть запроса картинками, и это сжатие с потерями:
+    по тестам автора часть моделей плохо различает символы, а точные
+    строки, ключи и код — как раз из символов. Галочка по умолчанию снята,
+    а это окно показывается и перед её включением, и перед каждым запуском
+    прокси: согласие должно быть осознанным, а не «я когда-то нажал
+    галочку». Текст держится в pxpipe.WARNING — там же, откуда его берут
+    скилл и самопроверка.
+    """
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("pxpipe: что важно знать")
+        self.setMinimumWidth(700)
+
+        box = QVBoxLayout(self)
+        box.setSpacing(8)
+        box.addWidget(ui.label(
+            "pxpipe — сторонний прокси автора teamchong (лицензия MIT). "
+            "Запросы opencode пойдут через него, и часть запроса он "
+            "превратит в картинки. Включается только по явному согласию "
+            "и по умолчанию выключен. Прочитай, на что идёшь:",
+            wrap=True,
+        ))
+        # Абзацы текста автора свёрнуты в строки: переносы в константе стоят
+        # для читаемости кода, а не для окна — окно переносит само.
+        for _part in pxpipe.WARNING.split("\n\n"):
+            _text = " ".join(line.strip() for line in _part.splitlines()
+                             if line.strip())
+            if _text:
+                box.addWidget(ui.label(_text, wrap=True))
+        box.addWidget(ui.label(
+            "Нажми «Согласен» — и дальше программа сделает ровно то, что "
+            "написано на кнопке. «Отмена» не делает ничего.",
+            kind="dim",
+            wrap=True,
+        ))
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.btn_cancel = QPushButton("Отмена")
+        self.btn_cancel.clicked.connect(self.reject)
+        self.btn_ok = QPushButton("Согласен")
+        self.btn_ok.setObjectName("primary")
+        self.btn_ok.setDefault(True)
+        self.btn_ok.clicked.connect(self.accept)
+        row.addWidget(self.btn_cancel)
+        row.addWidget(self.btn_ok)
+        box.addLayout(row)
+
+
+class AutoImproveKeyDialog(QDialog):
+    """Ключ модели-судьи Gemini — файлом рядом с настройками.
+
+    Ключ берётся человеком на aistudio.google.com/apikey (ссылка — из
+    README автора auto-improve). Программа его только сохраняет: файлом
+    `auto-improve-key.txt` рядом с настройками opencode, откуда он уезжает
+    в окружение процесса при запуске цикла. В команды, настройки opencode
+    и журналы ключ не попадает — поэтому же он показывается точками.
+    """
+
+    def __init__(self, dest: Path, parent=None) -> None:
+        super().__init__(parent)
+        self.dest = Path(dest)
+        self.messages: list[str] = []
+        self.setWindowTitle("Ключ модели-судьи для auto-improve")
+        self.setMinimumWidth(700)
+
+        box = QVBoxLayout(self)
+        box.setSpacing(8)
+        box.addWidget(ui.label(
+            "auto-improve оценивает правки отдельной моделью-судьёй Google "
+            "Gemini. Ключ к ней берётся на aistudio.google.com/apikey — "
+            "у автора в README указана именно эта страница; ключ бесплатный, "
+            "но у него есть лимиты на число запросов.",
+            wrap=True,
+        ))
+        box.addWidget(ui.label(
+            "Ключ ляжет файлом " + auto_improve.KEY_NAME + " рядом с "
+            "настройками opencode и в репозиторий не попадёт. В команды и "
+            "журнал он тоже не записывается: программа кладёт его в "
+            "окружение процесса. Проверкой ключа будет первый запуск "
+            "цикла — в интернет за этим программа не ходит.",
+            kind="dim",
+            wrap=True,
+        ))
+
+        self.key = QLineEdit()
+        self.key.setPlaceholderText("ключ Gemini (начинается с AIza…)")
+        self.key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.key.setToolTip(
+            "Значение ключа. Показывается точками: это секрет, и он должен "
+            "попадать в журнал как можно реже"
+        )
+        self.show_key = QCheckBox("Показать ключ")
+        self.show_key.toggled.connect(
+            lambda on: self.key.setEchoMode(
+                QLineEdit.EchoMode.Normal if on else QLineEdit.EchoMode.Password
+            )
+        )
+        box.addWidget(self.key)
+        box.addWidget(self.show_key)
+
+        self.status = ui.label("", wrap=True)
+        box.addWidget(self.status)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.btn_cancel = QPushButton("Отмена")
+        self.btn_cancel.clicked.connect(self.reject)
+        self.btn_ok = QPushButton("Сохранить")
+        self.btn_ok.setObjectName("primary")
+        self.btn_ok.setDefault(True)
+        self.btn_ok.clicked.connect(self._save)
+        row.addWidget(self.btn_cancel)
+        row.addWidget(self.btn_ok)
+        box.addLayout(row)
+
+    def _save(self) -> None:
+        messages, errors = auto_improve.save_key(self.dest, self.key.text())
+        if errors:
+            self.status.setText("Не записано. " + " ".join(errors))
+            return
+        self.messages = messages
+        self.accept()
+
+
+class AutoImproveDialog(QDialog):
+    """Что именно улучшать — до запуска цикла.
+
+    Здесь выбирается файл, рубрика (свои рубрики автора, свой файл или
+    «без рубрики» с целью одной строкой), тег запуска и ограничения цикла.
+    Внизу прямым текстом сказано главное: скрипт автора сам делает
+    `git add -A`, создаёт ветку `improve/<тег>` и коммитит в неё — основную
+    ветку он не трогает, но незакоммиченные изменения уедут в новую ветку.
+    """
+
+    #: «Без рубрики» — скрипт выведет её из файла; «свой файл» — выбрать
+    #: любой .md на диске.
+    NO_RUBRIC = ""
+    OWN_RUBRIC = "свой"
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("auto-improve: что улучшать")
+        self.setMinimumWidth(760)
+        self.own_criteria = ""
+
+        box = QVBoxLayout(self)
+        box.setSpacing(8)
+        box.addWidget(ui.label(
+            "Цикл улучшает один текстовый файл: правки предлагает одна "
+            "модель, оценивает их отдельная модель-судья по рубрике, а в "
+            "работу остаётся только выигравшее. Каждый шаг — отдельный "
+            "коммит в ветке improve/<тег>.",
+            wrap=True,
+        ))
+
+        row_file = QHBoxLayout()
+        row_file.addWidget(QLabel("Файл:   "))
+        self.artifact = QLineEdit()
+        self.artifact.setPlaceholderText("текстовый файл внутри git-репозитория")
+        self.artifact.setToolTip(
+            "Файл должен лежать внутри git-репозитория: улучшения скрипт "
+            "хранит коммитами в ветке improve/<тег>"
+        )
+        self.btn_pick = QPushButton("Выбрать…")
+        self.btn_pick.clicked.connect(self._pick_file)
+        row_file.addWidget(self.artifact, 1)
+        row_file.addWidget(self.btn_pick)
+        box.addLayout(row_file)
+
+        row_rubric = QHBoxLayout()
+        row_rubric.addWidget(QLabel("Рубрика:   "))
+        self.criteria = QComboBox()
+        self.criteria.setToolTip(
+            "Рубрика — markdown с размерами оценок, суммарно 100 баллов. "
+            "Готовые рубрики автора лежат в tools/thirdparty/auto-improve/"
+            "criteria. Без рубрики скрипт выведет её из файла — тогда "
+            "помогает «цель» ниже"
+        )
+        self.criteria.addItem("без рубрики — скрипт подберёт её сам", self.NO_RUBRIC)
+        for path in auto_improve.criteria_files():
+            self.criteria.addItem("рубрика автора: " + path.stem, str(path))
+        self.criteria.addItem("свой файл рубрики…", self.OWN_RUBRIC)
+        self.criteria.currentIndexChanged.connect(self._criteria_changed)
+        row_rubric.addWidget(self.criteria, 1)
+        box.addLayout(row_rubric)
+
+        row_goal = QHBoxLayout()
+        row_goal.addWidget(QLabel("Цель:   "))
+        self.goal = QLineEdit()
+        self.goal.setPlaceholderText(
+            "одной строкой: чего добиваемся (для авто-рубрики)"
+        )
+        row_goal.addWidget(self.goal, 1)
+        box.addLayout(row_goal)
+
+        row_tag = QHBoxLayout()
+        row_tag.addWidget(QLabel("Тег запуска:   "))
+        self.tag = QLineEdit()
+        self.tag.setPlaceholderText("v1 — из него делается ветка improve/v1")
+        row_tag.addWidget(self.tag, 1)
+        box.addLayout(row_tag)
+
+        row_limits = QHBoxLayout()
+        row_limits.addWidget(QLabel("Итераций:"))
+        self.iterations = QSpinBox()
+        self.iterations.setRange(1, auto_improve.MAX_ITERATIONS)
+        self.iterations.setValue(auto_improve.DEFAULT_ITERATIONS)
+        row_limits.addWidget(self.iterations)
+        row_limits.addWidget(QLabel("   Кандидатов за раунд:"))
+        self.candidates = QSpinBox()
+        self.candidates.setRange(1, 10)
+        self.candidates.setValue(auto_improve.DEFAULT_CANDIDATES)
+        row_limits.addWidget(self.candidates)
+        row_limits.addWidget(QLabel("   Порог остановки:"))
+        self.threshold = QSpinBox()
+        self.threshold.setRange(50, 100)
+        self.threshold.setValue(auto_improve.DEFAULT_THRESHOLD)
+        row_limits.addWidget(self.threshold)
+        row_limits.addWidget(QLabel("   Оценок на вариант:"))
+        self.eval_runs = QSpinBox()
+        self.eval_runs.setRange(1, 5)
+        self.eval_runs.setValue(auto_improve.DEFAULT_EVAL_RUNS)
+        row_limits.addWidget(self.eval_runs)
+        row_limits.addStretch(1)
+        box.addLayout(row_limits)
+
+        box.addWidget(ui.label(auto_improve.BRANCH_WARNING, wrap=True))
+        box.addWidget(ui.label(auto_improve.COST_WARNING, kind="dim", wrap=True))
+
+        self.status = ui.label("", wrap=True)
+        box.addWidget(self.status)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.btn_cancel = QPushButton("Отмена")
+        self.btn_cancel.clicked.connect(self.reject)
+        self.btn_ok = QPushButton("Запустить")
+        self.btn_ok.setObjectName("primary")
+        self.btn_ok.setDefault(True)
+        self.btn_ok.clicked.connect(self._accept)
+        row.addWidget(self.btn_cancel)
+        row.addWidget(self.btn_ok)
+        box.addLayout(row)
+
+        # Выбор файла — через системный диалог; тег подставляется из имени.
+        self.artifact.textChanged.connect(self._tag_from_file)
+
+    def _pick_file(self) -> None:
+        start = self.artifact.text().strip() or str(Path.home())
+        chosen, _filter = QFileDialog.getOpenFileName(
+            self, "Файл для улучшения",
+            str(Path(start).parent if Path(start).parent.is_dir() else Path.home()),
+            "Текст и код (*.md *.txt *.py *.json *.yaml *.yml);;Все файлы (*)",
+        )
+        if chosen:
+            self.artifact.setText(chosen)
+
+    def _tag_from_file(self) -> None:
+        """Тег по умолчанию — имя файла без расширения, без запретных знаков."""
+        if self.tag.text().strip():
+            return
+        stem = Path(self.artifact.text().strip()).stem
+        clean = "".join(ch if (ch.isalnum() or ch in "._-") else "-" for ch in stem)
+        if clean:
+            self.tag.setText(clean[:40])
+
+    def _criteria_changed(self) -> None:
+        if self.criteria.currentData() != self.OWN_RUBRIC:
+            return
+        chosen, _filter = QFileDialog.getOpenFileName(
+            self, "Файл рубрики", str(Path.home()), "Рубрика (*.md);;Все файлы (*)"
+        )
+        if chosen:
+            self.own_criteria = chosen
+            self.criteria.setItemText(
+                self.criteria.currentIndex(), "свой файл: " + Path(chosen).name
+            )
+        else:
+            self.criteria.setCurrentIndex(0)
+
+    def values(self) -> dict:
+        """Выбор человека. Проверки полей — тут же, до запуска."""
+        item = self.criteria.currentData()
+        own_needed = item == self.OWN_RUBRIC
+        criteria = self.own_criteria if own_needed else str(item or "")
+        return {
+            "artifact": self.artifact.text().strip(),
+            "criteria": criteria,
+            "own_needed": own_needed,
+            "goal": self.goal.text().strip(),
+            "tag": self.tag.text().strip(),
+            "max_iterations": self.iterations.value(),
+            "candidates": self.candidates.value(),
+            "threshold": self.threshold.value(),
+            "eval_runs": self.eval_runs.value(),
+        }
+
+    def _accept(self) -> None:
+        values = self.values()
+        if not values["artifact"]:
+            self.status.setText("Не выбран файл для улучшения.")
+            return
+        if not Path(values["artifact"]).is_file():
+            self.status.setText("Такого файла нет: " + values["artifact"])
+            return
+        if values["own_needed"] and not values["criteria"]:
+            self.status.setText(
+                "Выбрана своя рубрика, но файл рубрики не указан — повтори выбор."
+            )
+            return
+        problem = auto_improve.tag_problem(values["tag"])
+        if problem:
+            self.status.setText(problem)
+            return
+        self.accept()
+
+
+class QwenReviewDialog(QDialog):
+    """Что проверять вторым ревьюером: папка проекта и база сравнения.
+
+    Дальше — обычная проверка: изменения берутся командой `git diff`,
+    ревьюер идёт в режиме «только чтение» и файлы не правит.
+    """
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Qwen Code: ревью изменений")
+        self.setMinimumWidth(720)
+
+        box = QVBoxLayout(self)
+        box.setSpacing(8)
+        box.addWidget(ui.label(
+            "Второй ревьюер прочитает `git diff` проекта и вернёт замечания. "
+            "Код изменений уйдёт выбранному провайдеру — это тратит токены. "
+            "Ревьюер файлы не правит: он работает в режиме «только чтение».",
+            wrap=True,
+        ))
+
+        row_project = QHBoxLayout()
+        row_project.addWidget(QLabel("Папка проекта:   "))
+        self.project = QLineEdit()
+        self.project.setPlaceholderText("папка с кодом, где есть .git")
+        self.btn_pick_project = QPushButton("Выбрать…")
+        self.btn_pick_project.clicked.connect(self._pick_project)
+        row_project.addWidget(self.project, 1)
+        row_project.addWidget(self.btn_pick_project)
+        box.addLayout(row_project)
+
+        row_base = QHBoxLayout()
+        row_base.addWidget(QLabel("С чем сравнивать:   "))
+        self.base = QLineEdit()
+        self.base.setPlaceholderText("пусто — рабочее дерево против индекса (git diff)")
+        row_base.addWidget(self.base, 1)
+        box.addLayout(row_base)
+        box.addWidget(ui.label(
+            "Ветку, тег или коммит можно указать вручную: например `main` — "
+            "тогда видно всё, что сделано в текущей ветке поверх main.",
+            kind="dim", wrap=True,
+        ))
+
+        # Режим ревью — из общего списка qwen_review.MODES, а не хардкод.
+        # Выбор в комбо (once/debate/vote); спором управляет человек.
+        row_mode = QHBoxLayout()
+        row_mode.addWidget(QLabel("Режим:   "))
+        self.mode = QComboBox()
+        for _mode in qwen_review.MODES:
+            self.mode.addItem(str(_mode.get("name") or _mode["id"]),
+                              str(_mode.get("id") or ""))
+        self.mode.setToolTip(
+            "«Одна проверка» — ревьюер прочитал diff и вернул замечания. "
+            "«Спор» — обмен возражениями двух моделей до N раундов, решает "
+            "человек. «Тройное ревью» — три обличья из панели ловят одну "
+            "проблему дважды, а её повтор подтверждается двумя моделями. "
+            "Спор с тройным ревью совмещать нельзя: программа откажет "
+            "сама."
+        )
+        row_mode.addWidget(self.mode, 1)
+        box.addLayout(row_mode)
+
+        self.status = ui.label("", wrap=True)
+        box.addWidget(self.status)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.btn_cancel = QPushButton("Отмена")
+        self.btn_cancel.clicked.connect(self.reject)
+        self.btn_ok = QPushButton("Проверить")
+        self.btn_ok.setObjectName("primary")
+        self.btn_ok.setDefault(True)
+        self.btn_ok.clicked.connect(self._accept)
+        row.addWidget(self.btn_cancel)
+        row.addWidget(self.btn_ok)
+        box.addLayout(row)
+
+    def _pick_project(self) -> None:
+        start = self.project.text().strip() or str(Path.home())
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Папка проекта", start if Path(start).is_dir() else str(Path.home())
+        )
+        if chosen:
+            self.project.setText(chosen)
+
+    def values(self) -> dict:
+        """Выбор человека: папка проекта, база сравнения и режим."""
+        return {
+            "project": self.project.text().strip(),
+            "base": self.base.text().strip(),
+            "mode": str(self.mode.currentData() or qwen_review.MODE_ONCE),
+        }
+
+    def _accept(self) -> None:
+        values = self.values()
+        if not values["project"]:
+            self.status.setText("Не выбрана папка проекта.")
+            return
+        folder = Path(values["project"])
+        if not folder.is_dir():
+            self.status.setText("Такой папки нет: " + values["project"])
+            return
+        if not (folder / ".git").exists():
+            self.status.setText(
+                "Это не git-репозиторий: ревьюеру нужен `git diff`. "
+                "Проверь папку проекта."
+            )
+            return
+        self.accept()
+
+
+class QwenReplyDialog(QDialog):
+    """Возражение основного агента для раунда спора.
+
+    Текст пишет человек (или основной агент передаёт его сюда): ревьюер
+    отвечает на доводы, и так до предела раундов. За пределом программа
+    не спорит сама — решение остаётся за человеком.
+    """
+
+    def __init__(self, round_no: int, limit: int, project: str, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Qwen Code: возражение в споре")
+        self.setMinimumWidth(760)
+
+        box = QVBoxLayout(self)
+        box.setSpacing(8)
+        box.addWidget(ui.label(
+            f"Раунд {round_no} из {limit}. Возражение уйдёт ревьюеру вместе с "
+            "ходом спора: он либо согласится, либо объяснит, почему возражение "
+            "неверно. Файлы по-прежнему никто не правит.",
+            wrap=True,
+        ))
+        self.project = QLineEdit(project)
+        self.project.setReadOnly(True)
+        box.addWidget(self.project)
+        self.reply = QPlainTextEdit()
+        self.reply.setPlaceholderText(
+            "Что возразить ревьюеру: почему его замечание не подходит — "
+            "с обоснованием (например: «так задумано, потому что…»)"
+        )
+        self.reply.setMinimumHeight(160)
+        box.addWidget(self.reply)
+
+        self.status = ui.label("", wrap=True)
+        box.addWidget(self.status)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.btn_cancel = QPushButton("Отмена")
+        self.btn_cancel.clicked.connect(self.reject)
+        self.btn_ok = QPushButton("Отправить возражение")
+        self.btn_ok.setObjectName("primary")
+        self.btn_ok.setDefault(True)
+        self.btn_ok.clicked.connect(self._accept)
+        row.addWidget(self.btn_cancel)
+        row.addWidget(self.btn_ok)
+        box.addLayout(row)
+
+    def values(self) -> str:
+        """Текст возражения."""
+        return self.reply.toPlainText().strip()
+
+    def _accept(self) -> None:
+        if not self.values():
+            self.status.setText("Пустое возражение отправлять нечего.")
+            return
+        self.accept()
+
+
+class QwenSetupDialog(QDialog):
+    """Фразы-триггеры для скилла настройки ревьюера — что сказать агенту.
+
+    Кнопка «Настроить через скилл» сама настройкой не занимается: она
+    показывает человеку фразы, которые он говорит агенту, — и каждую
+    можно скопировать в буфер. Сами команды выполняет скилл
+    qwen-review-setup за пределами этого диалога.
+    """
+
+    #: Фразы-триггеры: что сказать агенту и что это даст.
+    PHRASES = [
+        "«настрой ревьюера» — выбрать провайдера и модель, развернуть, включить",
+        "«настрой тройное ревью» — заполнить панель тремя слотами",
+        "«проверь, какие модели отвечают» — живая проверка доступности",
+        "«ревьюер отвечает 401» — найти причину по ключу",
+    ]
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Настроить ревьюера — через скилл")
+        self.setMinimumWidth(700)
+
+        box = QVBoxLayout(self)
+        box.setSpacing(8)
+        box.addWidget(ui.label(
+            "Настройка выбором в окне передана скиллу: агент сам читает "
+            "статус, узнаёт живые модели, выбирает провайдера по числу живых "
+            "моделей (ничья — спросит), разворачивает и включает. Скажи "
+            "агенту любую из фраз — и он сделает остальное.",
+            wrap=True,
+        ))
+        box.addWidget(ui.label(
+            "Фразы-триггеры (скопируй и вставь агенту):",
+            kind="dim", wrap=True,
+        ))
+        self._copy_buttons: list[QPushButton] = []
+        for phrase in self.PHRASES:
+            row = QHBoxLayout()
+            label = ui.label(phrase, wrap=True)
+            btn = QPushButton("Скопировать")
+            row.addWidget(label, 1)
+            row.addWidget(btn)
+            box.addLayout(row)
+            btn.clicked.connect(
+                lambda _=False, text=phrase, b=btn: self._copy(text, b))
+            self._copy_buttons.append(btn)
+
+        self.qw_setup_status = ui.label("", wrap=True)
+        box.addWidget(self.qw_setup_status)
+
+        row_foot = QHBoxLayout()
+        row_foot.addStretch(1)
+        self.btn_close = QPushButton("Закрыть")
+        self.btn_close.setObjectName("primary")
+        self.btn_close.setDefault(True)
+        self.btn_close.clicked.connect(self.accept)
+        row_foot.addWidget(self.btn_close)
+        box.addLayout(row_foot)
+
+    def _copy(self, text: str, button: QPushButton) -> None:
+        """Кладёт фразу в буфер обмена и говорит об этом."""
+        QApplication.clipboard().setText(text)
+        for _btn in self._copy_buttons:
+            _btn.setText("Скопировать")
+        button.setText("Скопировано ✔")
+        self.qw_setup_status.setText("Фраза в буфере: " + text)
+
+
+class GreenlightScanDialog(QDialog):
+    """Что проверять greenlight: папка iOS-проекта и, если есть, собранный .ipa.
+
+    Ключи и флаги не спрашиваются: команды взяты из README автора. Для
+    облачной проверки тот же диалог спрашивает имя сборки — но сам облачный
+    запуск начинается только после отдельного подтверждения в окне.
+    """
+
+    def __init__(self, mode: str = "scan", parent=None) -> None:
+        super().__init__(parent)
+        self.mode = mode if mode in ("scan", "cloud") else "scan"
+        self.setMinimumWidth(720)
+        if self.mode == "cloud":
+            self.setWindowTitle("greenlight: проверка в облаке Revyl")
+        else:
+            self.setWindowTitle("greenlight: проверка iOS-приложения")
+
+        box = QVBoxLayout(self)
+        box.setSpacing(8)
+        if self.mode == "cloud":
+            box.addWidget(ui.label(
+                "Проверка в облаке Revyl: greenlight отдаст сценарии "
+                "(восстановление покупок, вход через Apple, удаление "
+                "аккаунта) во внешний сервис и запустит их на облачном "
+                "устройстве. Нужны установленный CLI revyl и бесплатный "
+                "аккаунт. Всё остальное в greenlight работает офлайн.",
+                wrap=True,
+            ))
+        else:
+            box.addWidget(ui.label(
+                "greenlight проверит папку проекта против правил Apple: код, "
+                "файлы приватности, Info.plist и, если указать, собранный "
+                ".ipa. Проверка офлайн — наружу ничего не отправляется.",
+                wrap=True,
+            ))
+
+        row_project = QHBoxLayout()
+        row_project.addWidget(QLabel("Папка проекта:   "))
+        self.project = QLineEdit()
+        self.project.setPlaceholderText("папка с кодом приложения")
+        self.btn_pick_project = QPushButton("Выбрать…")
+        self.btn_pick_project.clicked.connect(self._pick_project)
+        row_project.addWidget(self.project, 1)
+        row_project.addWidget(self.btn_pick_project)
+        box.addLayout(row_project)
+
+        if self.mode == "cloud":
+            row_name = QHBoxLayout()
+            row_name.addWidget(QLabel("Имя сборки:   "))
+            self.build_name = QLineEdit()
+            self.build_name.setPlaceholderText(
+                "имя приложения или сборки в Revyl — из команды --build-name"
+            )
+            row_name.addWidget(self.build_name, 1)
+            box.addLayout(row_name)
+            self.ipa = QLineEdit()  # в облаке путь к ipa не нужен
+        else:
+            row_ipa = QHBoxLayout()
+            row_ipa.addWidget(QLabel("Файл .ipa:   "))
+            self.ipa = QLineEdit()
+            self.ipa.setPlaceholderText("необязательно: собранный .ipa для разбора бинарника")
+            self.btn_pick_ipa = QPushButton("Выбрать…")
+            self.btn_pick_ipa.clicked.connect(self._pick_ipa)
+            row_ipa.addWidget(self.ipa, 1)
+            row_ipa.addWidget(self.btn_pick_ipa)
+            box.addLayout(row_ipa)
+            self.build_name = QLineEdit()
+
+        self.status = ui.label("", wrap=True)
+        box.addWidget(self.status)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.btn_cancel = QPushButton("Отмена")
+        self.btn_cancel.clicked.connect(self.reject)
+        self.btn_ok = QPushButton("Проверить" if self.mode == "scan" else "Продолжить")
+        self.btn_ok.setObjectName("primary")
+        self.btn_ok.setDefault(True)
+        self.btn_ok.clicked.connect(self._accept)
+        row.addWidget(self.btn_cancel)
+        row.addWidget(self.btn_ok)
+        box.addLayout(row)
+
+    def _pick_project(self) -> None:
+        start = self.project.text().strip() or str(Path.home())
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Папка iOS-проекта", start if Path(start).is_dir() else str(Path.home())
+        )
+        if chosen:
+            self.project.setText(chosen)
+
+    def _pick_ipa(self) -> None:
+        start = self.ipa.text().strip() or str(Path.home())
+        chosen, _filter = QFileDialog.getOpenFileName(
+            self, "Собранный файл .ipa", str(Path(start).parent),
+            "Приложение iOS (*.ipa);;Все файлы (*)",
+        )
+        if chosen:
+            self.ipa.setText(chosen)
+
+    def values(self) -> dict:
+        """Выбор человека. Проверки полей — тут же, до запуска."""
+        return {
+            "project": self.project.text().strip(),
+            "ipa": self.ipa.text().strip(),
+            "build_name": self.build_name.text().strip(),
+        }
+
+    def _accept(self) -> None:
+        values = self.values()
+        if not values["project"]:
+            self.status.setText("Не выбрана папка проекта.")
+            return
+        if not Path(values["project"]).is_dir():
+            self.status.setText("Такой папки нет: " + values["project"])
+            return
+        if values["ipa"] and not Path(values["ipa"]).is_file():
+            self.status.setText("Такого файла .ipa нет: " + values["ipa"])
+            return
+        if self.mode == "cloud" and not values["build_name"]:
+            self.status.setText(
+                "Не указано имя сборки: команда verify запускается с "
+                "«--build-name <имя>» (см. README автора)."
+            )
+            return
+        self.accept()
+
+
+class LmarenaTokenDialog(QDialog):
+    """Токен арены: вписать свежую куку `arena-auth-prod-v1`.
+
+    Токен берётся человеком в своём браузере — README форка описывает
+    именно этот путь (отправить сообщение на сайте, открыть средства
+    разработки, скопировать куку, начинается с `base64-`). Программа его
+    только сохраняет: файлом рядом с настройками opencode, откуда он
+    уезжает в config.json моста. В настройки opencode, в журнал и в
+    сообщения окна токен не попадает.
+    """
+
+    def __init__(self, dest: Path, parent=None) -> None:
+        super().__init__(parent)
+        self.dest = Path(dest)
+        self.messages: list[str] = []
+        self.setWindowTitle("Токен арены для моста LMArena")
+        self.setMinimumWidth(700)
+
+        box = QVBoxLayout(self)
+        box.setSpacing(8)
+        box.addWidget(ui.label(
+            "Как взять токен (путь из README форка): открой сайт арены, "
+            "отправь там сообщение любой модели, нажми F12, открой "
+            "«Application» → «Cookies», найди куку arena-auth-prod-v1 и "
+            "скопируй её значение целиком — оно начинается с base64-.",
+            wrap=True,
+        ))
+        box.addWidget(ui.label(
+            "Токен ляжет файлом " + lmarena.TOKEN_NAME + " рядом с "
+            "настройками opencode и в репозиторий не попадёт. В сам мост "
+            "он уезжает при «Запустить» и «Перезапустить». Свежий токен "
+            "заменяет прежний: старый мог протухнуть.",
+            kind="dim",
+            wrap=True,
+        ))
+
+        self.token = QLineEdit()
+        self.token.setPlaceholderText("base64-…")
+        self.token.setEchoMode(QLineEdit.EchoMode.Password)
+        self.token.setToolTip(
+            "Значение куки. Показывается точками: это секрет, и он должен "
+            "попадать в журнал как можно реже"
+        )
+        self.show_token = QCheckBox("Показать токен")
+        self.show_token.toggled.connect(
+            lambda on: self.token.setEchoMode(
+                QLineEdit.EchoMode.Normal if on else QLineEdit.EchoMode.Password
+            )
+        )
+        box.addWidget(self.token)
+        box.addWidget(self.show_token)
+
+        self.status = ui.label("", wrap=True)
+        box.addWidget(self.status)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.btn_cancel = QPushButton("Отмена")
+        self.btn_cancel.clicked.connect(self.reject)
+        self.btn_ok = QPushButton("Сохранить")
+        self.btn_ok.setObjectName("primary")
+        self.btn_ok.setDefault(True)
+        self.btn_ok.clicked.connect(self._save)
+        row.addWidget(self.btn_cancel)
+        row.addWidget(self.btn_ok)
+        box.addLayout(row)
+
+    def _save(self) -> None:
+        messages, errors = lmarena.save_token(self.dest, self.token.text())
+        if errors:
+            self.status.setText("Не записано. " + " ".join(errors))
+            return
+        self.messages = messages
+        self.accept()
+
+
 class CapsTab(ScrollPage):
     """Возможности базы для opencode — установка по выбору.
 
     Ставит в настройки opencode команду /голос, мост ПК, мост памяти
-    и 12 агентов. Убранная галочка при нажатии «Убрать» снимает
+    и 13 агентов. Убранная галочка при нажатии «Убрать» снимает
     только наше, чужое не трогает.
     """
 
@@ -2286,12 +3601,19 @@ class CapsTab(ScrollPage):
         "voice": "Команда /голос — говорить в микрофон",
         "pc": "Мост ПК — файлы, программы, скриншоты (всё через спрос)",
         "ncp": "Мост NCP — память, библиотека, 7 инструментов",
-        "agents": "12 агентов — поиск, план, код, проверка и другие",
-        "antiblock": "Обход блокировок — запуск OpenCode через прокси, пул обновляется сам",
+        "agents": "13 агентов — поиск, план, код, проверка и другие",
+        "antiblock": "Обход блокировок — запуск OpenCode через прокси",
+        "rtk": "rtk — вывод команд короче (нужен rtk в PATH)",
+        "caveman": "caveman — ответы короче (правила в AGENTS.md)",
+        "pxpipe": "pxpipe — запросы картинками (локальный прокси)",
+        "auto-improve": "auto-improve — улучшение текста (цикл с судьёй)",
+        "greenlight": "greenlight — проверка iOS-приложения перед App Store",
+        "qwen-review": "Qwen Code — второй ревьюер (вторая пара глаз)",
     }
 
     def __init__(self, parent=None) -> None:
         self._worker: Worker | None = None
+        self._qw_check_worker: QwenCheckModels | None = None
         self._what = ""
         inner = QWidget()
         super().__init__(inner, parent)
@@ -2322,9 +3644,400 @@ class CapsTab(ScrollPage):
         self.checks: dict[str, QCheckBox] = {}
         for name, _title in opencode_caps.CAPS_CHOICES:
             box = QCheckBox(self.TITLES.get(name, name))
-            box.setChecked(True)
+            # rtk и caveman по умолчанию выключены: у rtk нужен бинарник в
+            # PATH, caveman меняет стиль ответов. Молча включать такое нельзя.
+            box.setChecked(name not in opencode_caps.CAPS_OFF_BY_DEFAULT)
+            if name == "rtk":
+                box.setToolTip(
+                    "Плагин opencode от автора rtk: команды агента пойдут "
+                    "через rtk и вернут меньше текста. Сам rtk ставится по "
+                    "README автора (winget install rtk-ai.rtk или готовый "
+                    "архив). Программа проверит rtk живым запросом и, если "
+                    "его нет или версия старая, ничего не впишет"
+                )
+            if name == "caveman":
+                box.setToolTip(
+                    "Правила коротких ответов в AGENTS.md между метками базы. "
+                    "Текст правил — из tools/thirdparty/caveman, автор "
+                    "JuliusBrussee (Apache-2.0). Снимается галочкой или "
+                    "словами «stop caveman»"
+                )
+            if name == "pxpipe":
+                box.setToolTip(
+                    "Локальный прокси автора teamchong (MIT): часть запроса "
+                    "уезжает нейросети картинкой, и в окно контекста "
+                    "помещается больше. Сжатие с потерями — точные строки и "
+                    "код могут быть прочитаны неверно. Галочка только "
+                    "вписывает запись провайдера: сначала запусти прокси "
+                    "кнопкой ниже, иначе программа ничего не впишет"
+                )
+                box.toggled.connect(self._px_toggled)
+            if name == "auto-improve":
+                box.setToolTip(
+                    "Сторонний скрипт автора crimeacs (MIT): улучшает один "
+                    "текстовый файл точечными правками, а оценивает их "
+                    "отдельная модель-судья Gemini по рубрике. Нужны ключ "
+                    "судьи (кнопка «Вписать ключ судьи»), git и файл внутри "
+                    "git-репозитория. Цикл сам коммитит в ветку improve/<тег> "
+                    "и тратит токены — включай осознанно. Кнопка «Улучшить "
+                    "файл…» работает, только когда галочка отмечена"
+                )
+                box.toggled.connect(self._ai_toggled)
+            if name == "greenlight":
+                box.setToolTip(
+                    "Сторонний консольный сканер автора Revyl (MIT): читает "
+                    "исходники, файлы приватности и Info.plist, сверяет с "
+                    "правилами Apple и выдаёт список рисков с исправлениями. "
+                    "Основная проверка идёт офлайн, наружу ничего не "
+                    "отправляется. Для opencode-base (PyQt6, Windows) он не "
+                    "нужен — это опция для тех, кто делает приложения для "
+                    "iOS. Кнопка «Проверить iOS-приложение» работает, только "
+                    "когда галочка отмечена"
+                )
+                box.toggled.connect(self._gl_toggled)
+            if name == "qwen-review":
+                box.setToolTip(
+                    "Второй ревьюер: сторонний консольный агент Qwen Code "
+                    "(автор QwenLM, Apache-2.0). После работы основного "
+                    "агента он читает `git diff` изменений и приносит "
+                    "замечания — свежий взгляд второй модели. Модель "
+                    "выбирается из провайдеров, уже подключённых в "
+                    "opencode. Ревьюер файлы не правит и идёт в режиме "
+                    "«только чтение». Это тратит токены: каждая проверка — "
+                    "запрос. Отдельный режим «спор» по умолчанию выключен"
+                )
+                box.toggled.connect(self._qw_toggled)
             what_layout.addWidget(box)
             self.checks[name] = box
+        # Уровень caveman — единственная возможность с выбором внутри
+        # галочки. Уровень берётся из списка, как выбор браузера в блоке MCP.
+        row_level = QHBoxLayout()
+        row_level.addWidget(QLabel("Уровень caveman:   "))
+        self.caveman_level = QComboBox()
+        self.caveman_level.addItem("лёгкий — базовые правила автора", "lite")
+        self.caveman_level.addItem("полный — ultracave, самая жёсткая ступень", "full")
+        self.caveman_level.setToolTip(
+            "Лёгкий: без вступлений и воды. Полный (ultracave): куски фраз и "
+            "«каждый факт один раз» — заметно жёстче, подходит не всем задачам. "
+            "Заявленную экономию 65–75% называет автор; проверки независимо нет, "
+            "в его же README у ultracave — 35%, у лёгкого — 3%"
+        )
+        row_level.addWidget(self.caveman_level, 1)
+        what_layout.addLayout(row_level)
+        # --- pxpipe: не только галочка. Прокси — чужая программа, её надо
+        # запустить, остановить и выбрать, к какому провайдеру она
+        # пересылает запросы. Всё это рядом с галочкой: порядок «сначала
+        # прокси, потом галочка» должен быть виден сразу.
+        box_px = QGroupBox("pxpipe — пропускать запросы через локальный прокси")
+        px_layout = QVBoxLayout(box_px)
+        px_layout.addWidget(ui.label(
+            "Прокси запускается отдельной кнопкой и слушает только эту "
+            "машину (127.0.0.1:47821 — адрес из README автора). Галочка "
+            "«pxpipe — запросы картинками» впишет в настройки opencode "
+            "запись провайдера, смотрящую на этот прокси. Работает она "
+            "только при запущенном прокси, поэтому порядок такой: "
+            "сначала «Запустить pxpipe», потом галочка.",
+            kind="dim",
+            wrap=True,
+        ))
+        row_px_src = QHBoxLayout()
+        row_px_src.addWidget(QLabel("Источник для pxpipe:   "))
+        self.pxpipe_source = QComboBox()
+        self.pxpipe_source.setToolTip(
+            "Провайдер opencode, к которому прокси пересылает запросы "
+            "(PXPIPE_UPSTREAM из README автора). Модели берутся у него же: "
+            "своей модели у прокси нет. Список читается из настроек "
+            "opencode, выдумать его нельзя"
+        )
+        row_px_src.addWidget(self.pxpipe_source, 1)
+        px_layout.addLayout(row_px_src)
+        row_px_btns = QHBoxLayout()
+        self.btn_px_run = QPushButton("Запустить pxpipe")
+        self.btn_px_run.setToolTip(
+            "Поднять прокси: программа запустит npx pxpipe-proxy@0.14.0 "
+            "(версия из README автора), дождётся ответа панели и запомнит, "
+            "к какому провайдеру пересылать запросы. В настройки opencode "
+            "ничего не пишет"
+        )
+        self.btn_px_stop = QPushButton("Остановить pxpipe")
+        self.btn_px_stop.setToolTip(
+            "Остановить прокси, запущенный программой. Чужой процесс на "
+            "порту не трогается: без своего файла с номером процесса "
+            "программа только скажет, что прокси не её"
+        )
+        self.btn_px_check = QPushButton("Проверить pxpipe")
+        self.btn_px_check.setToolTip(
+            "Живая проверка: отвечает ли панель прокси на 127.0.0.1:47821 "
+            "и как сейчас выглядит состояние. Ничего не меняет"
+        )
+        self.btn_px_stats = QPushButton("Числа pxpipe")
+        self.btn_px_stats.setToolTip(
+            "Счётчики самого прокси из его журнала: сколько запросов "
+            "превращено в картинки, сколько прошло как есть, сколько "
+            "заняло времени. Числа его собственные, независимо мы их не "
+            "проверяли"
+        )
+        for button in (self.btn_px_run, self.btn_px_stop, self.btn_px_check,
+                       self.btn_px_stats):
+            row_px_btns.addWidget(button)
+        row_px_btns.addStretch(1)
+        px_layout.addLayout(row_px_btns)
+        what_layout.addWidget(box_px)
+        # --- auto-improve: тоже не только галочка. Ключ судьи, проверка
+        # окружения и запуск цикла — свои кнопки, а «Улучшить файл…» снята,
+        # пока галочка не отмечена: по умолчанию цикл не запускается.
+        box_ai = QGroupBox("auto-improve — улучшить файл циклом с судьёй")
+        ai_layout = QVBoxLayout(box_ai)
+        ai_layout.addWidget(ui.label(
+            "Сторонний скрипт автора crimeacs (лицензия MIT): он улучшает "
+            "один текстовый файл точечными правками, оценивает их отдельной "
+            "моделью-судьёй Gemini по рубрике и оставляет только выигравшее. "
+            "Каждый оставленный шаг — коммит в ветке improve/<тег>: история "
+            "коммитов и есть журнал улучшений. Файл должен лежать внутри "
+            "git-репозитория.",
+            kind="dim",
+            wrap=True,
+        ))
+        self.btn_ai_key_edit = QPushButton("Вписать ключ судьи")
+        self.btn_ai_key_edit.setToolTip(
+            "Ключ Gemini для модели-судьи: лежит файлом рядом с настройками "
+            "opencode (в репозиторий не попадает); уезжает в окружение "
+            "процесса при запуске цикла и не показывается в журнале"
+        )
+        row_ai_key = QHBoxLayout()
+        row_ai_key.addWidget(QLabel("Ключ судьи:   "))
+        self.ai_key_hint = ui.label("", kind="dim", wrap=True)
+        row_ai_key.addWidget(self.ai_key_hint, 1)
+        row_ai_key.addWidget(self.btn_ai_key_edit)
+        ai_layout.addLayout(row_ai_key)
+        self.ai_hint = ui.label("", kind="dim", wrap=True)
+        ai_layout.addWidget(self.ai_hint)
+        row_ai_btns = QHBoxLayout()
+        self.btn_ai_check = QPushButton("Проверить окружение")
+        self.btn_ai_check.setToolTip(
+            "Проверка без запуска: на месте ли копия скрипта, есть ли git, "
+            "умеет ли Python библиотеку requests и вписан ли ключ судьи. "
+            "Ничего не меняет и никуда не звонит"
+        )
+        self.btn_ai_run = QPushButton("Улучшить файл…")
+        self.btn_ai_run.setToolTip(
+            "Запустить цикл: выбирается файл, рубрика, цель и ограничения. "
+            "Скрипт сам создаст ветку improve/<тег> и будет коммитить в неё — "
+            "запускай на копии проекта или в отдельной ветке. Кнопка доступна "
+            "только при отмеченной галочке auto-improve"
+        )
+        self.btn_ai_history = QPushButton("Показать ход")
+        self.btn_ai_history.setToolTip(
+            "Таблица хода завершённого запуска: сколько итераций, что "
+            "оставлено, что откатили. История — из папки данных рядом с "
+            "настройками, а не из интернета"
+        )
+        for button in (self.btn_ai_check, self.btn_ai_run, self.btn_ai_history):
+            row_ai_btns.addWidget(button)
+        row_ai_btns.addStretch(1)
+        ai_layout.addLayout(row_ai_btns)
+        what_layout.addWidget(box_ai)
+        # --- greenlight: тоже не только галочка. Проверка окружения, сборка
+        # из исходников и три прогона — свои кнопки, а всё, что запускает
+        # сканер, снято, пока галочка не отмечена: по умолчанию он выключен.
+        box_gl = QGroupBox("greenlight — проверить iOS-приложение перед App Store")
+        gl_layout = QVBoxLayout(box_gl)
+        gl_layout.addWidget(ui.label(
+            "Сторонний консольный сканер автора Revyl (лицензия MIT): читает "
+            "исходники, файлы приватности и Info.plist и сверяет их с "
+            "правилами Apple App Store Review Guidelines, показывая находки "
+            "с уровнями CRITICAL, HIGH, WARN и INFO. Основная проверка "
+            "работает офлайн: наружу ничего не отправляется. Для "
+            "opencode-base (PyQt6, Windows) он не нужен — это опция для тех, "
+            "кто делает приложения для iOS.",
+            kind="dim",
+            wrap=True,
+        ))
+        self.gl_hint = ui.label("", kind="dim", wrap=True)
+        gl_layout.addWidget(self.gl_hint)
+        row_gl_btns = QHBoxLayout()
+        row_gl_btns2 = QHBoxLayout()
+        self.btn_gl_check = QPushButton("Проверить окружение")
+        self.btn_gl_check.setToolTip(
+            "Проверка без запуска: собран ли greenlight, сходится ли копия "
+            "исходников автора и есть ли Go с make для сборки. Ничего не "
+            "меняет и никуда не звонит"
+        )
+        self.btn_gl_build = QPushButton("Собрать greenlight")
+        self.btn_gl_build.setToolTip(
+            "Сборка из лежащих рядом исходников автора: `make build`, а без "
+            "make — та же команда напрямую. Нужен Go 1.24 или новее и "
+            "соединение с интернетом: зависимости Go программа не кладёт, "
+            "их качает сам go. Программа не ставит Go и не собирает ничего "
+            "без этой кнопки"
+        )
+        self.btn_gl_run = QPushButton("Проверить iOS-приложение…")
+        self.btn_gl_run.setToolTip(
+            "Основная проверка: greenlight preflight по папке проекта — "
+            "офлайн. Отдельно сохраняется машинный отчёт (JSON) рядом с "
+            "настройками. Кнопка доступна только при отмеченной галочке "
+            "greenlight"
+        )
+        self.btn_gl_dry = QPushButton("Список проверок")
+        self.btn_gl_dry.setToolTip(
+            "greenlight verify --dry-run: офлайн-прогон без устройства и "
+            "без аккаунта, показывает, какие сценарии будут проверяться, и "
+            "печатает готовые файлы тестов"
+        )
+        self.btn_gl_cloud = QPushButton("Проверка в облаке Revyl…")
+        self.btn_gl_cloud.setToolTip(
+            "Чужой облачный сервис Revyl: greenlight отправит туда "
+            "сценарии и запустит их на облачном устройстве. Понадобится "
+            "подтверждение, установленный CLI revyl и бесплатный аккаунт. "
+            "Кнопка доступна только при отмеченной галочке greenlight"
+        )
+        self.btn_gl_report = QPushButton("Открыть отчёты")
+        self.btn_gl_report.setToolTip(
+            "Машинные отчёты прошлых прогонов: лежат рядом с настройками "
+            "opencode в папке greenlight-data/отчёты. Ничего не запускает"
+        )
+        for row, buttons in (
+            (row_gl_btns, (self.btn_gl_check, self.btn_gl_build, self.btn_gl_run)),
+            (row_gl_btns2, (self.btn_gl_dry, self.btn_gl_cloud, self.btn_gl_report)),
+        ):
+            for button in buttons:
+                row.addWidget(button)
+            row.addStretch(1)
+            gl_layout.addLayout(row)
+        # Шесть кнопок в один ряд занимали 805 пикселей при ширине окна
+        # около 830: ряд не помещался, страница становилась шире видимой
+        # части, и дальние кнопки уезжали за правый край — нажать их
+        # было нельзя. Теперь их два ряда по три, и каждый ряд уже
+        # заведомо уже окна.
+        what_layout.addWidget(box_gl)
+        # --- qwen-review: второй ревьюер. Настройка выбором провайдера и
+        # развёртывание отдана скиллу qwen-review-setup; в окне остались
+        # статус, проверка доступности и запуск проверки изменений.
+        box_qw = QGroupBox("Qwen Code — второй ревьюер (вторая пара глаз)")
+        qw_layout = QVBoxLayout(box_qw)
+        qw_layout.addWidget(ui.label(
+            "Сторонний консольный агент Qwen Code (автор QwenLM, лицензия "
+            "Apache-2.0) в headless-режиме: читает `git diff` изменений и "
+            "приносит замечания второй моделью. Файлы он не правит — идёт в "
+            "режиме «только чтение». Модель выбирается из провайдеров, уже "
+            "подключённых в opencode; ключ передаётся только в окружение "
+            "запуска и в окно и журналы не попадает.",
+            kind="dim", wrap=True,
+        ))
+        # --- режимы ревьюера: список строится из общего qwen_review.MODES,
+        # а не хардкодом: добавился режим в списке — появился и здесь.
+        qw_layout.addWidget(ui.label("Режимы ревьюера:", kind="dim", wrap=True))
+        self.qw_modes_labels: list[QLabel] = []
+        for _mode in qwen_review.MODES:
+            _line = "• " + str(_mode.get("name") or "") + " — " \
+                + str(_mode.get("description") or "")
+            _lbl = ui.label(_line, kind="dim", wrap=True)
+            qw_layout.addWidget(_lbl)
+            self.qw_modes_labels.append(_lbl)
+        # Настройка ушла в скилл qwen-review-setup: выбор провайдера и
+        # модели, развёртывание и включение делает агент, а не кнопки
+        # окна. Здесь остались кнопка-подсказка «Настроить через скилл»,
+        # живая проверка доступности и запуск проверки изменений.
+        row_qw_pick = QHBoxLayout()
+        self.btn_qw_setup = QPushButton("Настроить через скилл")
+        self.btn_qw_setup.setToolTip(
+            "Фразы-триггеры для агента: «настрой ревьюера», «настрой тройное "
+            "ревью», «проверь, какие модели отвечают», «ревьюер отвечает 401». "
+            "Агент сам выберет провайдера и модель по числу живых моделей, "
+            "развернёт и включит ревьюера"
+        )
+        row_qw_pick.addWidget(self.btn_qw_setup)
+        row_qw_pick.addStretch(1)
+        qw_layout.addLayout(row_qw_pick)
+        # --- проверка доступности моделей: кнопка, под ней — прогресс и
+        # список состояний ✔/✘/?. Проверка живёт в отдельном потоке
+        # (QwenCheckModels): в момент нажатия кнопка гаснет, а окно
+        # продолжает отвечать.
+        row_qw_avail = QHBoxLayout()
+        self.btn_qw_check_models = QPushButton("Проверить доступность")
+        self.btn_qw_check_models.setToolTip(
+            "Задаёт один минимальный вопрос каждой модели выбранного "
+            "провайдера и показывает, кто отвечает (✔), кто отказал "
+            "окончательно (✘ — 401, 404) и кто неизвестен (? — 429, "
+            "таймаут). Это тратит токены и бьёт по API: не больше "
+            "120 запросов за прогон. Результат запоминается на сутки: "
+            "повторный просмотр без кнопки идёт из кэша"
+        )
+        row_qw_avail.addWidget(self.btn_qw_check_models)
+        row_qw_avail.addStretch(1)
+        qw_layout.addLayout(row_qw_avail)
+        self.qw_check_progress = ui.label("", kind="dim", wrap=True)
+        qw_layout.addWidget(self.qw_check_progress)
+        # Список состояний моделей. Своя высота с потолком: провайдеров
+        # бывают сотни моделей, и без потолка страница выросла бы на
+        # экран, а с потолком список крутится внутри себя сам.
+        self.qw_check_list = QListWidget()
+        self.qw_check_list.setWordWrap(True)
+        self.qw_check_list.setMaximumHeight(150)
+        self.qw_check_list.setVisible(False)
+        qw_layout.addWidget(self.qw_check_list)
+        self.qw_hint = ui.label("", kind="dim", wrap=True)
+        qw_layout.addWidget(self.qw_hint)
+        row_qw_btns = QHBoxLayout()
+        self.btn_qw_run = QPushButton("Проверить изменения…")
+        self.btn_qw_run.setToolTip(
+            "Берёт `git diff` проекта и отдаёт его ревьюеру. Раунды спора "
+            "начинаются с этого же нажатия. Кнопка доступна только при "
+            "отмеченной галочке qwen-review"
+        )
+        row_qw_btns.addWidget(self.btn_qw_run)
+        row_qw_btns.addStretch(1)
+        qw_layout.addLayout(row_qw_btns)
+        # Подпись и подсказка галочки берутся из общего списка режимов
+        # (qwen_review.MODES): в задаче 5 отсюда же построится окно выбора.
+        # Текст прежний — разметку не ломаем, на галочку завязаны
+        # _qw_toggled, _qw_debate_toggled, _qw_run и _qw_reply.
+        _qw_debate_mode = qwen_review.mode_by_id(qwen_review.MODE_DEBATE) or {}
+        self.qw_debate = QCheckBox(
+            str(_qw_debate_mode.get("label") or "спор — ревьюер против модели"))
+        self.qw_debate.setToolTip(str(_qw_debate_mode.get("description") or (
+            "Отдельный режим, по умолчанию выключен. Ревьюер присылает "
+            "замечания, основной агент возражает с обоснованием, ревьюер "
+            "отвечает — и так не больше заданного числа раундов. Если "
+            "согласия нет, программа не решает сама: она показывает оба "
+            "довода и спорный фрагмент, а решает человек"
+        )))
+        # Текущий режим по старой галочке: пишется в _qw_debate_toggled,
+        # читается оттуда же, из qwen_review.MODES.
+        self._qw_mode_id = qwen_review.mode_from_flag(False)
+        row_qw_debate = QHBoxLayout()
+        row_qw_debate2 = QHBoxLayout()
+        row_qw_debate.addWidget(self.qw_debate)
+        row_qw_debate.addWidget(QLabel("   раундов:   "))
+        self.qw_rounds = QSpinBox()
+        self.qw_rounds.setRange(1, qwen_review.MAX_ROUNDS)
+        self.qw_rounds.setValue(qwen_review.DEFAULT_ROUNDS)
+        self.qw_rounds.setToolTip(
+            "Сколько раундов спора разрешено. Больше — больше токенов; "
+            "предел задан автором режима, поднимать его выше пяти не даём"
+        )
+        row_qw_debate.addWidget(self.qw_rounds)
+        row_qw_debate.addStretch(1)
+        self.btn_qw_reply = QPushButton("Возразить и продолжить…")
+        self.btn_qw_reply.setToolTip(
+            "Следующий раунд спора: возражение с обоснованием уходит "
+            "ревьюеру вместе с ходом спора. Работает только при включённом "
+            "«споре»"
+        )
+        self.btn_qw_forget = QPushButton("Забыть ход спора")
+        self.btn_qw_forget.setToolTip(
+            "Сбрасывает счёт раундов и доводы: следующий запуск начнётся "
+            "заново. Ни файлы проекта, ни настройки не трогает"
+        )
+        row_qw_debate2.addWidget(self.btn_qw_reply)
+        row_qw_debate2.addWidget(self.btn_qw_forget)
+        row_qw_debate2.addStretch(1)
+        # Ряд из галочки, счётчика и двух кнопок занимал 763 пикселя при
+        # ширине окна около 830 и упирался в правый край. Теперь настройка
+        # спора стоит на одной строке, а его действия — на следующей.
+        qw_layout.addLayout(row_qw_debate)
+        qw_layout.addLayout(row_qw_debate2)
+        what_layout.addWidget(box_qw)
         try:
             nagents = len(list((core.app_root() / "tools" / "agents").glob("*.md")))
             if nagents:
@@ -2390,16 +4103,27 @@ class CapsTab(ScrollPage):
         import antiblock as _ab  # noqa: PLC0415 — рядом лежит, круга нет
 
         self.achecks: dict[str, QCheckBox] = {}
-        for key, title in (
+        # Подпись у галочки короткая, а подробности — в подсказке. Qt не
+        # переносит текст внутри QCheckBox, и длинная подпись просто
+        # обрезалась: измерено при минимальном окне 720, «Защищённый DNS»
+        # получал 422 пикселя вместо 526 и конец пропадал. Обрезанное
+        # должно оставаться достижимым — для этого подсказка.
+        for key, title, tip in (
             ("facade",
              f"Переводчик и запуск (фасад 127.0.0.1:{_ab.facade_port()} "
-             "+ ярлык-запуск)"),
-            ("lists", "Бесплатные списки (SOCKS5-пул + VLESS-подписки + автообновление раз в сутки)"),
-            ("dns", "Защищённый DNS (DoH: Google/Cloudflare/Quad9/AdGuard) — запасной способ обхода"),
-            ("command", "Команда /обход внутри OpenCode"),
-            ("shortcut", "Ярлык «OpenCode (обход)» с иконкой программы на рабочий стол"),
+             "+ ярлык-запуск)",
+             "Поднимает переводчик на своём порту и создаёт ярлык запуска"),
+            ("lists", "Бесплатные списки",
+             "SOCKS5-пул и VLESS-подписки, обновляются раз в сутки сами"),
+            ("dns", "Защищённый DNS",
+             "DoH через Google, Cloudflare, Quad9 или AdGuard — запасной "
+             "способ обхода, если прокси не помог"),
+            ("command", "Команда /обход", "Команда /обход внутри OpenCode"),
+            ("shortcut", "Ярлык «OpenCode (обход)»",
+             "Ярлык на рабочий стол с иконкой самой программы"),
         ):
             box = QCheckBox(title)
+            box.setToolTip(tip)
             box.setChecked(True)
             ab_layout.addWidget(box)
             self.achecks[key] = box
@@ -2464,6 +4188,16 @@ class CapsTab(ScrollPage):
         self.btn_skills_all = QPushButton("Отметить все")
         self.btn_skills_none = QPushButton("Снять все")
         self.btn_skills_reload = QPushButton("Обновить список")
+        # Проверка обновлений у авторов. Отдельная кнопка, а не
+        # продолжение «Обновить список»: та просто перерисовывает
+        # содержимое базы, эта ходит в сеть и сравнивает с тем, что
+        # лежит у автора.
+        self.btn_skills_check = QPushButton("Проверить обновления скилов")
+        self.btn_skills_check.setToolTip(
+            "Сравнить наши скилы с тем, что лежит у их авторов. "
+            "Ничего не обновляет: показывает, у кого появилось, и "
+            "разницу. Переводы не трогает — их нечем заменить "
+            "автоматически.")
         self.btn_skills_put = QPushButton("Поставить отмеченные")
         self.btn_skills_drop = QPushButton("Убрать отмеченные")
         row_skills.addWidget(self.btn_skills_all)
@@ -2473,6 +4207,16 @@ class CapsTab(ScrollPage):
         row_skills.addWidget(self.btn_skills_put)
         row_skills.addWidget(self.btn_skills_drop)
         skills_layout.addLayout(row_skills)
+
+        # Проверка обновлений — на своей строке. В общий ряд она не
+        # помещалась: шесть кнопок в линию не влезают в ширину окна, Qt
+        # растягивал их на всю ширину блока, и кнопка уезжала за край
+        # экрана целиком — измерено: все шесть были по 640 пикселей при
+        # окне 895. Человек её не видел вовсе.
+        row_skills_check = QHBoxLayout()
+        row_skills_check.addWidget(self.btn_skills_check)
+        row_skills_check.addStretch(1)
+        skills_layout.addLayout(row_skills_check)
 
         self.caps_skills_hint = ui.label("", kind="dim", wrap=True)
         skills_layout.addWidget(self.caps_skills_hint)
@@ -2507,7 +4251,10 @@ class CapsTab(ScrollPage):
         self.reg_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.reg_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.reg_table.setMinimumHeight(150)
-        self.reg_table.setMaximumHeight(190)
+        # Потолка высоты больше нет: её считает _reg_fit_table_height по
+        # числу серверов, чтобы в блок влезали все строки. Прежний
+        # предел 190 пикселей показывал половину списка и заставлял
+        # крутить полосу прокрутки внутри самого блока.
         # Ширины заданы явно, потому что Qt по умолчанию распределяет
         # место неудачно: снимок показал обрезанные до «Windo…» имена и
         # обрезанное до «нужно: …» состояние. Имя должно помещаться
@@ -2521,10 +4268,15 @@ class CapsTab(ScrollPage):
         # пустая, измерять нечего.
         for col, minimum in ((0, 150), (1, 200), (2, 110), (3, 90)):
             self.reg_table.setColumnWidth(col, minimum)
-        # Горизонтальная прокрутка в этом блоке не нужна: таблица
-        # узкая, и полоса под ней только мешает.
+        # Прокрутка вбок появляется только когда не помещается. Раньше она
+        # была выключена вовсе, и тогда таблица задавала ширину всей
+        # страницы: колонка «Состояние» растягивается под длинные
+        # тексты, сумма ширин доходила до 775, и на узком окне вместе
+        # с ней за правый край уезжали кнопки этого же блока. Теперь
+        # при обычной ширине полосы нет, а на узком окне прокручивается
+        # только сама таблица, а не вся страница.
         self.reg_table.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
         mcp_layout.addWidget(self.reg_table)
 
@@ -2534,23 +4286,170 @@ class CapsTab(ScrollPage):
         mcp_layout.addWidget(self.reg_detail)
 
         row_mcp = QHBoxLayout()
+        row_mcp2 = QHBoxLayout()
         self.btn_reg_check = QPushButton("Проверить всё")
         self.btn_reg_on = QPushButton("Включить")
         self.btn_reg_auto = QPushButton("Настроить автоматически")
         self.btn_reg_auto.setToolTip(
             "Android Studio: поставить плагин из набора программы, включить "
-            "сервер в студии, проверить его и вписать в настройки opencode"
+            "сервер в студии, проверить его и вписать в настройки opencode. "
+            "DBHub: проверить связь с базой живым запросом и вписать сервер. "
+            "Браузеры: открыть страницу выбранным браузером и вписать сервер"
         )
         self.btn_reg_auto.setEnabled(False)
         self.btn_reg_off = QPushButton("Выключить")
         self.btn_reg_src = QPushButton("Открыть источник")
+        # Подключения DBHub. Кнопки стоят в общем ряду, но живут только
+        # для своей строки: у остальных серверов подключений к базам нет.
+        self.btn_db_add = QPushButton("Добавить подключение")
+        self.btn_db_add.setToolTip(
+            "DBHub: вписать базу — файл mcp-dbhub.toml рядом с настройками "
+            "opencode. Пароль из строки подключения программа сохранит "
+            "отдельным файлом"
+        )
+        self.btn_db_add.setEnabled(False)
+        self.btn_db_check = QPushButton("Проверить соединение")
+        self.btn_db_check.setToolTip(
+            "DBHub: поднять сервер и спросить у него протоколом, отвечает ли "
+            "база. Ничего не записывает — только говорит, жива ли связь"
+        )
+        self.btn_db_check.setEnabled(False)
+        # Кнопки браузеров. Тоже живут только для своей строки: у
+        # остальных серверов выбирать нечего — они запускаются командой.
+        self.btn_br_choose = QPushButton("Выбрать браузер")
+        self.btn_br_choose.setToolTip(
+            "Браузеры: Chrome, Edge, Яндекс.Браузер или Firefox; профиль "
+            "нейросети и показывать ли окно. В режиме «мои сессии» — "
+            "токен расширения Playwright, чтобы не спрашивать одобрение. "
+            "Выбор ляжет в mcp-browsers.json рядом с настройками opencode"
+        )
+        self.btn_br_choose.setEnabled(False)
+        self.btn_br_check = QPushButton("Проверить браузер")
+        self.btn_br_check.setToolTip(
+            "Браузеры: поднять мост, открыть страницу и прочитать её "
+            "заголовок. Ничего не записывает — говорит, работает ли выбранный "
+            "браузер и видно ли страницу"
+        )
+        self.btn_br_check.setEnabled(False)
+        # Кнопки OmniRoute. Своя строка и своя работа: развернуть пакет,
+        # поднять сервер, перезапустить его и показать состояние. В
+        # opencode ничего из этого не пишет — пишет только автонастройка.
+        self.btn_or_deploy = QPushButton("Развернуть")
+        self.btn_or_deploy.setToolTip(
+            "OmniRoute: поставить пакет из npm в свою папку моста. Это "
+            "сотни мегабайт и несколько минут; служебные папки Node.js "
+            "программа не трогает"
+        )
+        self.btn_or_deploy.setEnabled(False)
+        self.btn_or_start = QPushButton("Запустить")
+        self.btn_or_start.setToolTip(
+            "OmniRoute: поднять локальный сервер (панель и API на "
+            "http://127.0.0.1:20128) и дождаться ответа API. Ничего не "
+            "записывает в настройки opencode"
+        )
+        self.btn_or_start.setEnabled(False)
+        self.btn_or_restart = QPushButton("Перезапустить")
+        self.btn_or_restart.setToolTip(
+            "OmniRoute: остановить сервер и поднять снова, затем живая "
+            "проверка. Так же лечится зависший мост. Заново подключает "
+            "бесплатных провайдеров без ключа"
+        )
+        self.btn_or_restart.setEnabled(False)
+        self.btn_or_status = QPushButton("Показать статус")
+        self.btn_or_status.setToolTip(
+            "OmniRoute: что развёрнуто, отвечает ли API, какая версия и "
+            "сколько провайдеров подключено. Ни ключей, ни токенов в "
+            "ответе нет"
+        )
+        self.btn_or_status.setEnabled(False)
+        # Кнопки моста LMArena. Своя строка и своя работа: развернуть
+        # окружение форка, поднять мост, перезапустить его, показать
+        # состояние и положить токен арены. В opencode ничего из этого не
+        # пишет — пишет только автонастройка, и только после ответа модели.
+        self.btn_lm_deploy = QPushButton("Развернуть")
+        self.btn_lm_deploy.setToolTip(
+            "LMArena: поставить окружение моста (.venv) и его зависимости "
+            "из requirements.txt в папку tools/thirdparty/lmarena. Код форка "
+            "уже в репозитории; чужие папки пакетов не трогаются"
+        )
+        self.btn_lm_deploy.setEnabled(False)
+        self.btn_lm_start = QPushButton("Запустить")
+        self.btn_lm_start.setToolTip(
+            "LMArena: перенести токен из файла рядом с настройками в "
+            "config.json моста и поднять его на http://127.0.0.1:8000. "
+            "Перед первым запуском программа покажет предупреждения"
+        )
+        self.btn_lm_start.setEnabled(False)
+        self.btn_lm_restart = QPushButton("Перезапустить")
+        self.btn_lm_restart.setToolTip(
+            "LMArena: остановить мост и поднять заново — так лечится "
+            "зависший мост и так же подхватывается обновлённый токен"
+        )
+        self.btn_lm_restart.setEnabled(False)
+        self.btn_lm_status = QPushButton("Показать статус")
+        self.btn_lm_status.setToolTip(
+            "LMArena: что развёрнуто, отвечает ли мост, есть ли токен "
+            "арены и сколько моделей он знает. Токена самого в ответе нет"
+        )
+        self.btn_lm_status.setEnabled(False)
+        self.btn_lm_token = QPushButton("Обновить токен")
+        self.btn_lm_token.setToolTip(
+            "LMArena: вписать свежую куку arena-auth-prod-v1 с сайта арены. "
+            "Токен ляжет файлом рядом с настройками opencode и уедет в "
+            "config.json моста, а не в настройки opencode"
+        )
+        self.btn_lm_token.setEnabled(False)
+        # Раньше все восемнадцать кнопок стояли в одном ряду: он занимал
+        # 1870 пикселей, а окно показывает около 830. Страница становилась
+        # вдвое шире видимой части, крайние кнопки уходили за правый край
+        # на 1000 пикселей и до них нельзя было дотянуться: полоса
+        # прокрутки вбок есть только в самом низу страницы, а страница
+        # здесь — четыре тысячи пикселей высотой. Плюс ряд из
+        # восемнадцати одинаковых кнопок без подписей читался как каша:
+        # из «Развернуть» и «Запустить» не было видно, что это про арену.
+        # Теперь ряд на сервер — так и было задумано в комментариях выше.
         row_mcp.addWidget(self.btn_reg_check)
         row_mcp.addWidget(self.btn_reg_on)
-        row_mcp.addWidget(self.btn_reg_auto)
+        self.btn_reg_all = QPushButton("Включить все")
+        self.btn_reg_all.setToolTip(
+            "Включить в настройках opencode сразу все серверы, которые "
+            "не требуют вопросов. Те, где нужно что-то выбрать или сначала "
+            "живая проверка (Android Studio, DBHub, LMArena), будут "
+            "перечислены в журнале с указанием, что нажать — молча пропускать "
+            "их нельзя. Повторное нажатие ничего не ломает: запись "
+            "идемпотентна"
+        )
+        row_mcp.addWidget(self.btn_reg_all)
         row_mcp.addWidget(self.btn_reg_off)
-        row_mcp.addWidget(self.btn_reg_src)
+        row_mcp2.addWidget(self.btn_reg_auto)
+        row_mcp2.addWidget(self.btn_reg_src)
         row_mcp.addStretch(1)
+        row_mcp2.addStretch(1)
         mcp_layout.addLayout(row_mcp)
+        mcp_layout.addLayout(row_mcp2)
+
+        for owner, buttons in (
+            ("DBHub", (self.btn_db_add, self.btn_db_check)),
+            ("Браузеры", (self.btn_br_choose, self.btn_br_check)),
+            ("OmniRoute", (self.btn_or_deploy, self.btn_or_start,
+                           self.btn_or_restart, self.btn_or_status)),
+            ("LMArena", (self.btn_lm_deploy, self.btn_lm_start,
+                         self.btn_lm_restart, self.btn_lm_status,
+                         self.btn_lm_token)),
+        ):
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            # Подпись сервера — короткая и тусклая: она только говорит,
+            # чьи это кнопки. Подробности живут в подсказках кнопок, а
+            # строка таблицы выше показывает, что выбрано сейчас.
+            name = ui.label(owner, kind="dim")
+            name.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            row.addWidget(name)
+            row.addSpacing(4)
+            for button in buttons:
+                row.addWidget(button)
+            row.addStretch(1)
+            mcp_layout.addLayout(row)
 
         self.reg_hint = ui.label("", kind="dim", wrap=True)
         mcp_layout.addWidget(self.reg_hint)
@@ -2563,16 +4462,27 @@ class CapsTab(ScrollPage):
         self.btn_install.clicked.connect(self._install)
         self.btn_remove = QPushButton("Убрать отмеченное")
         self.btn_remove.clicked.connect(self._remove)
+        self.btn_rtk_measure = QPushButton("Замерить rtk")
+        self.btn_rtk_measure.setToolTip(
+            "rtk: запустить одну и ту же длинную команду дважды — напрямую и "
+            "через rtk — и показать, сколько байт увидит нейросеть. Это и есть "
+            "проверка «вывод стал короче», числами. Ничего не записывает; "
+            "нет rtk — скажет прямо, что замер не сделан"
+        )
+        self.btn_rtk_measure.clicked.connect(self._rtk_measure)
         self.btn_refresh = QPushButton("Обновить состояние")
         self.btn_refresh.clicked.connect(self._refresh)
         buttons.addWidget(self.btn_install)
         buttons.addWidget(self.btn_remove)
         buttons.addStretch(1)
+        buttons.addWidget(self.btn_rtk_measure)
         buttons.addWidget(self.btn_refresh)
         outer.addLayout(buttons)
 
         self.log = ui.LogView()
         self.log.setMinimumHeight(170)
+        # Потолок и подсказку пустого журнала ставит сам LogView: пока
+        # отчёта нет, он занимает минимум, а не всю оставшуюся страницу.
         outer.addWidget(self.log)
 
         # Связи — только здесь, когда все элементы уже созданы.
@@ -2583,23 +4493,78 @@ class CapsTab(ScrollPage):
         self.btn_skills_all.clicked.connect(lambda: self._set_all_caps_skills(True))
         self.btn_skills_none.clicked.connect(lambda: self._set_all_caps_skills(False))
         self.btn_skills_reload.clicked.connect(lambda: self._fill_caps_skills())
+        self.btn_skills_check.clicked.connect(self._check_skill_updates)
         self.btn_skills_put.clicked.connect(self._install_skills)
         self.btn_skills_drop.clicked.connect(self._remove_skills)
         self.caps_skills_list.itemChanged.connect(self._caps_skills_changed)
         self.btn_reg_check.clicked.connect(self._reg_check_all)
+        self.btn_reg_all.clicked.connect(self._reg_enable_all)
         self.btn_reg_on.clicked.connect(self._reg_enable)
         self.btn_reg_auto.clicked.connect(self._reg_auto)
         self.btn_reg_off.clicked.connect(self._reg_disable)
         self.btn_reg_src.clicked.connect(self._reg_open_source)
+        self.btn_db_add.clicked.connect(self._db_add_source)
+        self.btn_db_check.clicked.connect(self._db_check)
+        self.btn_br_choose.clicked.connect(self._br_choose)
+        self.btn_br_check.clicked.connect(self._br_check)
+        self.btn_or_deploy.clicked.connect(self._or_deploy)
+        self.btn_or_start.clicked.connect(self._or_start)
+        self.btn_or_restart.clicked.connect(self._or_restart)
+        self.btn_or_status.clicked.connect(self._or_status)
+        self.btn_lm_deploy.clicked.connect(self._lm_deploy)
+        self.btn_lm_start.clicked.connect(self._lm_start)
+        self.btn_lm_restart.clicked.connect(self._lm_restart)
+        self.btn_lm_status.clicked.connect(self._lm_status)
+        self.btn_lm_token.clicked.connect(self._lm_token)
+        self.btn_px_run.clicked.connect(self._px_run)
+        self.btn_px_stop.clicked.connect(self._px_stop)
+        self.btn_px_check.clicked.connect(self._px_check)
+        self.btn_px_stats.clicked.connect(self._px_stats)
+        self.btn_ai_key_edit.clicked.connect(self._ai_key)
+        self.btn_ai_check.clicked.connect(self._ai_check)
+        self.btn_ai_run.clicked.connect(self._ai_run)
+        self.btn_ai_history.clicked.connect(self._ai_history)
+        self.btn_gl_check.clicked.connect(self._gl_check)
+        self.btn_gl_build.clicked.connect(self._gl_build)
+        self.btn_gl_run.clicked.connect(self._gl_run)
+        self.btn_gl_dry.clicked.connect(self._gl_dry)
+        self.btn_gl_cloud.clicked.connect(self._gl_cloud)
+        self.btn_gl_report.clicked.connect(self._gl_report)
+        self.btn_qw_setup.clicked.connect(self._qw_setup)
+        self.btn_qw_run.clicked.connect(self._qw_run)
+        self.btn_qw_reply.clicked.connect(self._qw_reply)
+        self.btn_qw_forget.clicked.connect(self._qw_forget)
+        self.btn_qw_check_models.clicked.connect(self._qw_check_models)
+        self.qw_debate.toggled.connect(self._qw_debate_toggled)
         self.reg_table.currentCellChanged.connect(
             lambda *_: self._reg_show_detail()
         )
         self._fill_caps_skills()
         self._reg_load()
-        self._refresh()
+        # «Улучшить файл…» доступна, только когда галочка auto-improve
+        # отмечена: по умолчанию цикл запускать нечем.
+        # Проверки уходят из сборки окна. Они бьют по сети и по запуску
+        # внешних программ, и из-за них главное окно открывалось через
+        # несколько секунд, а Windows помечала его «не отвечает»: главный
+        # поток занят, события не обрабатываются. Теперь проверки
+        # выполняются сразу после показа окна — очередь событий ещё
+        # пуста, поэтому окно успевает отрисоваться, а потом
+        # дописываются честные ответы.
+        QTimer.singleShot(0, self._startup_checks)
 
         outer.activate()
         self.refresh_height()
+
+    def _startup_checks(self) -> None:
+        """Проверки, которые раньше шли при сборке окна."""
+        self._ai_toggled(self.checks["auto-improve"].isChecked())
+        # Кнопки greenlight — по галочке greenlight: по умолчанию сканер
+        # выключен и ничего не запускается.
+        self._gl_toggled(self.checks["greenlight"].isChecked())
+        # Второй ревьюер: по умолчанию выключен, «спор» — тоже.
+        self._qw_toggled(self.checks["qwen-review"].isChecked())
+        self._qw_debate_toggled(False)
+        self._refresh()
 
     # ---- серверы MCP из реестра
 
@@ -2654,21 +4619,23 @@ class CapsTab(ScrollPage):
         return mcp_registry.load_manual_config(dest, server.id) is not None
 
     # Серверы, которые программа умеет настроить целиком сама.
-    AUTO_SERVERS = ("android-studio", "obs", "android-emulator")
+    AUTO_SERVERS = ("android-studio", "obs", "android-emulator", "dbhub",
+                    "browsers", "omniroute", "lmarena")
 
     def _reg_auto_possible(self, server: mcp_registry.Server | None) -> tuple[bool, str]:
         """Можно ли настроить автоматически и что этому мешает.
 
-        Автонастройка умеет ровно три вещи: Android Studio, OBS и
-        эмулятор Android. Остальные серверы запускаются командой, и
-        «Настроить автоматически» для них был бы кнопкой вроде
-        работающей.
+        Автонастройка умеет ровно семь вещей: Android Studio, OBS,
+        эмулятор Android, DBHub, браузеры, OmniRoute и LMArena. Остальные
+        серверы запускаются командой, и «Настроить автоматически» для них
+        был бы кнопкой вроде работающей.
         """
         if server is None:
             return False, (
                 "Выберите строку в списке: автонастройка есть у Android "
-                "Studio, OBS и Android-эмулятора. У LDPlayer она не нужна — "
-                "ему достаточно кнопки «Включить»."
+                "Studio, OBS, Android-эмулятора, DBHub, Браузеров, "
+                "OmniRoute и LMArena. У LDPlayer она не нужна — ему "
+                "достаточно кнопки «Включить»."
             )
         if server.id not in self.AUTO_SERVERS:
             return False, (
@@ -2686,6 +4653,13 @@ class CapsTab(ScrollPage):
         """
         if server.installed:
             return "включён"
+        if server.id == "browsers":
+            # У браузеров до выбора нечего проверять: без файла выбора
+            # живая проверка возьмёт Chrome по умолчанию, а человек мог
+            # хотеть Яндекс.Браузер. Честнее сказать, что ждём выбора.
+            dest = self._reg_dest()
+            if dest is None or not browsers.config_path(dest).is_file():
+                return "нужно: выбрать браузер"
         if not server.requirements:
             return "не проверено"
         if not server.has_connection:
@@ -2771,8 +4745,22 @@ class CapsTab(ScrollPage):
         # молча уезжает за край. На снимке это выглядело как
         # обрезанный заголовок «Инструм.». Проверено: с минимумом
         # таблица рисуется целиком, без него - обрезается.
-        table.setMinimumWidth(sum(table.columnWidth(c)
-                                  for c in range(table.columnCount())) + 4)
+        #
+        # Но минимум не шире просмотра вкладки: страница по ширине не
+        # прокручивается, и при узком окне таблица с минимумом 750+
+        # раздвигала её — на 680x560 страница не помещалась на 195
+        # пикселей, а правый край таблицы просто обрезался, и
+        # доскроллить до последних колонок было нельзя. Уступаем:
+        # таблица сжимается до просмотра, и её собственная полоса
+        # прокрутки (ScrollBarAsNeeded) отдаёт остальное человеку.
+        total = sum(table.columnWidth(c)
+                    for c in range(table.columnCount())) + 4
+        # 80 пикселей - поля страницы, рамка и поля блока вокруг таблицы:
+        # их минимум тоже входит в минимум раскладки страницы.
+        limit = self.viewport().width() - 80
+        if limit >= 240 and total > limit:
+            total = limit
+        table.setMinimumWidth(total)
 
     def _reg_paint(self) -> None:
         servers = self.reg_servers
@@ -2783,9 +4771,29 @@ class CapsTab(ScrollPage):
             self.reg_table.setItem(row, 2, QTableWidgetItem(server.license))
             self.reg_table.setItem(row, 3, QTableWidgetItem(server.tools_count))
         self._reg_fit_columns()
+        self._reg_fit_table_height()
         if servers and self.reg_table.currentRow() < 0:
             self.reg_table.setCurrentCell(0, 0)
         self._reg_show_detail()
+
+    def _reg_fit_table_height(self) -> None:
+        """Высота таблицы — по числу серверов, чтобы были видны все.
+
+        Раньше высота была ограничена 190 пикселями, и при двенадцати
+        серверах в блок влезало пять с половиной строк: список крутился
+        внутри самого блока, половина серверов не была видна без
+        прокрутки в этом крутике, а сам блок выглядел недоделанным —
+        пустое место под таблицей и обрезанная строка на краю.
+        """
+        table = self.reg_table
+        if table.rowCount() <= 0:
+            return
+        table.resizeRowsToContents()
+        header = table.horizontalHeader().height()
+        body = sum(table.rowHeight(row) for row in range(table.rowCount()))
+        needed = header + body + 2 * table.frameWidth() + 2
+        table.setMinimumHeight(needed)
+        table.setMaximumHeight(needed)
 
     def _reg_current(self) -> mcp_registry.Server | None:
         row = self.reg_table.currentRow()
@@ -2800,6 +4808,87 @@ class CapsTab(ScrollPage):
         # её, а не ждём ошибки по нажатию.
         possible, _ = self._reg_auto_possible(server)
         self.btn_reg_auto.setEnabled(possible)
+        # Кнопки подключений — только у DBHub: больше ни один сервер
+        # не ходит в базы, и «Добавить подключение» у него означало бы
+        # пустую кнопку.
+        is_db = server is not None and server.id == "dbhub"
+        self.btn_db_add.setEnabled(is_db)
+        self.btn_db_check.setEnabled(
+            is_db and bool(dbhub.read_sources(self._reg_dest() or Path()))
+        )
+        # Кнопки браузеров — только у своей строки: у остальных серверов
+        # выбирать нечего, они запускаются командой.
+        is_br = server is not None and server.id == "browsers"
+        self.btn_br_choose.setEnabled(is_br)
+        self.btn_br_check.setEnabled(is_br)
+        # Кнопки OmniRoute — только у своей строки: у остальных серверов
+        # разворачивать, запускать и перезапускать нечего.
+        is_or = server is not None and server.id == "omniroute"
+        self.btn_or_deploy.setEnabled(is_or)
+        self.btn_or_start.setEnabled(is_or)
+        self.btn_or_restart.setEnabled(is_or)
+        self.btn_or_status.setEnabled(is_or)
+        # Кнопки LMArena — только у своей строки: у остальных серверов нет
+        # ни окружения форка, ни токена арены.
+        is_lm = server is not None and server.id == "lmarena"
+        self.btn_lm_deploy.setEnabled(is_lm)
+        self.btn_lm_start.setEnabled(is_lm)
+        self.btn_lm_restart.setEnabled(is_lm)
+        self.btn_lm_status.setEnabled(is_lm)
+        self.btn_lm_token.setEnabled(is_lm)
+        if is_db:
+            sources = dbhub.read_sources(self._reg_dest() or Path())
+            if sources:
+                names = ", ".join(s.id for s in sources)
+                self.reg_hint.setText(
+                    f"Подключения DBHub: {names}. «Проверить соединение» "
+                    "поднимает сервер и спрашивает протоколом, отвечает ли "
+                    "база. «Настроить автоматически» делает то же и вписывает "
+                    "сервер в настройки opencode."
+                )
+            else:
+                self.reg_hint.setText(
+                    "Подключений к базам пока нет: у DBHub без них нечего "
+                    "проверять и нечего включать. Начни с «Добавить подключение»."
+                )
+        elif is_br:
+            dest = self._reg_dest() or Path()
+            choice = browsers.read_choice(dest)
+            chosen = browsers.config_path(dest).is_file()
+            head = ("Выбрано: " + browsers.description(choice) + ". "
+                    if chosen else
+                    "Браузер ещё не выбран: пока не выберешь, проверять "
+                    "нечего. ")
+            self.reg_hint.setText(
+                head
+                + "«Проверить браузер» открывает страницу и читает заголовок — "
+                "это и есть доказательство, что браузер работает. «Настроить "
+                "автоматически» делает то же и вписывает сервер в настройки "
+                "opencode."
+            )
+        elif is_lm:
+            token = ("токен арены уже вписан" if lmarena.token_present(
+                self._reg_dest() or Path()) else
+                "токена арены пока нет — без него моделей не будет")
+            self.reg_hint.setText(
+                "Порядок: «Развернуть» (окружение моста и зависимости), "
+                "«Обновить токен» (кука arena-auth-prod-v1 с сайта арены — "
+                f"{token}), «Запустить» (мост на http://127.0.0.1:8000), "
+                "«Показать статус», затем «Настроить автоматически»: она "
+                "спросит у модели ответ и только потом впишет мост и "
+                "провайдера с моделями арены в настройки opencode. Мост "
+                "выключен по умолчанию и включается после предупреждений."
+            )
+        elif is_or:
+            self.reg_hint.setText(
+                "Порядок: «Развернуть» (пакет из npm в папку моста), "
+                "«Запустить» (панель и API на http://127.0.0.1:20128), "
+                "«Показать статус», затем «Настроить автоматически»: она "
+                "подключит бесплатных провайдеров без ключа и впишет мост "
+                "в настройки opencode. Что-то зависнет — «Перезапустить»."
+            )
+        else:
+            self.reg_hint.clear()
         if server is None:
             self.reg_detail.setPlainText("Выберите сервер, чтобы увидеть подробности.")
             return
@@ -2809,6 +4898,31 @@ class CapsTab(ScrollPage):
         target = conn.get("url") or " ".join(conn.get("command") or [])
         if target:
             lines.append(f"Команда: {target}")
+        if server.id == "browsers":
+            # Что именно запустится — видно прямо здесь: браузер, профиль и
+            # окно живут в файле выбора, и без этой строки человек не понял
+            # бы, что уйдёт в npx.
+            dest = self._reg_dest() or Path()
+            choice = browsers.read_choice(dest)
+            br = browsers.browser(choice.browser)
+            lines.append("")
+            lines.append(f"Выбрано: {browsers.description(choice)}")
+            lines.append("Запуск: " + " ".join(browsers.command(dest, choice)))
+            lines.append(f"Профиль: {browsers.profile_dir(dest, br.key)}")
+            lines.append(browsers.hint(br.key, choice))
+        if server.id == "omniroute":
+            # Состояние моста словами: развёрнут ли, отвечает ли API,
+            # какая версия и сколько провайдеров. Здесь же адрес панели:
+            # куда идти человеку за ключами провайдеров.
+            dest = self._reg_dest() or Path()
+            lines.append("")
+            lines.append(omniroute.status_text(dest))
+            lines.append(f"Панель и API: http://{omniroute.DEFAULT_HOST}:{omniroute.DEFAULT_PORT}")
+            lines.append(f"Папка данных: {omniroute.data_dir(dest)}")
+            lines.append(
+                "Ключи провайдеров лежат в папке данных и в настройки "
+                "opencode не попадают."
+            )
         if raw.get("why"):
             lines.append("")
             lines.append(str(raw["why"]))
@@ -2852,6 +4966,117 @@ class CapsTab(ScrollPage):
         lines.append("")
         lines.append(f"Источник: {server.source}")
         self.reg_detail.setPlainText("\n".join(lines))
+        self._reg_fit_detail_height()
+
+    def _reg_fit_detail_height(self) -> None:
+        """Высота поля описания — под сам текст, а не под старый минимум.
+
+        Поле было ограничено 120 пикселями, а описание сервера занимает
+        больше: текст обрывался на полуслове, и последняя строка
+        читалась как «...действия откажут» без конца.
+
+        Высоту текста у Qt здесь взять нечем: document.size() у этого поля
+        отдаёт не пиксели, а число строк, и даже после отрисовки, поэтому
+        перенос меряем сами по метрикам шрифта. Считаем по словам, а не
+        делением длины на ширину, — иначе длинное слово «разъехалось» бы
+        на две строки и поле выросло бы лишнего.
+        """
+        box = self.reg_detail
+        width = box.viewport().width()
+        if width < 50:
+            return
+        metrics = box.fontMetrics()
+        lines = 0
+        for paragraph in box.toPlainText().split("\n"):
+            words = paragraph.split()
+            if not words:
+                lines += 1
+                continue
+            current = 0
+            for word in words:
+                advance = metrics.horizontalAdvance(word)
+                if current and current + 1 + advance > width:
+                    lines += 1
+                    current = advance
+                else:
+                    current += advance + (1 if current else 0)
+            lines += 1
+        # Запас сверх расчёта: наш перенос по словам чуть занижает реальный —
+        # Qt переносит ещё и по границам символов в длинных кусках вроде
+        # команды npm. Лучше лишние двадцать процентов пустоты внизу, чем
+        # обрезанная последняя строка и полоса прокрутки.
+        needed = int(lines * metrics.lineSpacing() * 1.2) + 2 * box.frameWidth() + 10
+        # Нижняя граница: короткое описание не должно оставлять под
+        # собой пустоту — на пустое место в этом блоке и жаловались.
+        needed = max(needed, 150)
+        box.setMinimumHeight(needed)
+        box.setMaximumHeight(needed)
+
+    def _reg_bulk_reason(self, server: mcp_registry.Server) -> str:
+        """Что мешает включить сервер вместе со всеми. Пусто — можно.
+
+        Правила те же, что и у кнопки «Включить» для одной строки: часть
+        серверов перед записью обязана что-то спросить или проверить
+        живьём. Пропускать их молча нельзя — человек потом не поймёт,
+        почему сервер из списка не включился.
+        """
+        if server.manual_setup:
+            return ("нужен выбор — программа спросит его сама, "
+                    "поэтому в общий список он не входит")
+        if server.id == "dbhub":
+            return ("нужна живая проверка связи с базой: выбери его строку "
+                    "и нажми «Включить»")
+        if server.id == "lmarena":
+            return ("нужен токен арены и ответ модели: выбери его строку "
+                    "и нажми «Настроить автоматически»")
+        return ""
+
+    def _reg_enable_all(self) -> None:
+        """Включает вместе все серверы, где для этого не надо ничего спрашивать."""
+        dest = self._reg_dest()
+        if dest is None:
+            self._warn("Не выбрана папка настроек opencode.")
+            return
+        base = self._reg_base()
+        if base is None:
+            self._warn("Не выбрана папка базы с реестром.")
+            return
+
+        def job(progress):
+            servers = mcp_registry.load_servers(base)
+            mcp_registry.mark_installed(servers, dest)
+            self.reg_servers = servers
+            enabled: list[str] = []
+            skipped: list[str] = []
+            errors: list[str] = []
+            for server in servers:
+                reason = self._reg_bulk_reason(server)
+                if reason:
+                    skipped.append(f"пропущен {server.name}: {reason}")
+                    continue
+                try:
+                    _messages, errs = mcp_registry.enable(
+                        dest, server, progress=progress)
+                except Exception as exc:  # noqa: BLE001 — сервер не должен ронять всех
+                    errors.append(f"{server.name}: {exc}")
+                    continue
+                if errs:
+                    errors.append(f"{server.name}: " + "; ".join(errs))
+                    continue
+                if server.installed:
+                    enabled.append(f"{server.name}: уже был включён")
+                else:
+                    enabled.append(f"{server.name}: включён")
+            self._reg_paint()
+            lines = [f"Готово: {len(enabled)} из {len(servers)}."]
+            lines += enabled
+            if skipped:
+                lines.append("Не тронуты (нужно решение человека):")
+                lines += skipped
+            lines.append("Перезапусти opencode, чтобы он подхватил изменения.")
+            return lines, errors
+
+        self._start(job, "registry")
 
     def _reg_check_all(self) -> None:
         """Живая проверка требований. Идёт в фоне: запускает программы."""
@@ -2891,13 +5116,315 @@ class CapsTab(ScrollPage):
             self._reg_ask_config(server, dest)
             return
 
+        # DBHub без подключения к базе — блок, которому нечего отдавать,
+        # а с нерабочей базой — блок, который opencode будет ждать 30
+        # секунд и покажет «Не удалось». Поэтому у него «Включить» идёт
+        # тем же путём, что автонастройка: сначала живая проверка связи,
+        # и только потом запись.
+        if server.id == "dbhub":
+            self._reg_auto()
+            return
+
+        # У моста LMArena «Включить» идёт тем же путём, что автонастройка:
+        # без токена арены и ответа модели блок в настройках был бы
+        # нерабочим, а сам мост включается только после предупреждений.
+        if server.id == "lmarena":
+            self._reg_auto()
+            return
+
         def job(progress):
             return mcp_registry.enable(dest, server, progress=progress)
 
         self._start(job, "registry")
 
+    def _db_add_source(self) -> None:
+        """Вписывает подключение к базе в файл DBHub.
+
+        Подключение — не настройка opencode, а отдельный файл рядом с
+        ними. Поэтому он живёт не в кнопке «Включить», а в своей:
+        вписать базу можно и до включения сервера, и для второй базы.
+        """
+        dest = self._reg_dest()
+        server = self._reg_current()
+        if dest is None:
+            self._warn("Не выбрана папка настроек opencode.")
+            return
+        if server is None or server.id != "dbhub":
+            self._warn("Подключения к базам есть только у DBHub. "
+                       "Выберите его строку в списке.")
+            return
+
+        dialog = DbhubConnectionDialog(dest, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        for line in dialog.messages:
+            self.log.add(line, "ok")
+        self.log.add(
+            "Дальше — «Проверить соединение»: живая проверка скажет, "
+            "отвечает ли база, до записи в настройки opencode.", "ok"
+        )
+        self._reg_show_detail()
+
+    def _db_check(self) -> None:
+        """Живая проверка связи с базами DBHub.
+
+        Настоящий разговор с сервером по протоколу MCP: сервер поднимает
+        сама программа, отвечает он или нет — видно по ответу, а не по
+        тому, что порт занят. Ничего не записывает.
+        """
+        dest = self._reg_dest()
+        server = self._reg_current()
+        if dest is None:
+            self._warn("Не выбрана папка настроек opencode.")
+            return
+        if server is None or server.id != "dbhub":
+            self._warn("Проверять связь с базой умеет только DBHub. "
+                       "Выберите его строку в списке.")
+            return
+        sources = dbhub.read_sources(dest)
+        if not sources:
+            self._warn("Подключений нет. Нажми «Добавить подключение» "
+                       "и впиши базу.")
+            return
+
+        def job(progress):
+            return dbhub.check_connection(dest, sources, progress=progress)
+
+        self._start(job, "dbhub")
+
+    def _br_choose(self) -> None:
+        """Выбор браузера, профиля и окна для моста Playwright MCP.
+
+        Выбор ложится отдельным файлом рядом с настройками opencode, а не
+        в них самих: сменить браузер можно, не трогая настройки opencode.
+        """
+        dest = self._reg_dest()
+        server = self._reg_current()
+        if dest is None:
+            self._warn("Не выбрана папка настроек opencode.")
+            return
+        if server is None or server.id != "browsers":
+            self._warn("Выбирать браузер можно только у строки «Браузеры». "
+                       "Выберите её в списке.")
+            return
+
+        dialog = BrowserChoiceDialog(dest, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        for line in dialog.messages:
+            self.log.add(line, "ok")
+        self._reg_show_detail()
+
+    def _br_check(self) -> None:
+        """Живая проверка браузера.
+
+        Поднимает мост и открывает страницу выбранным браузером: сервер
+        отвечает, страница открылась, заголовок прочитан. Ничего не
+        записывает — только говорит, работает ли выбранный браузер.
+        """
+        dest = self._reg_dest()
+        server = self._reg_current()
+        if dest is None:
+            self._warn("Не выбрана папка настроек opencode.")
+            return
+        if server is None or server.id != "browsers":
+            self._warn("Проверять браузер можно только у строки «Браузеры». "
+                       "Выберите её в списке.")
+            return
+        if not browsers.config_path(dest).is_file():
+            self._warn("Браузер ещё не выбран. Нажми «Выбрать браузер», "
+                       "иначе проверять нечего.")
+            return
+        choice = browsers.read_choice(dest)
+
+        def job(progress):
+            return browsers.check_connection(dest, choice, progress=progress)
+
+        self._start(job, "browsers")
+
+    def _or_target(self) -> Path | None:
+        """Папка настроек и строка OmniRoute — общая проверка для кнопок.
+
+        Четыре кнопки моста делают разное, но требование у них одно:
+        выбрана папка настроек opencode и выделена строка «OmniRoute».
+        Иначе нажатие было бы враньём — оно трогало бы чужую строку.
+        """
+        dest = self._reg_dest()
+        server = self._reg_current()
+        if dest is None:
+            self._warn("Не выбрана папка настроек opencode.")
+            return None
+        if server is None or server.id != "omniroute":
+            self._warn("Это работа строки «OmniRoute». Выберите её в списке.")
+            return None
+        return dest
+
+    def _or_deploy(self) -> None:
+        """Разворачивает OmniRoute в папку моста. В opencode не пишет."""
+        dest = self._or_target()
+        if dest is None:
+            return
+
+        def job(progress):
+            return omniroute.deploy(progress=progress)
+
+        self._start(job, "omniroute")
+
+    def _or_start(self) -> None:
+        """Поднимает сервер, ждёт ответа API и подключает бесплатных.
+
+        В opencode не пишет. Провайдеры подключаются здесь же, потому что
+        каталог бесплатных у новой версии мог измениться, а человек про
+        второй шаг помнить не должен.
+        """
+        dest = self._or_target()
+        if dest is None:
+            return
+
+        def job(progress):
+            return omniroute.bring_up(dest, progress=progress)
+
+        self._start(job, "omniroute")
+
+    def _or_restart(self) -> None:
+        """Перезапускает сервер и заново подключает бесплатных провайдеров.
+
+        Так же лечится зависший или упавший мост. Каталог бесплатных
+        провайдеров читается заново, поэтому изменившийся список
+        подхватывается сам.
+        """
+        dest = self._or_target()
+        if dest is None:
+            return
+
+        def job(progress):
+            return omniroute.restart(dest, progress=progress)
+
+        self._start(job, "omniroute")
+
+    def _or_status(self) -> None:
+        """Показывает состояние моста словами: ничего не меняет."""
+        dest = self._or_target()
+        if dest is None:
+            return
+        text = omniroute.status_text(dest)
+        self.log.clear_log()
+        self.log.add(text, "ok" if "отвечает" in text else "warn")
+        # Подробности под таблицей обновляются тем же текстом: там его
+        # видно, не открывая журнал.
+        self._reg_show_detail()
+
+    def _lm_target(self) -> Path | None:
+        """Папка настроек и строка LMArena — общая проверка для кнопок.
+
+        Пять кнопок моста делают разное, но требование у них одно:
+        выбрана папка настроек opencode и выделена строка «LMArena».
+        Иначе нажатие трогало бы чужую строку.
+        """
+        dest = self._reg_dest()
+        server = self._reg_current()
+        if dest is None:
+            self._warn("Не выбрана папка настроек opencode.")
+            return None
+        if server is None or server.id != "lmarena":
+            self._warn("Это работа строки «LMArena». Выберите её в списке.")
+            return None
+        return dest
+
+    def _lm_confirm(self) -> bool:
+        """Спрашивает согласие на работу через веб-сервис арены.
+
+        Мост выключен по умолчанию, поэтому согласие спрашивается перед
+        каждым включением: один раз прочитанное предупреждение не должно
+        превращаться в «я когда-то нажал галочку».
+        """
+        dialog = LmarenaWarningDialog(self)
+        return dialog.exec() == QDialog.DialogCode.Accepted
+
+    def _lm_deploy(self) -> None:
+        """Ставит окружение моста и зависимости. В opencode не пишет."""
+        dest = self._lm_target()
+        if dest is None:
+            return
+
+        def job(progress):
+            return lmarena.deploy(progress=progress)
+
+        self._start(job, "lmarena")
+
+    def _lm_start(self) -> None:
+        """Поднимает мост и ждёт ответа API. В opencode ничего не пишет."""
+        dest = self._lm_target()
+        if dest is None or not self._lm_confirm():
+            return
+
+        def job(progress):
+            return lmarena.bring_up(dest, progress=progress)
+
+        self._start(job, "lmarena")
+
+    def _lm_restart(self) -> None:
+        """Перезапускает мост: так лечится зависший и подхватывается токен."""
+        dest = self._lm_target()
+        if dest is None or not self._lm_confirm():
+            return
+
+        def job(progress):
+            return lmarena.restart(dest, progress=progress)
+
+        self._start(job, "lmarena")
+
+    def _lm_status(self) -> None:
+        """Показывает состояние моста словами: ничего не меняет."""
+        dest = self._lm_target()
+        if dest is None:
+            return
+        text = lmarena.status_text(dest)
+        self.log.clear_log()
+        self.log.add(text, "ok" if "отвечает" in text else "warn")
+        self._reg_show_detail()
+
+    def _lm_token(self) -> None:
+        """Спрашивает свежий токен арены и кладёт его рядом с настройками.
+
+        Мост читает токен только из своего config.json, поэтому после
+        сохранения предлагается перезапуск: список моделей мост тянет с
+        арены на старте и раз в полчаса, а не по каждому запросу.
+        """
+        dest = self._lm_target()
+        if dest is None:
+            return
+        dialog = LmarenaTokenDialog(dest, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        for line in dialog.messages:
+            self.log.add(line, "ok")
+        if lmarena.deployed() and lmarena.health(dest, timeout=3)[0]:
+            answer = QMessageBox.question(
+                self,
+                "Мост уже запущен",
+                "Токен сохранён. Мост уже запущен — перезапустить его "
+                "сейчас, чтобы он сразу взял новый токен и перечитал "
+                "список моделей с арены?\n\nЭто то же, что кнопка "
+                "«Перезапустить».",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                self._lm_restart()
+        self._reg_show_detail()
+
     def _reg_auto(self) -> None:
-        """Настраивает Android Studio целиком, без конфигураций вручную."""
+        """Настраивает сервер целиком, без конфигураций вручную.
+
+        Автонастройка умеет Android Studio, OBS, эмулятор, DBHub, браузеры,
+        OmniRoute и LMArena. У DBHub она упирается в подключение: без
+        вписанной базы проверять нечего, поэтому сначала предлагается
+        «Добавить подключение». У OmniRoute порядок другой: развернуть,
+        запустить, получить ответ API — и только потом писать в настройки.
+        У LMArena так же, но проверка строже: живой ответ модели через
+        арену. Не ответила — в настройки не пишется ничего.
+        """
         dest = self._reg_dest()
         if dest is None:
             self._warn("Не выбрана папка настроек opencode.")
@@ -2938,6 +5465,11 @@ class CapsTab(ScrollPage):
             if password is None:
                 return
 
+        # Мост LMArena спрашивает согласие каждый раз: он работает через
+        # веб-сервис арены, и «я согласился когда-то раньше» тут не годится.
+        if server.id == "lmarena" and not self._lm_confirm():
+            return
+
         def job(progress):
             if server.id == "android-studio":
                 return android_studio.auto_setup(dest, server, progress=progress)
@@ -2945,6 +5477,14 @@ class CapsTab(ScrollPage):
                 return bridges.auto_setup_obs(
                     dest, server, password, progress=progress,
                     allow_install_path_fix=fix_install_path)
+            if server.id == "dbhub":
+                return dbhub.auto_setup(dest, server, progress=progress)
+            if server.id == "browsers":
+                return browsers.auto_setup(dest, server, progress=progress)
+            if server.id == "omniroute":
+                return omniroute.auto_setup(dest, server, progress=progress)
+            if server.id == "lmarena":
+                return lmarena.auto_setup(dest, server, progress=progress)
             return bridges.auto_setup_emulator(dest, server, progress=progress)
 
         self._start(job, "registry")
@@ -3190,6 +5730,120 @@ class CapsTab(ScrollPage):
             self.caps_skills_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
             self.caps_skills_hint.setText(f"Отмечено: {chosen} из {total}.")
 
+    def _check_skill_updates(self) -> None:
+        """Проверить, не появилось ли нового у авторов наших скилов.
+
+        Идёт в сеть и в рабочий поток: двадцать скилов — это двадцать
+        запросов, по 0,3 секунды пауза между ними, и на это нужны
+        секунды. Главный поток при этом свободен, окно не «отвечает».
+        """
+        import skill_sources
+
+        base = self._base()
+
+        def job(progress):
+            rows, errors = skill_sources.check_updates(base, progress)
+            # Результат кладём на вкладку: диалог покажет именно его, а
+            # не результат повторного запроса из обработчика.
+            self._skill_check_rows = rows
+            lines = [f"{r['skill']}: {r['state']}" + (
+                f" ({r['date']})" if r["date"] else "") for r in rows]
+            return lines, errors
+
+        self._start(job, "skills-check")
+
+    def _skill_update_report(self, rows: list) -> None:
+        """Диалог по итогам проверки: у кого появилось и как это смотреть."""
+        import skill_sources
+
+        if not rows:
+            self._warn("Проверять нечего: список источников пуст.")
+            return
+        behind = [r for r in rows if r["state"] == skill_sources.ST_BEHIND]
+        fresh = [r for r in rows if r["state"] == skill_sources.ST_FRESH]
+        unknown = [r for r in rows if r["state"] == skill_sources.ST_UNKNOWN]
+        offline = [r for r in rows if r["state"] == skill_sources.ST_NO_NET]
+
+        parts = []
+        if behind:
+            parts.append("У авторов появилось: " + ", ".join(
+                r["skill"] for r in behind))
+        if fresh:
+            parts.append(f"Совпадает с авторским: {len(fresh)}.")
+        if unknown:
+            parts.append("Источник неизвестен, проверка в следующий раз: "
+                         + ", ".join(r["skill"] for r in unknown))
+        if offline:
+            parts.append("Не проверилось (нет сети или адрес отвергнут): "
+                         + ", ".join(r["skill"] for r in offline))
+        parts.append("")
+        parts.append("Ничего не обновлено: наши скилы — переводы, и "
+                     "оригинал автора затёр бы перевод. Открой разницу "
+                     "и переводи сам.")
+
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Обновления скилов")
+        dialog.setText("\n".join(parts))
+        if behind:
+            names = "\n".join(r["skill"] for r in behind)
+            box = QVBoxLayout()
+            chooser = QComboBox()
+            chooser.addItems(names.split("\n"))
+            show = QPushButton("Посмотреть разницу")
+            take = QPushButton("Взять оригинал автора")
+
+            def _show():
+                src = next((r for r in behind if r["skill"] == chooser.currentText()),
+                           None)
+                if src is None:
+                    return
+                theirs = skill_sources.fetch_original(src)
+                if not theirs:
+                    self._warn("Оригинал не скачался: нет сети или папка "
+                               "называется иначе.")
+                    return
+                ours = skill_sources.local_skill_text(self._base(), src["skill"])
+                lines = skill_sources.diff_lines(ours, theirs)
+                dlg = QMessageBox(self)
+                dlg.setWindowTitle(f"Разница: {src['skill']}")
+                dlg.setText("Слева наш перевод, справа оригинал автора.\n"
+                            "Перевод не тронут.")
+                dlg.setDetailedText("\n".join(lines[:400]))
+                dlg.exec()
+
+            def _take():
+                src = next((r for r in behind if r["skill"] == chooser.currentText()),
+                           None)
+                if src is None:
+                    return
+                theirs = skill_sources.fetch_original(src)
+                if not theirs:
+                    self._warn("Оригинал не скачался.")
+                    return
+                folder = core.current_base("opencode") / "skills" / src["skill"]
+                path = skill_sources.save_original(folder, theirs)
+                if path is None:
+                    self._warn("Не удалось записать оригинал.")
+                    return
+                self.log.add(f"Оригинал {src['skill']} сохранён: {path}", "ok")
+                dialog.close()
+
+            show.clicked.connect(_show)
+            take.clicked.connect(_take)
+            box.addWidget(chooser)
+            row = QHBoxLayout()
+            row.addWidget(show)
+            row.addWidget(take)
+            box.addLayout(row)
+            holder = QWidget()
+            holder.setLayout(box)
+            dialog.setInformativeText("Выбери скил:")
+            holder.setParent(dialog)
+            holder.setVisible(True)
+            holder.move(dialog.width() - 220, dialog.height() - 80)
+            holder.raise_()
+        dialog.exec()
+
     def _install_skills(self) -> None:
         dest = self._dest()
         if dest is None:
@@ -3249,6 +5903,134 @@ class CapsTab(ScrollPage):
         else:
             self.state_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
             self.state_hint.setText("Наших возможностей здесь пока нет.")
+        # Строка про rtk и caveman — отдельно от «уже стоит». Без неё
+        # галочка «rtk» выглядела бы рабочей, хотя без бинарника в PATH она
+        # ничего не впишет: программа обязана сказать это до нажатия.
+        try:
+            data = rtk.status(dest)
+        except Exception:
+            data = {}
+        try:
+            cword = str(caveman.status(dest).get("word") or "")
+        except Exception:
+            cword = ""
+        notes: list[str] = []
+        if data:
+            if data.get("binary"):
+                notes.append(
+                    "rtk: программа найдена"
+                    + (f" ({data['version']})" if data.get("version") else "")
+                    + "."
+                )
+            else:
+                notes.append(
+                    "rtk: программа не найдена в PATH — включение ничего не "
+                    "впишет, пока она не поставлена по README автора."
+                )
+        notes.append(
+            "caveman: сейчас уровень «" + (cword or "лёгкий")
+            + "», галочка выберет тот, что стоит в списке."
+        )
+        # Строка про pxpipe: без запущенного прокси галочка ничего не
+        # впишет, и сказать об этом надо до нажатия, а не после.
+        try:
+            px = pxpipe.status(dest)
+        except Exception:
+            px = {}
+        if px:
+            where = str(px.get("upstream") or "")
+            if px.get("running"):
+                notes.append(
+                    "pxpipe: прокси отвечает"
+                    + (f" и пересылает запросы к {where}" if where else "")
+                    + ("." if px.get("ours") else " (запущен не программой).")
+                )
+            else:
+                notes.append(
+                    "pxpipe: прокси не отвечает — пока он не запущен, "
+                    "включение ничего не впишет в настройки."
+                )
+        # Строка про auto-improve: цикл не пойдёт без ключа, git и requests,
+        # и сказать об этом надо до нажатия, а не после.
+        try:
+            ai = auto_improve.check(dest)
+        except Exception:
+            ai = {}
+        try:
+            ai_tags = auto_improve.seen_tags(dest)
+        except Exception:
+            ai_tags = []
+        if ai:
+            if ai.get("ready"):
+                notes.append(
+                    "auto-improve: готов к запуску, "
+                    + auto_improve.key_status(dest)
+                    + (f"; ход: {len(ai_tags)}" if ai_tags else "")
+                    + "."
+                )
+            else:
+                notes.append(
+                    "auto-improve: не готов — "
+                    + "; ".join(ai.get("missing") or []) + "."
+                )
+            self.ai_key_hint.setText(auto_improve.key_status(dest) + ".")
+            self.ai_hint.setText(auto_improve.status_text(dest))
+            self.btn_ai_run.setEnabled(bool(self.checks["auto-improve"].isChecked()))
+        # Строка про greenlight: не собран, нет Go или копия разошлась — об
+        # этом надо сказать до нажатия, а не после.
+        try:
+            gl = greenlight.check(dest)
+        except Exception:
+            gl = {}
+        if gl:
+            if gl.get("ready"):
+                notes.append(f"greenlight: готов, {gl.get('version')}.")
+            else:
+                reason = "не собран" if not gl.get("binary") else "не отвечает"
+                where = ("Go не найден — собрать нечем." if not gl.get("go")
+                         else "Go найден: кнопка «Собрать greenlight».")
+                notes.append(f"greenlight: {reason}. {where}")
+            self.gl_hint.setText(greenlight.status_text(dest))
+            self.btn_gl_run.setEnabled(bool(self.checks["greenlight"].isChecked()))
+            self.btn_gl_dry.setEnabled(bool(self.checks["greenlight"].isChecked()))
+            self.btn_gl_cloud.setEnabled(bool(self.checks["greenlight"].isChecked()))
+        # Строка про второго ревьюера: без развёрнутого qwen и выбранной
+        # модели проверка не пойдёт — сказать об этом до нажатия.
+        try:
+            qw = qwen_review.check(dest)
+        except Exception:
+            qw = {}
+        if qw:
+            if qw.get("ready"):
+                notes.append(f"Qwen Code: ревьюер готов, {qw.get('version')}.")
+            else:
+                selection = qw.get("selection") or {}
+                if not qw.get("binary"):
+                    notes.append("Qwen Code: не развёрнут — настрой работает скиллом qwen-review-setup.")
+                elif not selection.get("model"):
+                    notes.append("Qwen Code: модель ревьюера не выбрана — настрой через скилл.")
+                else:
+                    notes.append("Qwen Code: ревьюер не готов — " + "; ".join(
+                        (qw.get("missing") or ["смотри строку ниже"])[:1]) + ".")
+            self.btn_qw_run.setEnabled(bool(self.checks["qwen-review"].isChecked()))
+        # Список источников для pxpipe: читаем здесь, в главном потоке.
+        try:
+            choices = pxpipe.provider_choices(dest)
+        except Exception:
+            choices = []
+        keep = str(self.pxpipe_source.currentData() or "")
+        self.pxpipe_source.blockSignals(True)
+        self.pxpipe_source.clear()
+        for name in choices:
+            self.pxpipe_source.addItem(name, name)
+        if not choices:
+            self.pxpipe_source.addItem("провайдеров в настройках нет", "")
+        if keep:
+            index = self.pxpipe_source.findData(keep)
+            if index >= 0:
+                self.pxpipe_source.setCurrentIndex(index)
+        self.pxpipe_source.blockSignals(False)
+        self.state_hint.setText(self.state_hint.text() + "\n" + "\n".join(notes))
 
     # ---- выбор папки
 
@@ -3259,6 +6041,38 @@ class CapsTab(ScrollPage):
         )
         if chosen:
             self.dest_edit.setText(chosen)
+
+    # ---- уведомления Windows о завершении фоновой работы
+
+    #: Что показывать в уведомлении при успехе. Короткое: во всплывающем
+    #: сообщении Windows длинный текст всё равно обрезается.
+    JOBS = {
+        "registry": ("Проверка мостов закончена",
+                     "Проверили серверы MCP — подробности в журнале"),
+        "auto": ("Автоматическая настройка закончена",
+                 "Мосты настроены — подробности в журнале"),
+    }
+
+    def _notify(self, title: str, text: str) -> None:
+        """Отправить уведомление окну программы — оно разошлёт его в трей."""
+        window = self.window()
+        notify = getattr(window, "notify", None)
+        if callable(notify):
+            notify(title, text)
+
+    def _notify_done(self, messages: list[str], errors: list[str]) -> None:
+        """Сообщить, что фоновая работа закончилась.
+
+        Пока идёт проверка или развёртывание, окно обычно свёрнуто. Если
+        сообщения не будет, человек не узнает, что всё готово, и будет
+        ждать впустую.
+        """
+        title, text = self.JOBS.get(self._what, ("Готово", "Работа завершена"))
+        if errors:
+            self._notify(f"{title}: есть замечания",
+                         f"Замечаний: {len(errors)}. Подробности в журнале")
+        elif messages:
+            self._notify(title, str(messages[-1]).strip()[:90] or text)
 
     # ---- запуск работы
 
@@ -3282,6 +6096,7 @@ class CapsTab(ScrollPage):
         result = self._worker.result if self._worker else None
         if isinstance(result, Exception):
             self.log.add(f"Прервано: {result}", "error")
+            self._notify(f"{self._what}: прервано", str(result)[:90])
             return
         messages, errors = result
         for line in messages:
@@ -3292,6 +6107,7 @@ class CapsTab(ScrollPage):
                 self.log.add(f"  {line}", "error")
         else:
             self.log.add("Готово.", "ok")
+        self._notify_done(messages, errors)
         self._refresh()
         # Включение и выключение сервера меняют его состояние в таблице.
         # Перечитываем здесь, в главном потоке: из рабочего потока трогать
@@ -3302,6 +6118,15 @@ class CapsTab(ScrollPage):
             if reg_dest is not None:
                 mcp_registry.mark_installed(self.reg_servers, reg_dest)
                 self._reg_paint()
+        elif self._what == "skills-check":
+            # Отчёт по скилам показываем диалогом: в журнале строки
+            # «у автора появилось» легко пролистать, а человек пришёл
+            # сюда за ответом. Результат берём из работы, а не проверяем
+            # заново: повторный запрос — это двадцать обращений в сеть
+            # впустую и, что хуже, возможно другой ответ.
+            rows = getattr(self, "_skill_check_rows", None)
+            if rows:
+                self._skill_update_report(rows)
 
     def _base(self) -> Path:
         return core.app_root()
@@ -3317,6 +6142,10 @@ class CapsTab(ScrollPage):
             self._warn("Ничего не отмечено — отметьте хотя бы одну галочку.")
             return
         base = self._base()
+        # Уровень caveman и источник pxpipe читаем здесь, в главном потоке:
+        # из рабочего потока трогать виджеты нельзя.
+        level = str(self.caveman_level.currentData() or "lite")
+        px_source = str(self.pxpipe_source.currentData() or "")
 
         def job(progress):
             m1, e1 = ([], [])
@@ -3325,12 +6154,715 @@ class CapsTab(ScrollPage):
                 m1, e1 = opencode_caps.install_caps(
                     base, dest, selection, progress=progress,
                     antiblock_opts=self._antiblock_opts(),
+                    caveman_level=level,
+                    pxpipe_provider=px_source,
                 )
             if pselection:
-                m2, e2 = opencode_caps.install_providers(dest, pselection, progress=progress)
+                # У LMArena блок провайдера собирается из живого моста:
+                # имена моделей называет арена, и выдумать их нельзя. Мост
+                # молчит — пропускаем его и говорим словами, а не пишем
+                # провайдера без моделей.
+                chosen = set(pselection)
+                blocks: dict[str, str] = {}
+                lm_names: list[str] = []
+                if "lmarena" in chosen:
+                    names, note = lmarena.chat_models(dest)
+                    if names:
+                        lm_names = names
+                        blocks["lmarena"] = lmarena.provider_block(names)
+                    else:
+                        chosen.discard("lmarena")
+                        e2.append(
+                            "LMArena пропущен: модели моста не прочитались ("
+                            + (note or "список пуст")
+                            + "). Запусти мост и обнови токен — тогда "
+                            "список моделей подставится сам."
+                        )
+                if chosen:
+                    m2, e2 = opencode_caps.install_providers(
+                        dest, chosen, progress=progress, blocks=blocks)
+                    m2 = list(m2)
+                    if "lmarena" in chosen:
+                        m2.append(
+                            f"Провайдер LMArena вписан с моделями арены: "
+                            f"{len(lm_names)}."
+                        )
+                else:
+                    m2 = []
             return (m1 + m2, e1 + e2)
 
         self._start(job, "install")
+
+    def _rtk_measure(self) -> None:
+        """Замер rtk: длинная команда дважды, числами. Ничего не записывает."""
+        def job(progress):
+            return rtk.measure()
+
+        self._start(job, "measure")
+
+    def _ai_toggled(self, on: bool) -> None:
+        """Галочка auto-improve разрешает кнопку «Улучшить файл…».
+
+        Сама галочка ничего не блокирует и не запускает: она лишь открывает
+        кнопку. Всё остальное — проверка окружения перед записью и
+        предупреждения перед циклом.
+        """
+        button = getattr(self, "btn_ai_run", None)
+        if button is not None:
+            button.setEnabled(bool(on))
+        if on:
+            self.log.add(
+                "auto-improve отмечен. Цикл тратит токены и коммитит в ветку "
+                "improve/<тег> — запускай на копии проекта или в отдельной ветке.",
+                "warn",
+            )
+
+    def _gl_toggled(self, on: bool) -> None:
+        """Галочка greenlight разрешает кнопки сканера.
+
+        Как и у auto-improve, галочка сама ничего не запускает: она лишь
+        открывает кнопки. Облачная проверка вдобавок требует отдельного
+        подтверждения — про это сказано и в окне, и в журнале.
+        """
+        for name in ("btn_gl_run", "btn_gl_dry", "btn_gl_cloud"):
+            button = getattr(self, name, None)
+            if button is not None:
+                button.setEnabled(bool(on))
+        if on:
+            self.log.add(
+                "greenlight отмечен. Проверка «preflight» и «список проверок» "
+                "идут офлайн; «Проверка в облаке Revyl» отправит сценарии в "
+                "сторонний сервис — для неё спрашивается отдельное "
+                "подтверждение.",
+                "warn",
+            )
+
+    def _ai_dest(self) -> Path | None:
+        """Папка настроек для кнопок auto-improve. None — не выбрана."""
+        dest = self._dest()
+        if dest is None:
+            self._warn("Не выбрана папка настроек opencode.")
+        return dest
+
+    def _ai_key(self) -> None:
+        """Спрашивает ключ судьи и кладёт его рядом с настройками."""
+        dest = self._ai_dest()
+        if dest is None:
+            return
+        dialog = AutoImproveKeyDialog(dest, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        for line in dialog.messages:
+            self.log.add(line, "ok")
+        self._refresh()
+
+    def _ai_check(self) -> None:
+        """Проверка окружения: скрипт, git, requests, ключ. Ничего не меняет."""
+        dest = self._ai_dest()
+        if dest is None:
+            return
+
+        def job(progress):
+            data = auto_improve.check(dest)
+            lines = [auto_improve.status_text(dest)]
+            if data.get("script_ok"):
+                rubrics = auto_improve.criteria_files()
+                lines.append(
+                    f"Копия скрипта на месте, рубрик для выбора: {len(rubrics)}."
+                )
+            tags = auto_improve.seen_tags(dest)
+            lines.append(
+                "Готовых запусков в папке данных: " + (str(len(tags)) if tags else "нет")
+                + (" (" + ", ".join(tags[:5]) + ")" if tags else "")
+            )
+            errors = [] if data.get("ready") else list(data.get("missing") or [])
+            return lines, errors
+
+        self._start(job, "auto-improve")
+
+    def _ai_run(self) -> None:
+        """Запускает цикл улучшения выбранного файла.
+
+        Порядок такой: диалог с файлом, рубрикой и ограничениями, затем
+        подтверждение — и только потом цикл. Само подтверждение говорит про
+        ветку improve/<тег> и про то, что незакоммиченные правки уедут в неё.
+        """
+        dest = self._ai_dest()
+        if dest is None:
+            return
+        if not self.checks["auto-improve"].isChecked():
+            self._warn(
+                "Сначала отметь галочку «auto-improve — улучшение текста»: "
+                "по умолчанию цикл выключен."
+            )
+            return
+        dialog = AutoImproveDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        values = dialog.values()
+        answer = QMessageBox.question(
+            self,
+            "Запуск auto-improve",
+            auto_improve.BRANCH_WARNING
+            + "\n\nВетка: improve/"
+            + values["tag"]
+            + "\nФайл: "
+            + values["artifact"]
+            + "\n\nПродолжить?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        def job(progress):
+            return auto_improve.launch(
+                dest,
+                Path(values["artifact"]),
+                values["tag"],
+                criteria=values["criteria"],
+                goal=values["goal"],
+                max_iterations=values["max_iterations"],
+                candidates=values["candidates"],
+                threshold=values["threshold"],
+                eval_runs=values["eval_runs"],
+                progress=progress,
+            )
+
+        self._start(job, "auto-improve")
+
+    def _ai_history(self) -> None:
+        """Показывает ход завершённого запуска — таблицу печатает сам скрипт."""
+        dest = self._ai_dest()
+        if dest is None:
+            return
+        tags = auto_improve.seen_tags(dest)
+        default = tags[0] if tags else ""
+        tag, ok = QInputDialog.getText(
+            self,
+            "Ход auto-improve",
+            "Тег запуска (ветка improve/<тег>):"
+            + (f"\nГотовые: {', '.join(tags[:8])}" if tags else "\nГотовых запусков пока нет."),
+            text=default,
+        )
+        if not ok or not tag.strip():
+            return
+        chosen = tag.strip()
+
+        def job(progress):
+            return auto_improve.history(dest, chosen, progress=progress)
+
+        self._start(job, "auto-improve")
+
+    def _gl_dest(self) -> Path | None:
+        """Папка настроек для кнопок greenlight. None — не выбрана."""
+        dest = self._dest()
+        if dest is None:
+            self._warn("Не выбрана папка настроек opencode.")
+        return dest
+
+    def _gl_check(self) -> None:
+        """Живая проверка окружения greenlight. Ничего не меняет."""
+        dest = self._gl_dest()
+        if dest is None:
+            return
+
+        def job(progress):
+            data = greenlight.check(dest)
+            line = ("Живая проверка: " if data.get("binary_ok") else "Живая проверка не прошла: ")
+            text = greenlight.status_text(dest)
+            if data.get("ready"):
+                return [line + text], []
+            return [line + text], list(data.get("missing") or []) or [text]
+
+        self._start(job, "greenlight")
+
+    def _gl_build(self) -> None:
+        """Собирает greenlight из исходников автора. Go программа не ставит."""
+        dest = self._gl_dest()
+        if dest is None:
+            return
+        if not greenlight.find_go():
+            self._warn(greenlight.NO_GO_NOTE)
+            return
+        answer = QMessageBox.question(
+            self,
+            "Сборка greenlight",
+            "Собрать greenlight из исходников автора командой `make build` "
+            "(а без make — той же командой напрямую)?\n\n"
+            "Нужны Go 1.24 или новее и интернет: исходники автора лежат "
+            "рядом, а вот зависимости Go качает сам `go`. Сборка займёт "
+            "несколько минут.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        def job(progress):
+            return greenlight.build(dest, progress=progress)
+
+        self._start(job, "greenlight")
+
+    def _gl_run(self) -> None:
+        """Основная проверка iOS-приложения. Офлайн."""
+        dest = self._gl_dest()
+        if dest is None:
+            return
+        if not self.checks["greenlight"].isChecked():
+            self._warn(
+                "Сначала отметь галочку «greenlight — проверка iOS-приложения "
+                "перед App Store»: по умолчанию сканер выключен."
+            )
+            return
+        dialog = GreenlightScanDialog("scan", self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        values = dialog.values()
+
+        def job(progress):
+            return greenlight.scan(
+                dest, values["project"], ipa=values["ipa"], progress=progress,
+            )
+
+        self._start(job, "greenlight")
+
+    def _gl_dry(self) -> None:
+        """Список проверок без облака: verify --dry-run. Офлайн."""
+        dest = self._gl_dest()
+        if dest is None:
+            return
+        if not self.checks["greenlight"].isChecked():
+            self._warn(
+                "Сначала отметь галочку greenlight: по умолчанию сканер выключен."
+            )
+            return
+        dialog = GreenlightScanDialog("scan", self)
+        dialog.setWindowTitle("greenlight: список проверок без облака")
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        values = dialog.values()
+
+        def job(progress):
+            return greenlight.verify_dry(dest, values["project"], progress=progress)
+
+        self._start(job, "greenlight")
+
+    def _gl_cloud(self) -> None:
+        """Проверка в облаке Revyl — только по явному подтверждению.
+
+        Подтверждение спрашивается отдельно и перед каждым запуском: тут
+        единственное место, где greenlight выходит наружу, и «однажды
+        согласился» здесь не считается.
+        """
+        dest = self._gl_dest()
+        if dest is None:
+            return
+        if not self.checks["greenlight"].isChecked():
+            self._warn(
+                "Сначала отметь галочку greenlight: по умолчанию сканер выключен."
+            )
+            return
+        dialog = GreenlightScanDialog("cloud", self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        values = dialog.values()
+        answer = QMessageBox.question(
+            self, "Проверка в облаке Revyl", greenlight.CLOUD_WARNING,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            self.log.add("Облачная проверка отменена: подтверждения не было.", "warn")
+            return
+
+        def job(progress):
+            return greenlight.verify_cloud(
+                dest, values["project"], values["build_name"],
+                confirm=True, progress=progress,
+            )
+
+        self._start(job, "greenlight")
+
+    def _gl_report(self) -> None:
+        """Открывает папку с машинными отчётами. Ничего не запускает."""
+        dest = self._gl_dest()
+        if dest is None:
+            return
+        folder = greenlight.reports_dir(dest)
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+        except OSError as exc:
+            self._warn(f"Папку отчётов открыть не удалось: {exc}")
+            return
+        files = greenlight.reports_seen(dest)
+        self.log.add(
+            f"Отчёты greenlight: {len(files)} в {folder}."
+            if files else f"Отчётов пока нет — папка открыта: {folder}.",
+            "info",
+        )
+
+    def _qw_toggled(self, on: bool) -> None:
+        """Галочка qwen-review разрешает проверку изменений и спор.
+
+        Сама галочка ничего не запускает: она лишь открывает кнопки. Режим
+        «спор» — отдельный переключатель, и он тоже выключен по умолчанию.
+        """
+        for name in ("btn_qw_run", "qw_debate", "qw_rounds", "btn_qw_forget"):
+            widget = getattr(self, name, None)
+            if widget is not None:
+                widget.setEnabled(bool(on))
+        if not on:
+            box = getattr(self, "qw_debate", None)
+            if box is not None and box.isChecked():
+                box.blockSignals(True)
+                box.setChecked(False)
+                box.blockSignals(False)
+            self._qw_debate_toggled(False)
+        else:
+            self.log.add(
+                "Qwen Code — второй ревьюер отмечен. Ревьюер файлы не правит, "
+                "но код изменений уходит выбранному провайдеру. "
+                + qwen_review.COST_WARNING,
+                "warn",
+            )
+            self._qw_debate_toggled(self.qw_debate.isChecked())
+
+    def _qw_debate_toggled(self, on: bool) -> None:
+        """«Спор» — отдельный выключатель: без него раундов не будет.
+
+        Состояние галочки переводится в режим из общего списка
+        qwen_review.MODES по полю flag и запоминается в _qw_mode_id:
+        не хардкодом, а из данных.
+        """
+        self._qw_mode_id = qwen_review.mode_from_flag(bool(on))
+        button = getattr(self, "btn_qw_reply", None)
+        if button is not None:
+            enabled = bool(on) and bool(self.checks.get("qwen-review") is not None
+                                        and self.checks["qwen-review"].isChecked())
+            button.setEnabled(enabled)
+        if on:
+            self.log.add(qwen_review.DEBATE_WARNING, "warn")
+
+    def _qw_dest(self) -> Path | None:
+        """Папка настроек для кнопок ревьюера. None — не выбрана."""
+        dest = self._dest()
+        if dest is None:
+            self._warn("Не выбрана папка настроек opencode.")
+        return dest
+
+    def _qw_mask_reason(self, text: str, provider_id: str = "") -> str:
+        """Вычищает ключ из чужого текста перед показом в окне.
+
+        Причины ошибок приходят от провайдеров, и те любят цитировать
+        присланный ключ целиком. check_provider_models чистит причины
+        уже в рабочем потоке, но здесь последний рубеж: маскируется
+        всё, что попало в окно, — и причины, и заметки. Маскируется
+        ключом ИМЕННО того провайдера, чей результат рисуем: если
+        передан provider_id (проверявшийся), берём его, а не «выбранный
+        в окне» — с выбором в окне теперь работает не оно, а скилл.
+        """
+        text = str(text or "")
+        dest = self._dest()
+        provider = str(provider_id or "")
+        if not dest or not provider:
+            return text
+        try:
+            key, _source = qwen_review.provider_key_info(dest, provider)
+        except Exception:  # noqa: BLE001 — чужие настройки не должны ронять окно
+            return text
+        if not key:
+            return text
+        return qwen_review.mask_text(text, key)
+
+    # ---- проверка доступности моделей провайдера
+
+    def _qw_render_check(self, results, notes=(), from_cache: bool = False,
+                         provider_id: str = "") -> None:
+        """Рисует состояния моделей. Сети здесь нет: что передано — то и показ.
+
+        Результаты — {модель: (состояние, причина)}: ✔ отвечает, ✘ точно
+        нет, ? не знаю. Каждая причина перед показом проходит через
+        маску ключа — того провайдера, чей это результат, а не того,
+        кто сейчас выбран. Список виден, только когда есть что показывать.
+        """
+        self.qw_check_list.clear()
+        shown = 0
+        for model in sorted(results):
+            state, reason = results[model]
+            symbol = qwen_review.CHECK_SYMBOL.get(str(state), "?")
+            reason = self._qw_mask_reason(reason, provider_id)
+            line = f"{symbol} {model}" + (f" — {reason}" if reason else "")
+            item = QListWidgetItem(line)
+            # Полная строка — в подсказке: список узкий, и по ширине
+            # длинную причину он переносит, но подпись в строке может
+            # всё равно не влезть — тогда она хотя бы в подсказке.
+            item.setToolTip(line)
+            self.qw_check_list.addItem(item)
+            shown += 1
+        self.qw_check_list.setVisible(shown > 0)
+        parts = [str(note) for note in notes]
+        if from_cache:
+            parts.insert(0, f"Показан кэш проверки "
+                            f"({qwen_review.CHECK_CACHE_HOURS} ч): живая "
+                            f"проверка — по кнопке, сейчас по API не били.")
+        self.qw_check_progress.setText(" ".join(parts))
+
+    def _qw_show_cached(self) -> None:
+        """Кэш проверки (24 ч) — без сети, с пометкой «из кэша».
+
+        Читается в GUI-потоке: это чтение своего файла, не запрос к
+        провайдеру. Пока идёт живая проверка, кэш не перерисовывается,
+        чтобы не затирать живой прогресс.
+        """
+        if getattr(self, "_qw_check_worker", None) is not None:
+            return
+        dest = self._dest()
+        provider = str((qwen_review.chosen(dest) or {}).get("provider") or "")
+        results = {}
+        if dest and provider:
+            try:
+                results = qwen_review.cached_states(dest, provider)
+            except Exception:  # noqa: BLE001
+                results = {}
+        self._qw_render_check(results, from_cache=bool(results))
+
+    def _qw_check_models(self) -> None:
+        """Запускает проверку моделей в отдельном потоке.
+
+        Сам обработчик сети не касается: он только собирает выбор
+        провайдера и стартует QwenCheckModels. Кнопка гаснет до конца
+        проверки — второе нажатие не может удвоить расход токенов.
+        """
+        dest = self._qw_dest()
+        if dest is None:
+            return
+        provider = str((qwen_review.chosen(dest) or {}).get("provider") or "")
+        if not provider:
+            self._warn(
+                "Не выбран провайдер: проверять доступность нечего. "
+                "Провайдеры берутся из настроек opencode — настрой выбор "
+                "через скилл: «настрой ревьюера»."
+            )
+            return
+        self.btn_qw_check_models.setEnabled(False)
+        self.qw_check_progress.setText("Проверяю доступность моделей…")
+        self._qw_check_worker = QwenCheckModels(dest, provider, self)
+        self._qw_check_worker.progress.connect(self._qw_check_models_progress)
+        self._qw_check_worker.finished.connect(self._qw_check_models_done)
+        self._qw_check_worker.start()
+
+    def _qw_check_models_progress(self, text: str) -> None:
+        """Прогресс из рабочего потока: «Проверено X из Y»."""
+        self.qw_check_progress.setText(text)
+
+    def _qw_check_models_done(self) -> None:
+        """Проверка кончилась: включаем кнопку и рисуем результат."""
+        self.btn_qw_check_models.setEnabled(True)
+        worker = self._qw_check_worker
+        self._qw_check_worker = None
+        provider_id = str(getattr(worker, "_provider", "") if worker else "")
+        result = worker.result if worker is not None else None
+        if isinstance(result, Exception):
+            self.qw_check_progress.setText(
+                "Проверка прервалась: "
+                + self._qw_mask_reason(str(result), provider_id))
+            return
+        results, notes = result
+        notes = [self._qw_mask_reason(note, provider_id) for note in notes]
+        # Рисуем маской того провайдера, которого проверял воркер: у него
+        # берём и provider_id, чтобы маска была чужого не касалась.
+        self._qw_render_check(
+            results, notes, provider_id=provider_id)
+
+    def _qw_run(self) -> None:
+        """Проверяет изменения вторым ревьюером. Только чтение."""
+        dest = self._qw_dest()
+        if dest is None:
+            return
+        if not self.checks["qwen-review"].isChecked():
+            self._warn(
+                "Сначала отметь галочку «Qwen Code — второй ревьюер»: "
+                "по умолчанию ревьюер выключен."
+            )
+            return
+        dialog = QwenReviewDialog(self)
+        # Начальное значение комбо режима — режим вкладки: галочка «спор»
+        # включена → спор, снята → одна проверка. Человек поправит сам,
+        # если ему нужно тройное ревью.
+        _default_mode = qwen_review.mode_from_flag(self.qw_debate.isChecked())
+        _i = dialog.mode.findData(_default_mode)
+        if _i >= 0:
+            dialog.mode.setCurrentIndex(_i)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        values = dialog.values()
+        rounds = int(self.qw_rounds.value())
+        mode = str(values.get("mode") or qwen_review.MODE_ONCE)
+        if mode == qwen_review.MODE_DEBATE:
+            answer = QMessageBox.question(
+                self, "Ревьюер и спор",
+                qwen_review.COST_WARNING + "\n\n" + qwen_review.DEBATE_WARNING
+                + f"\n\nРаундов разрешено: {rounds}. Продолжить?",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
+        if mode == qwen_review.MODE_VOTE:
+            # Тройное ревью: три модели из панели, один diff, свод с
+            # метками «кого заметили двое/трое». Пустая панель — отказ
+            # словами, а не пустой запуск: ревью не тратится ни секунды.
+            def job(progress):
+                return qwen_review.review_vote(
+                    dest, Path(values["project"]), values["base"],
+                    progress=progress,
+                )
+        else:
+            def job(progress):
+                return qwen_review.review(
+                    dest, Path(values["project"]), values["base"],
+                    rounds=rounds, progress=progress,
+                )
+
+        self._start(job, "Qwen Code")
+
+    def _qw_reply(self) -> None:
+        """Следующий раунд спора: возражение уходит ревьюеру."""
+        dest = self._qw_dest()
+        if dest is None:
+            return
+        if not (self.checks["qwen-review"].isChecked()
+                and qwen_review.mode_from_flag(self.qw_debate.isChecked())
+                == qwen_review.MODE_DEBATE):
+            self._warn(
+                "Спор выключен: отметь галочку qwen-review и переключатель "
+                "«спор», иначе раундов не будет."
+            )
+            return
+        state = qwen_review.debate_state(dest)
+        if not state.get("transcript"):
+            self._warn(
+                "Спора пока не было: сначала нажми «Проверить изменения…» — "
+                "первое ревью и есть первый раунд."
+            )
+            return
+        limit = int(self.qw_rounds.value())
+        dialog = QwenReplyDialog(
+            int(state.get("round") or 0) + 1, limit, str(state.get("project") or ""), self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        reply = dialog.values()
+        project = str(state.get("project") or "")
+        base = str(state.get("base") or "")
+
+        def job(progress):
+            return qwen_review.review(
+                dest, Path(project), base, reply=reply, rounds=limit,
+                progress=progress,
+            )
+
+        self._start(job, "Qwen Code")
+
+    def _qw_forget(self) -> None:
+        """Забывает ход спора: счёт раундов начнётся заново."""
+        dest = self._qw_dest()
+        if dest is None:
+            return
+        if not self.checks["qwen-review"].isChecked():
+            self._warn("Сначала отметь галочку «Qwen Code — второй ревьюер».")
+            return
+
+        def job(progress):
+            return qwen_review.clear_debate(dest)
+
+        self._start(job, "Qwen Code")
+
+    def _qw_setup(self) -> None:
+        """Окно фраз-триггеров: что сказать агенту для настройки ревьюера.
+
+        Сама настройка — скилл qwen-review-setup за пределами окна. Здесь
+        только подсказка: фразы, которые человек вставляет агенту.
+        """
+        dialog = QwenSetupDialog(self)
+        dialog.exec()
+
+    def _px_confirm(self) -> bool:
+        """Спрашивает согласие на сжатие запросов картинками.
+
+        Галочка снята по умолчанию, поэтому согласие спрашивается и при
+        её включении, и перед каждым запуском прокси: один раз прочитанное
+        предупреждение не должно превращаться в «я когда-то согласился».
+        """
+        dialog = PxpipeWarningDialog(self)
+        return dialog.exec() == QDialog.DialogCode.Accepted
+
+    def _px_toggled(self, on: bool) -> None:
+        """Галочка pxpipe включается только после согласия.
+
+        Выключению согласие не нужно: отказаться должно быть всегда можно.
+        """
+        if not on:
+            return
+        if self._px_confirm():
+            return
+        box = self.checks.get("pxpipe")
+        if box is not None:
+            box.blockSignals(True)
+            box.setChecked(False)
+            box.blockSignals(False)
+        self.log.add("pxpipe остался выключен: согласие не дано.", "warn")
+
+    def _px_dest(self) -> Path | None:
+        """Папка настроек для кнопок pxpipe. None — не выбрана."""
+        dest = self._dest()
+        if dest is None:
+            self._warn("Не выбрана папка настроек opencode.")
+        return dest
+
+    def _px_run(self) -> None:
+        """Поднимает прокси pxpipe. В настройки opencode не пишет."""
+        dest = self._px_dest()
+        if dest is None or not self._px_confirm():
+            return
+        source = str(self.pxpipe_source.currentData() or "")
+
+        def job(progress):
+            return pxpipe.start(dest, provider=source, progress=progress)
+
+        self._start(job, "pxpipe")
+
+    def _px_stop(self) -> None:
+        """Останавливает прокси, который запустила программа."""
+        dest = self._px_dest()
+        if dest is None:
+            return
+
+        def job(progress):
+            return pxpipe.stop(dest, progress=progress)
+
+        self._start(job, "pxpipe")
+
+    def _px_check(self) -> None:
+        """Живая проверка прокси: отвечает ли панель. Ничего не меняет."""
+        dest = self._px_dest()
+        if dest is None:
+            return
+
+        def job(progress):
+            ok, note = pxpipe.dashboard_ok()
+            line = ("Живая проверка: " if ok else "Живая проверка не прошла: ") + note
+            if not ok:
+                return [line], [note]
+            return [line, pxpipe.status_text(dest)], []
+
+        self._start(job, "pxpipe")
+
+    def _px_stats(self) -> None:
+        """Числа прокси из его журнала. Ничего не пишет."""
+        dest = self._px_dest()
+        if dest is None:
+            return
+
+        def job(progress):
+            return pxpipe.stats(dest, progress=progress)
+
+        self._start(job, "pxpipe")
 
     def _remove(self) -> None:
         dest = self._dest()
@@ -3564,7 +7096,7 @@ class ProgramsTab(ScrollPage):
                          kind="dim", wrap=True)
             )
 
-        buttons = ui.row()
+        buttons = ui.flow_row()
         row: dict[str, QPushButton] = {}
         for code, label, hint in card.buttons():
             btn = QPushButton(label)
@@ -3595,8 +7127,7 @@ class ProgramsTab(ScrollPage):
                 btn.clicked.connect(
                     lambda _=False, u=card.install.official_url: self._open_page(u))
             row[code] = btn
-            buttons.layout().addWidget(btn)
-        buttons.layout().addStretch(1)
+            buttons.add(btn)
         layout.addWidget(buttons)
 
         # Строка результата: сюда пишется ход установки и итог. Пустая
@@ -4168,7 +7699,7 @@ class HelpTab(ScrollPage):
             "— команда /голос (голосовой ввод);\n"
             "— мост ПК (файлы, скриншоты, список программ);\n"
             "— мост памяти NCP (7 инструментов);\n"
-            "— 12 агентов (поиск, план, код, проверка и другие);\n"
+            "— 13 агентов (поиск, план, код, проверка и другие);\n"
             "— обход блокировок (запуск OpenCode через прокси)."
         ))
 
@@ -4344,18 +7875,78 @@ class ThemesTab(ScrollPage):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, splash=None) -> None:
         super().__init__()
+        # Окно загрузки живёт до конца сборки окна, поэтому передаём его
+        # сюда: иначе надпись в нём замирает на весь долгий ход работы.
+        # Шаг — это ровно то, что происходит сейчас, а не общее «загружаем».
+        self._splash_step = (lambda text, percent=0: splash.say(text, percent)) \
+            if splash is not None else (lambda text, percent=0: None)
         self.setWindowTitle("Управление базой")
+        # Значок рисуется сам (ui.app_icon): файлов с картинками в
+        # программе нет, а значок нужен сразу трём местам — заголовку
+        # окна, трею и уведомлениям Windows.
+        self.tray_quitting = False
+        self.setWindowIcon(ui.app_icon())
         self.setMinimumSize(720, 560)
-        self.resize(880, 900)
+        # Окно — по экрану, а не по заветной цифре. Раньше стояло
+        # resize(880, 900), и на экране 1280x720 окно выходило 737 px:
+        # Windows срезала низ, и нижние кнопки вкладки уезжали за
+        # край экрана — вместе с ними и жалоба «интерфейс не
+        # помещается». Теперь размер берётся от доступной области
+        # экрана (без панели задач), а лишнее содержимое вкладок
+        # уезжает в прокрутку — её даёт ScrollPage.
+        _screen = QApplication.primaryScreen()
+        _avail = _screen.availableGeometry() if _screen is not None else None
+        if _avail is not None:
+            # Минимум тоже от экрана: на узком экране заявленные
+            # 720 px сами оказались бы больше экрана, и окно снова
+            # вылезло бы за край — ровно то, от чего чиним.
+            self.setMinimumSize(
+                min(720, max(360, _avail.width() - 20)),
+                min(560, max(320, _avail.height() - 20)),
+            )
+            self.resize(
+                min(880, max(self.minimumWidth(), _avail.width() - 60)),
+                min(900, max(self.minimumHeight(), _avail.height() - 60)),
+            )
+        else:
+            self.resize(880, 900)
+        # Значок в трее и сворачивание вместо закрытия. Если система не
+        # даёт трей (бывает в самопроверке и на некоторых сборках
+        # Windows), программа работает как раньше: крестик закрывает.
+        self.tray = None
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            self.tray = ui.TrayIcon(self, self)
+            self.tray.show()
 
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(10)
-        layout.addWidget(ui.label("Управление базой", kind="title"))
+        # Шапка: название слева, кнопка трея справа. Кнопка нужна
+        # потому, что крестик закрывает программу как обычно, а трей
+        # стал отдельным действием — раньше он был спрятан вместо
+        # закрытия, и выключить программу было нечем.
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        head.addWidget(ui.label("Управление базой", kind="title"))
+        head.addStretch(1)
+        self.tray_button = QPushButton("Свернуть в трей")
+        self.tray_button.clicked.connect(self._on_tray_clicked)
+        self.tray_button.setToolTip(
+            "Скрыть окно в трей. Программа продолжит работать и придёт "
+            "уведомлением, когда проверка закончится. Закрыть программу "
+            "можно крестиком или через значок в трее."
+        )
+        if self.tray is None:
+            self.tray_button.setEnabled(False)
+            self.tray_button.setToolTip(
+                "Система не даёт трей — окно можно только закрыть."
+            )
+        head.addWidget(self.tray_button)
+        layout.addLayout(head)
         layout.addWidget(
             ui.label(
                 "База — это папка с текстовыми файлами памяти, правил и скиллов.",
@@ -4365,11 +7956,24 @@ class MainWindow(QMainWindow):
 
         tabs = QTabWidget()
         self.tabs = tabs
+        # Шаги загрузки идут прямо здесь, между сборкой вкладок.
+        # Раньше окно загрузки писало «Читаем настройки и список
+        # мостов…» и молчало все десять секунд, пока собиралось
+        # главное окно: на записи экрана это было видно прямо.
+        # Шаг не перескакивает через работу — он и есть описание того,
+        # что происходит сейчас.
+        step = getattr(self, "_splash_step", None)
+        step("Собираем вкладки программы…", 50)
         self.create_tab = CreateTab()
+        step("Вкладка «Новая база»…", 54)
         self.import_tab = ImportTab()
+        step("Вкладка «Подключить»…", 60)
         self.bridge_tab = BridgeTab()
+        step("Вкладка «Мост NCP»…", 66)
         self.caps_tab = CapsTab()
+        step("Вкладка «opencode»: список мостов…", 74)
         self.programs_tab = ProgramsTab()
+        step("Вкладка «Программы»: карточки установленного…", 82)
         self.themes_tab = ThemesTab()
 
         # Импорт вкладки «Обновление» — здесь, а не вверху файла. Вкладка
@@ -4381,35 +7985,214 @@ class MainWindow(QMainWindow):
         # целиком, и круг разрывается.
         from update_tab import UpdateTab  # noqa: PLC0415
 
+        step("Вкладка «Обновление»…", 88)
         self.update_tab = UpdateTab()
 
+        step("Вкладка «Инструкция»…", 92)
         self.help_tab = HelpTab()
-        tabs.addTab(self.create_tab, "Создать новую базу")
-        tabs.addTab(self.import_tab, "Подключить существующую")
-        tabs.addTab(self.bridge_tab, "Мост NCP — создать")
+        step("Расставляем вкладки…", 96)
+        # Подписи вкладок короткие не для красоты: восемь
+        # длинных русских подписей занимали 861 пиксель, а полоса
+        # вкладок при окне 880 показывает около 830 — последние
+        # вкладки уезжали за правый край, и до них можно было дойти
+        # только стрелками у края полосы.
+        tabs.addTab(self.create_tab, "Новая база")
+        tabs.addTab(self.import_tab, "Подключить")
+        tabs.addTab(self.bridge_tab, "Мост NCP")
         tabs.addTab(self.caps_tab, "opencode")
         tabs.addTab(self.programs_tab, "Программы")
         tabs.addTab(self.themes_tab, "Темы")
         tabs.addTab(self.update_tab, "Обновление")
         tabs.addTab(self.help_tab, "Инструкция")
-        layout.addWidget(tabs, 1)
+        self.tabs = tabs
+
+        # ---- боковое меню разделов
+        #
+        # Полоса вкладок сверху кончится: восемь подписей занимают
+        # 861 пиксель, а полоса при окне 880 показывает около 830, и
+        # последние вкладки уезжают за край. Меню растёт вниз и не
+        # кончается.
+        #
+        # Пока полоса вкладок остаётся на месте, меню работает как
+        # указатель на неё и переключает те же страницы. Так старый
+        # код вкладок остаётся рабочим целиком, а меню можно снять
+        # одной строкой, если не пригодится.
+        self.nav_buttons: list = []
+        sidebar = QFrame()
+        sidebar.setObjectName("sidebar")
+        sidebar.setFixedWidth(190)
+        side = QVBoxLayout(sidebar)
+        side.setContentsMargins(10, 14, 10, 12)
+        side.setSpacing(4)
+        logo = ui.label("◈  Управление\n     базой", kind="title")
+        side.addWidget(logo)
+        side.addSpacing(10)
+        for index in range(tabs.count()):
+            button = QPushButton(tabs.tabText(index))
+            button.setObjectName("nav")
+            button.setCheckable(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setMinimumHeight(34)
+            button.clicked.connect(
+                lambda _checked=False, i=index: self._open_section(tabs, i))
+            side.addWidget(button)
+            self.nav_buttons.append(button)
+        side.addStretch(1)
+        self.nav_status = ui.label("", kind="dim", wrap=True)
+        side.addWidget(self.nav_status)
+        # Сайдбар и полоса вкладок стоят рядом, поэтому оба едут в
+        # общий горизонтальный ряд. Если их положить прямо в верхний
+        # вертикальный макет, меню встаёт НАД вкладками, а не сбоку —
+        # так и вышло с первой попытки, увидел на снимке.
+        #
+        # В ряд кладём сразу, без промежуточного добавления в layout:
+        # removeWidget отвязывает виджет, и до следующего addLayout он
+        # остаётся без родителя, а на сборке мусора удаляется. Кнопки
+        # меню после этого оказывались удалёнными объектами.
+        _row = QHBoxLayout()
+        _row.setContentsMargins(0, 0, 0, 0)
+        _row.setSpacing(0)
+        _row.addWidget(sidebar)
+        _row.addWidget(tabs, 1)
+        layout.addLayout(_row, 1)
+        # Полосу вкладок убираем, сам QTabWidget оставляем. Он теперь
+        # просто хранилище страниц: всё в программе ходит к разделам
+        # через window.tabs, и замена на QStackedWidget сломала бы
+        # сорок с лишним проверок, которые смотрят в список вкладок
+        # напрямую. Видимую часть навигации делает меню сбоку.
+        tabs.tabBar().setVisible(False)
+        tabs.setUsesScrollButtons(False)
+        # Подсветка едет за текущим разделом: кто бы ни переключил
+        # раздел — из меню или программно.
+        tabs.currentChanged.connect(self._sync_nav)
+        self._sync_nav(tabs.currentIndex())
 
         self.create_tab.base_ready.connect(self._suggest_import)
         self.create_tab.base_ready.connect(self._suggest_bridge)
 
-    def closeEvent(self, event) -> None:  # noqa: N802 — имя из Qt
-        """Окно закрывает человек, а поток скачивания живёт отдельно.
+    def _open_section(self, tabs, index: int) -> None:
+        """Открыть раздел из меню.
 
-        Здесь выставляется флаг отмены, а поток сам доходит до безопасной
-        точки и убирает недокачанный файл. Принудительная остановка
-        потока здесь не годилась бы: она прервала бы запись посреди
-        файла, и следующий запуск принял бы его за годный архив — он
-        лежит во временной папке под тем же именем.
+        Подсветку ставим сами, а не ждём currentChanged. Клик по
+        уже открытому разделу индекс не меняет, сигнал не приходит, а
+        кнопка с checkable при этом снимает с себя отметку — раздел
+        оставался открытым и без подсветки, и меню выглядело сломанным.
+        """
+        tabs.setCurrentIndex(index)
+        self._sync_nav(index)
+
+    def _sync_nav(self, index: int) -> None:
+        """Отметить в меню тот раздел, что открыт в полосе вкладок.
+
+        Подпись снизу показывает, какая вкладка открыта. Это не
+        украшение: меню и полоса — два указателя на одно, и без
+        отметки нельзя было понять, где вы находитесь, если раздел
+        переключили стрелками у края полосы.
+        """
+        for i, button in enumerate(getattr(self, "nav_buttons", []) or []):
+            button.setChecked(i == index)
+        buttons = getattr(self, "nav_buttons", []) or []
+        if 0 <= index < len(buttons):
+            status = getattr(self, "nav_status", None)
+            if status is not None:
+                status.setText(buttons[index].text())
+
+    def closeEvent(self, event) -> None:  # noqa: N802 — имя из Qt
+        """Крестик закрывает программу, как закрывал раньше.
+
+        Сначала было сделано наоборот — крестик сворачивал в трей. Не
+        вышло: закрыть программу было нечем, человек жал крестик раз
+        за разом и не мог её выключить. Трей остался, но теперь это
+        отдельное действие — кнопка «Свернуть в трей», а не замена
+        закрытию.
+
+        Здесь же выставляется флаг отмены фоновой загрузки, а поток сам
+        доходит до безопасной точки и убирает недокачанный файл.
+        Принудительная остановка потока здесь не годилась бы: она
+        прервала бы запись посреди файла, и следующий запуск принял бы
+        его за годный архив — он лежит во временной папке под тем же
+        именем.
         """
         tab = getattr(self, "update_tab", None)
         if tab is not None and hasattr(tab, "stop"):
             tab.stop()
+        # Проверка моделей живёт в отдельном потоке: убивать её на
+        # середине нельзя — внутри платные запросы, а QThread, убитый
+        # вместе с окном, роняет процесс («Destroyed while thread is
+        # still running»). Отвязываем её сигналы от умирающего окна и
+        # откладываем выход: воркер доначистит кэш и сам завершит
+        # программу своим finished. Значок трея (ниже) остаётся
+        # запасным выходом, если проверка затянется.
+        worker = getattr(self, "_qw_check_worker", None)
+        if worker is not None and worker.isRunning():
+            try:
+                worker.progress.disconnect(self._qw_check_models_progress)
+                worker.finished.disconnect(self._qw_check_models_done)
+            except TypeError:
+                pass
+            worker.setParent(None)
+            # Держим ссылку сами: без неё Python соберёт объект прямо
+            # под работающим потоком.
+            _QW_DETACHED_WORKERS.append(worker)
+            worker.finished.connect(_qw_detached_worker_finished)
+            self._qw_check_worker = None
+            self._qw_quit_pending = True
         super().closeEvent(event)
+        # Значок трея намеренно НЕ прячем: он и есть запасной выход.
+        # Прятали — и получалось ровно то, на что жаловались: закрыли
+        # окно, значок исчез, а программа из-за занятого потока не
+        # завершилась. На экране не осталось ничего, и закрыть её было
+        # уже нечем. Оставляем значок на месте всегда, кроме настоящего
+        # выхода через «Закрыть программу» в его меню.
+        if self.tray is not None and not self.tray_quitting:
+            self.tray.show()
+        # Закрытие последнего окна намеренно не завершает программу
+        # (так мосты переживают закрытие вкладки), поэтому выход
+        # вызываем сами. Иначе крестик закрывал бы окно, а процесс
+        # оставался бы жить в фоне без единого окна.
+        app = QApplication.instance()
+        if app is not None and not getattr(self, "_qw_quit_pending", False):
+            app.quit()
+
+    def minimize_to_tray(self) -> None:
+        """Свернуть окно в трей — по кнопке, а не вместо закрытия."""
+        if self.tray is None:
+            self.showMinimized()
+            return
+        self.tray.hide_to_tray()
+
+    def _on_tray_clicked(self) -> None:
+        """Кнопка «Свернуть в трей» в шапке окна."""
+        self.minimize_to_tray()
+
+    def notify(self, title: str, text: str = "") -> None:
+        """Уведомление Windows через значок в трее.
+
+        Фоновая работа идёт минуту-другую, а окно человек в это время
+        может свернуть — сообщение о том, что всё готово, должно прийти
+        само. Если трея нет (например, в самопроверке), уведомление
+        просто ничего не делает.
+        """
+        tray = getattr(self, "tray", None)
+        if tray is None:
+            return
+        from PyQt6.QtWidgets import QSystemTrayIcon
+
+        tray.showMessage(
+            title, text or title,
+            QSystemTrayIcon.MessageIcon.Information, 6000,
+        )
+
+    def refresh_now(self) -> None:
+        """Обновить состояние из меню трея."""
+        for tab in (getattr(self, "caps_tab", None),
+                    getattr(self, "programs_tab", None)):
+            refresh = getattr(tab, "refresh", None)
+            if callable(refresh):
+                try:
+                    refresh()
+                except Exception:  # noqa: BLE001 — обновление не должно ронять программу
+                    pass
 
     def _suggest_bridge(self, path: str) -> None:
         """После создания базы предлагает завести мост NCP.
@@ -4659,26 +8442,108 @@ def claim_single_instance() -> bool:
     return True
 
 
+def _set_taskbar_name(name: str) -> None:
+    """Назовить программу в панели задач и в списке Alt+Tab.
+
+    Зачем. По умолчанию Windows показывает там имя запущенного
+    интерпретатора, и в списке окон висело `Python` — выглядело так,
+    будто открыт чужой скрипт. Имя программы задаётся один раз на
+    процесс, до появления любых окон.
+
+    На Windows это идентификатор приложения (AppUserModelID); без него
+    панель задач группирует окно по имени файла, то есть по pythonw.
+    На других системах функция не нужна и не вызывается.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(name)
+    except Exception:
+        # Не fatally: без этого программа работает, просто в панели
+        # задач остаётся имя интерпретатора.
+        pass
+
+
 def run() -> int:
     app = QApplication(sys.argv)
-    app.setApplicationName("Управление базой")
+    # Имя в панели задач — как просил человек: OpenCodeBase, а не
+    # Python. Заголовок окна при этом остаётся человеческим.
+    _set_taskbar_name("OpenCodeBase")
+    app.setApplicationName("OpenCodeBase")
+    app.setApplicationDisplayName("OpenCodeBase")
+    app.setOrganizationName("OpenCodeBase")
     ui.apply_dark_theme(app)
+    # Крестик закрывает программу, поэтому идти по умолчанию нельзя:
+    # закрыли окно с мостами — мосты должны остаться работать.
+    app.setQuitOnLastWindowClosed(False)
 
     if not claim_single_instance():
         return 0
 
+    # Окно загрузки показываем сразу, до тяжёлой сборки главного окна:
+    # она занимает секунды, и без этого человек видит только молчание.
+    splash = ui.SplashWindow()
+    splash.show()
+    splash.say("Запуск программы…", 5)
+    app.processEvents()
+
+    # Импорты здесь, а не в самом блоке ниже. Стоило поставить их там —
+    # и `core` становился локальной переменной на всю функцию: обращение
+    # к core.first_run_done() выше падало с UnboundLocalError, программа
+    # умирала за 0.3 секунды, а лаунчер показывал эту ошибку в консоли.
+    # Выглядело при этом как «программа зависла».
+    import core
+    import mcp_registry
+    import opencode_caps
+
     if not core.first_run_done():
+        splash.say("Первый запуск: готовим папку с базами…", 20)
+        app.processEvents()
         folder = core.ensure_data_bases_folder()
+        splash.hide()
         from ui_first_run import FirstRunDialog
 
         dlg = FirstRunDialog(folder)
         dlg.exec()
         core.mark_first_run_done()
+        splash.show()
+
+    splash.say("Читаем настройки и список мостов…", 45)
+    app.processEvents()
+
+    # Старые блоки мостов запускают консоль и открывают окна cmd.
+    # Переписываем их на запуск без окна, пока окно загрузки видно.
+    quiet_notes: list[str] = []
+    try:
+        _base = core.current_base("opencode")
+        if _base is not None:
+            quiet_notes, _ = mcp_registry.quiet_migrate(
+                opencode_caps.opencode_dir(),
+                mcp_registry.load_servers(_base),
+            )
+    except Exception:
+        # Перепись настроек не обязана быть частью запуска: если она
+        # не вышла, программа всё равно должна открыться.
+        quiet_notes = []
 
     global _SINGLE_WINDOW
-    window = MainWindow()
+    window = MainWindow(splash=splash)
     _SINGLE_WINDOW = window
+    # Показ окна идёт ДО прокрутки очереди событий, и это не порядок
+    # ради порядка. Проверки вкладки opencode отложены на таймер, а
+    # таймер срабатывает на первом же processEvents. Если крутить очередь
+    # раньше, отложенные проверки успевают отработать до показа окна, и
+    # весь выигрыш пропадает: измерено 9.4 с против 2.9 с.
     window.show()
+    splash.say("Готово", 100)
+    app.processEvents()
+    splash.hide()
+    if quiet_notes:
+        # Говорим сразу и один раз: окно уже на экране, а отсчёт
+        # уходит в трей, и человек узнает об изменениях поздно.
+        window.notify("Мосты переписаны", "\n".join(quiet_notes))
     return app.exec()
 
 

@@ -163,11 +163,16 @@ def _run_installer(progress=None) -> tuple[int, str]:
     # бы на любой машине Windows.
     env = dict(os.environ)
     env["UV_PYTHON_PREFERENCE"] = "only-managed"
+    import core  # noqa: PLC0415 — локально, как принято в этом файле
+
     try:
         done = subprocess.run(
             argv, capture_output=True, text=True,
             timeout=INSTALL_TIMEOUT, encoding="utf-8", errors="replace",
             env=env,
+            # uvx на Windows — .cmd, и без этого флага он поднимает
+            # чёрное окно консоли на всю установку аддона.
+            startupinfo=core.hidden_startupinfo(),
         )
     except subprocess.TimeoutExpired:
         return 124, f"команда не закончилась за {INSTALL_TIMEOUT} секунд"

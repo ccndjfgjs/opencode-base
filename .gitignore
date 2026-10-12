@@ -91,3 +91,7 @@ tools/antiblock/xray.exe
 tools/antiblock/public_socks5.local.txt
 tools/antiblock/nodes.local.json
 tools/antiblock/*.bak-*.txt
+
+# Снимки страниц, которые мост Playwright оставляет у себя: это работа
+# инструмента, а не программы. На другой машине снимки будут другими.
+.playwright-mcp/

@@ -65,7 +65,8 @@ def _run_install(argv: list[str], *, progress, already_markers, word: str) -> In
     try:
         done = subprocess.run(argv, capture_output=True, text=True,
                              timeout=TIMEOUT_SECONDS, encoding="utf-8",
-                             errors="replace")
+                             errors="replace",
+                             startupinfo=_hidden_startupinfo())
     except subprocess.TimeoutExpired:
         return InstallResult(error=f"winget не закончил за {TIMEOUT_SECONDS} секунд")
     except OSError as exc:
@@ -121,6 +122,21 @@ class InstallResult:
         if not self.tail:
             return f"winget закончил с кодом {self.code}, но ничего не написал"
         return f"winget закончил с кодом {self.code}: {self.tail}"
+
+
+def _hidden_startupinfo():
+    """Окно консоли не показывать. Подробности — в core.hidden_startupinfo.
+
+    Отдельная обёртка потому, что модуль проверяют и зовут без окна
+    программы: тогда core может быть недоступен, и молча запустить
+    winget с видимым окном хуже, чем не спрятать вовсе.
+    """
+    try:
+        from core import hidden_startupinfo
+
+        return hidden_startupinfo()
+    except Exception:
+        return None
 
 
 def winget_path() -> str:
@@ -392,7 +408,8 @@ def remote_state(winget_id: str) -> RemoteState:
     try:
         done = subprocess.run(
             build_list_command(winget_id), capture_output=True, text=True,
-            timeout=READ_TIMEOUT_SECONDS, encoding="utf-8", errors="replace")
+            timeout=READ_TIMEOUT_SECONDS, encoding="utf-8", errors="replace",
+            startupinfo=_hidden_startupinfo())
     except (OSError, subprocess.SubprocessError) as exc:
         return RemoteState(note=f"winget не ответил: {exc}")
     out = (done.stdout or "") + (done.stderr or "")
@@ -481,7 +498,8 @@ def catalog_versions(winget_id: str) -> list[str]:
         done = subprocess.run(
             build_show_versions_command(winget_id), capture_output=True,
             text=True, timeout=READ_TIMEOUT_SECONDS, encoding="utf-8",
-            errors="replace")
+            errors="replace",
+            startupinfo=_hidden_startupinfo())
     except (OSError, subprocess.SubprocessError):
         return []
     return _version_tokens((done.stdout or "") + (done.stderr or ""))

@@ -28,6 +28,9 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+
+from core import hidden_startupinfo  # noqa: E402 — путь задаётся строкой выше
 SERVER_DIR = HERE.parent.parent / "thirdparty" / "android-mcp-server"
 ENTRY = SERVER_DIR / "server.py"
 VENV_PYTHON = SERVER_DIR / ".venv" / "Scripts" / "python.exe"
@@ -82,6 +85,7 @@ def main() -> int:
             [str(python), str(ENTRY)],
             cwd=str(SERVER_DIR), env=env,
             stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr,
+            startupinfo=hidden_startupinfo(),
         )
     except OSError as exc:
         say(f"мост не запустился: {exc}")
