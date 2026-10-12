@@ -5174,7 +5174,7 @@ def main() -> int:
                 [sys.executable, str(_db_launcher)],
                 env=dict(_os.environ, PATH="нет-такой-папки",
                          OPENCODE_CONFIG_DIR=str(_db_tmp)),
-                capture_output=True, text=True, timeout=60)
+                capture_output=True, text=True, errors="replace", timeout=60)
             _db_npx_last = _db_npx.stderr.strip().splitlines()[-1] if _db_npx.stderr.strip() else ""
             check(_db_npx.returncode != 0 and not _db_npx.stdout.strip(),
                   "без npx лаунчер уходит с ошибкой и молчит в stdout")
@@ -5969,7 +5969,7 @@ def main() -> int:
         _or_cli_env["OPENCODE_CONFIG_DIR"] = str(_or_dest)
         _or_help = _or_sp.run(
             [sys.executable, str(_or_cli), "--help"],
-            capture_output=True, text=True, encoding="utf-8", env=_or_cli_env,
+            capture_output=True, text=True, errors="replace", encoding="utf-8", env=_or_cli_env,
             timeout=60)
         check(_or_help.returncode == 0
               and all(word in _or_help.stdout
@@ -5978,7 +5978,7 @@ def main() -> int:
               f"{_or_help.stdout.strip()[:60]}")
         _or_unknown = _or_sp.run(
             [sys.executable, str(_or_cli), "абракадабра"],
-            capture_output=True, text=True, encoding="utf-8", env=_or_cli_env,
+            capture_output=True, text=True, errors="replace", encoding="utf-8", env=_or_cli_env,
             timeout=60)
         check(_or_unknown.returncode == 2
               and "Не знаю такой команды" in _or_unknown.stdout,
@@ -6585,8 +6585,9 @@ def main() -> int:
         # строгом декодировании байт 0xca роняет ВЕСЬ селфтест на строке
         # чтения stderr. Зависит от локали машины: там, где байт случайно
         # валиден для utf-8, падения нет, и поломка выглядит случайной.
-        # Тот же приём в browsers.py:573. Остальные вызовы text=True в этом
-        # файле без errors — известный долг.
+        # Тот же приём в browsers.py:573. Все остальные вызовы text=True в
+        # этом файле тоже с errors="replace" — 12.10.2026 приведены к одному
+        # виду, чтобы от локли машины зависело только содержание вывода.
         _lm_env = dict(_lm_os.environ)
         _lm_env["OPENCODE_CONFIG_DIR"] = str(_lm_dest)
         _lm_live, _lm_live_port = _lm_api()
@@ -6662,7 +6663,7 @@ def main() -> int:
         _lm_cli_env["OPENCODE_CONFIG_DIR"] = str(_lm_dest)
         _lm_help = _lm_sp.run(
             [sys.executable, str(_lm_cli), "--help"],
-            capture_output=True, text=True, encoding="utf-8",
+            capture_output=True, text=True, errors="replace", encoding="utf-8",
             env=_lm_cli_env, timeout=90)
         check(_lm_help.returncode == 0
               and all(word in _lm_help.stdout
@@ -6671,7 +6672,7 @@ def main() -> int:
               f"{_lm_help.stdout.strip()[:60]}")
         _lm_unknown_cli = _lm_sp.run(
             [sys.executable, str(_lm_cli), "абракадабра"],
-            capture_output=True, text=True, encoding="utf-8",
+            capture_output=True, text=True, errors="replace", encoding="utf-8",
             env=_lm_cli_env, timeout=90)
         check(_lm_unknown_cli.returncode == 2
               and "Не знаю такой команды" in _lm_unknown_cli.stdout,
@@ -6679,7 +6680,7 @@ def main() -> int:
               f"{_lm_unknown_cli.stdout.strip()[:60]}")
         _lm_token_cli = _lm_sp.run(
             [sys.executable, str(_lm_cli), "token"],
-            capture_output=True, text=True, encoding="utf-8",
+            capture_output=True, text=True, errors="replace", encoding="utf-8",
             env=_lm_cli_env, timeout=90)
         check(_lm_token_cli.returncode == 0
               and "Есть токен: да" in _lm_token_cli.stdout
@@ -6692,7 +6693,7 @@ def main() -> int:
         _lm_cli_env["LMARENA_PORT"] = str(_lm_cli_port)
         _lm_status_cli = _lm_sp.run(
             [sys.executable, str(_lm_cli), "status"],
-            capture_output=True, text=True, encoding="utf-8",
+            capture_output=True, text=True, errors="replace", encoding="utf-8",
             env=_lm_cli_env, timeout=90)
         # Отдельный процесс подмен не видит: ему нужно настоящее окружение
         # моста (.venv), а не заглушки. Без развёрнутого моста это честное
@@ -6705,7 +6706,7 @@ def main() -> int:
         _lm_cli_env["LMARENA_PORT"] = str(_lm_free_port)
         _lm_status_cli2 = _lm_sp.run(
             [sys.executable, str(_lm_cli), "status"],
-            capture_output=True, text=True, encoding="utf-8",
+            capture_output=True, text=True, errors="replace", encoding="utf-8",
             env=_lm_cli_env, timeout=90)
         check(_lm_status_cli2.returncode == 1,
               f"status на молчащем мосте — код 1: "
@@ -7041,13 +7042,13 @@ def main() -> int:
         _tk_env["OPENCODE_CONFIG_DIR"] = str(_tk_dest)
         _tk_run = _tk_sp.run(
             [sys.executable, str(_tk_cli), "status"], capture_output=True,
-            text=True, encoding="utf-8", env=_tk_env, timeout=90)
+            text=True, errors="replace", encoding="utf-8", env=_tk_env, timeout=90)
         check(_tk_run.returncode == 0 and "Плагин rtk" in _tk_run.stdout,
               f"командная строка rtk говорит состояние: "
               f"{_tk_run.stdout.strip()[:60]}")
         _tk_run = _tk_sp.run(
             [sys.executable, str(_tk_cli), "check"], capture_output=True,
-            text=True, encoding="utf-8", env=_tk_env, timeout=90)
+            text=True, errors="replace", encoding="utf-8", env=_tk_env, timeout=90)
         check(_tk_run.returncode in (0, 1) and "Живая проверка" in _tk_run.stdout,
               f"и отвечает на «check» словами, а не молчанием: "
               f"{_tk_run.stdout.strip()[:70]}")
@@ -7617,13 +7618,13 @@ def main() -> int:
         _px_env["OPENCODE_CONFIG_DIR"] = str(_px_dest)
         _px_env["PXPIPE_PORT"] = str(_px_port)
         _px_run = _px_spawn.run([sys.executable, str(_px_cli), "status"],
-                                capture_output=True, text=True, encoding="utf-8",
+                                capture_output=True, text=True, errors="replace", encoding="utf-8",
                                 env=_px_env, timeout=90)
         check(_px_run.returncode == 0 and "провайдер pxpipe" in _px_run.stdout,
               f"командная строка pxpipe говорит состояние: "
               f"{_px_run.stdout.strip()[:70]}")
         _px_run = _px_spawn.run([sys.executable, str(_px_cli), "install", "pxsrc"],
-                                capture_output=True, text=True, encoding="utf-8",
+                                capture_output=True, text=True, errors="replace", encoding="utf-8",
                                 env=_px_env, timeout=90)
         check(_px_run.returncode == 1 and "ничего не вписано" in _px_run.stdout,
               f"и отказывает без прокси, как кнопка: "
@@ -7961,7 +7962,7 @@ def main() -> int:
             check(any("[KEEP]" in line for line in _ai_seen),
                   f"вывод цикла виден построчно: {_ai_seen[:3]}")
             _ai_branch = _ai_sp.run(["git", "branch", "--show-current"], cwd=_ai_repo,
-                                    capture_output=True, text=True, timeout=60).stdout.strip()
+                                    capture_output=True, text=True, errors="replace", timeout=60).stdout.strip()
             check(_ai_branch == "improve/v1",
                   f"цикл ушёл в ветку improve/<тег>, а основная осталась в стороне: "
                   f"сейчас {_ai_branch!r}")
@@ -8016,7 +8017,7 @@ def main() -> int:
             _ai_cli_env = dict(_ai_os.environ)
             _ai_cli_env["OPENCODE_CONFIG_DIR"] = str(_ai_dest)
             _ai_run = _ai_sp.run([sys.executable, str(_ai_cli), "status"],
-                                 capture_output=True, text=True, encoding="utf-8",
+                                 capture_output=True, text=True, errors="replace", encoding="utf-8",
                                  env=_ai_cli_env, timeout=90)
             check(_ai_run.returncode == 0 and "Готово к запуску" in _ai_run.stdout,
                   f"командная строка говорит состояние: {_ai_run.stdout.strip()[:60]}")
@@ -8419,7 +8420,7 @@ def main() -> int:
         _gl_cli_env = dict(_gl_os.environ)
         _gl_cli_env["OPENCODE_CONFIG_DIR"] = str(_gl_dest)
         _gl_run = _gl_sp.run([sys.executable, str(_gl_cli), "status"],
-                             capture_output=True, text=True, encoding="utf-8",
+                             capture_output=True, text=True, errors="replace", encoding="utf-8",
                              env=_gl_cli_env, timeout=90)
         _gl_out = (_gl_run.stdout or "") + (_gl_run.stderr or "")
         check(_gl_run.returncode in (0, 1) and "greenlight" in _gl_out
@@ -8865,7 +8866,7 @@ def main() -> int:
         _prod_lock, _prod_before = None, None
     try:
         _first = subprocess.Popen([sys.executable, str(_probe), str(_pid_file)],
-                                  stdout=subprocess.PIPE, text=True)
+                                  stdout=subprocess.PIPE, text=True, errors="replace")
         # Ждём не фиксированное время, а сам факт: первый процесс пишет
         # файл в тот момент, когда метка уже у него. На нагруженной
         # машине 2.5 секунды не хватало — Python стартует в несколько
@@ -8875,7 +8876,7 @@ def main() -> int:
             time.sleep(0.2)
             _waited += 0.2
         _second = subprocess.run([sys.executable, str(_probe), str(_pid_file)],
-                                 capture_output=True, text=True, timeout=60)
+                                 capture_output=True, text=True, errors="replace", timeout=60)
         check(_second.stdout.strip().endswith("LOCK-BUSY"),
               f"второй экземпляр отказывается открываться: "
               f"{_second.stdout.strip() or 'нет ответа'}"
@@ -8912,7 +8913,7 @@ def main() -> int:
         while _waited2 < 30.0:
             _third = subprocess.run(
                 [sys.executable, str(_probe), str(_pid_file)],
-                capture_output=True, text=True, timeout=60)
+                capture_output=True, text=True, errors="replace", timeout=60)
             _out = _third.stdout.strip()
             if "LOCK-TAKEN" in _out:
                 break
@@ -11857,7 +11858,7 @@ def main() -> int:
     def _is_repo(folder: Path) -> bool:
         try:
             r = _sp.run(["git", "rev-parse", "--is-inside-work-tree"],
-                        cwd=str(folder), capture_output=True, text=True,
+                        cwd=str(folder), capture_output=True, text=True, errors="replace",
                         timeout=20)
             return r.returncode == 0 and r.stdout.strip() == "true"
         except (OSError, ValueError):
@@ -11876,7 +11877,7 @@ def main() -> int:
         _pinned = ""
         try:
             _st = _sp.run(["git", "ls-files", "--stage", "--", _sub_path],
-                          cwd=str(_prog), capture_output=True, text=True,
+                          cwd=str(_prog), capture_output=True, text=True, errors="replace",
                           timeout=20)
             for _row in _st.stdout.splitlines():
                 _p = _row.split()
