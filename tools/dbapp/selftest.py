@@ -6579,6 +6579,14 @@ def main() -> int:
         # Лаунчер живьём: поднимается как отдельный процесс и отвечает по
         # протоколу. Секретов в его stdout быть не может — stdout это
         # протокол, журнал идёт в stderr.
+        #
+        # errors="replace" здесь обязателен, а не аккуратность: лаунчер
+        # печатает русский текст в кодировке консоли Windows (cp866), и при
+        # строгом декодировании байт 0xca роняет ВЕСЬ селфтест на строке
+        # чтения stderr. Зависит от локали машины: там, где байт случайно
+        # валиден для utf-8, падения нет, и поломка выглядит случайной.
+        # Тот же приём в browsers.py:573. Остальные вызовы text=True в этом
+        # файле без errors — известный долг.
         _lm_env = dict(_lm_os.environ)
         _lm_env["OPENCODE_CONFIG_DIR"] = str(_lm_dest)
         _lm_live, _lm_live_port = _lm_api()
@@ -6586,7 +6594,8 @@ def main() -> int:
         _lm_proc = _lm_sp.Popen(
             [sys.executable, str(_lm_launcher)],
             stdin=_lm_sp.PIPE, stdout=_lm_sp.PIPE, stderr=_lm_sp.PIPE,
-            text=True, encoding="utf-8", env=_lm_env, cwd=str(_root))
+            text=True, encoding="utf-8", errors="replace", env=_lm_env,
+            cwd=str(_root))
         try:
             _lm_proc.stdin.write(json.dumps(
                 {"jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -10676,6 +10685,51 @@ def main() -> int:
               "и сверка говорит, что файлы разошлись")
     finally:
         shutil.rmtree(_bi, ignore_errors=True)
+# ---- 8и-1. Список инструкций полон, и ни одна ссылка не мертва
+    echo("\n--- 8и-1. Файлы инструкций: список полон, ссылки живые ---")
+    # Проверки не было: указатели перечисляли 7 файлов из 13, и это молчало
+    # (12.10.2026). Тот же класс, что §22.7 про описание навыков: папка
+    # растёт, указатель отстаёт, проверить это было нечем.
+    _inst = core.program_root() / "инструкции"
+    _md = sorted(p.name for p in _inst.glob("*.md"))
+    check(bool(_md), "в инструкции/ есть .md файлы: %d" % len(_md))
+
+    def _named(text):
+        """Имена файлов из строк таблицы: строки вида | `имя.md` | …"""
+        out = set()
+        for line in text.splitlines():
+            if not line.startswith("| `"):
+                continue
+            for cell in line.strip("|").split("|"):
+                for tok in cell.split("`")[1::2]:
+                    if tok.endswith(".md"):
+                        out.add(tok)
+        return out
+
+    _readme = _inst / "README.md"
+    _card = _inst / "_О-ПАПКЕ.md"
+    if not (_readme.is_file() and _card.is_file()):
+        echo("указатели папки не найдены — проверка пропущена")
+    else:
+        _readme_t = _readme.read_text(encoding="utf-8")
+        _card_t = _card.read_text(encoding="utf-8")
+        _no_readme = [n for n in _md if n not in _named(_readme_t)]
+        check(not _no_readme,
+              "каждый файл назван в инструкции/README.md; нет: %s"
+              % (_no_readme or "никого"))
+        # Карточка папки саму себя не перечисляет — это её устройство.
+        _no_card = [n for n in _md if n != "_О-ПАПКЕ.md"
+                    and n not in _named(_card_t)]
+        check(not _no_card,
+              "каждый файл назван в карточке папки; нет: %s"
+              % (_no_card or "никого"))
+        _dead = sorted(n for n in (_named(_readme_t) | _named(_card_t))
+                       if not (_inst / n).is_file())
+        check(not _dead,
+              "ни одна ссылка не ведёт в пустоту: %s"
+              % (_dead or "все живые"))
+        # Имя `MCP-серверы.md` начинается с кириллической М — §22.10.
+        # Ссылка латинской М молча ведёт в пустоту, её ловит проверка выше.
 # ---- 8к. Общий модуль версий: проверяем сам по себе
     echo("\n--- 8к. Общий модуль версий ---")
     try:
