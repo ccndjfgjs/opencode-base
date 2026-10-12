@@ -273,19 +273,28 @@ def token_path(dest: Path) -> Path:
     return Path(dest) / TOKEN_NAME
 
 
+#: Пояснение над токеном в его файле. Каждая строка помечена решёткой:
+#: `read_token` отбрасывает такие строки по правилу, а не по первым словам.
+TOKEN_HEADER: tuple[str, ...] = (
+    "Токен расширения Playwright для режима «мои сессии».",
+    "Нужен, чтобы Chrome не спрашивал одобрение при каждом подключении.",
+    "Без токена подключение тоже работает: Chrome спросит одобрение.",
+    "Хранится отдельно от opencode.jsonc, потому что конфиг открыт и переносится.",
+    "Сбросить можно в расширении Playwright.",
+)
+
+
 def write_token(dest: Path, token: str, progress=None) -> tuple[bool, str]:
-    """Сохраняет токен расширения в отдельный файл."""
+    """Сохраняет токен расширения в отдельный файл.
+
+    Токен опционален: пустая строка очищает файл, и подключение пойдёт
+    через вопрос одобрения в Chrome.
+    """
     path = token_path(dest)
+    header = "".join(f"# {line}\n" for line in TOKEN_HEADER)
+    body = f"{token.strip()}\n" if token.strip() else ""
     try:
-        path.write_text(
-            "Токен расширения Playwright для режима «мои сессии».\n"
-            "Нужен, чтобы Chrome не спрашивал одобрение при каждом\n"
-            "подключении. Хранится отдельно от opencode.jsonc, потому\n"
-            "что конфиг открыт и переносится. Сбросить можно в\n"
-            "расширении Playwright.\n\n"
-            f"{token}\n",
-            encoding="utf-8",
-        )
+        path.write_text(f"{header}\n{body}", encoding="utf-8")
     except OSError as exc:
         return False, f"Токен сохранить не вышло: {exc}"
     if progress:
@@ -294,16 +303,28 @@ def write_token(dest: Path, token: str, progress=None) -> tuple[bool, str]:
 
 
 def read_token(dest: Path) -> str:
-    """Читает токен из своего файла. Пустая строка, если файла нет."""
+    """Читает токен из своего файла. Пустая строка, если токена нет.
+
+    Правило простое: строка с решёткой — пояснение, пустая — разделитель,
+    всё остальное — значение. Никакого угадывания по первым словам: из-за
+    него пояснение однажды уехало в сервер как токен, и подключение молча
+    не работало.
+
+    Дополнительно отвергаем строку с пробелами: настоящий токен слитный, а
+    текст с пробелами — это оставшееся пояснение. Лучше не передать токен
+    и спросить одобрение в Chrome, чем подсунуть серверу мусор.
+    """
     try:
         text = token_path(dest).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return ""
     for line in text.splitlines():
         line = line.strip()
-        if line and not line.startswith(("Токен", "Нужен", "Хранится",
-                                         "Сбросить", "opencode")):
-            return line
+        if not line or line.startswith("#"):
+            continue
+        if any(ch.isspace() for ch in line):
+            continue
+        return line
     return ""
 
 
