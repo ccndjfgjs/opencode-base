@@ -5333,6 +5333,19 @@ def main() -> int:
             check(_br.read_token(_br_tmp) == "",
                   "пояснение из файла токена не уезжает в сервер как токен: "
                   f"{_br.read_token(_br_tmp)!r}")
+            # Кнопка копирования на странице расширения берёт строку
+            # целиком, вместе с именем переменной. Человек вставляет её
+            # как есть - и сервер получает мусор, который расширение
+            # отвергает молча.
+            _br.write_token(_br_tmp, "PLAYWRIGHT_MCP_EXTENSION_TOKEN=abc-def_ghi")
+            check(_br.read_token(_br_tmp) == "abc-def_ghi",
+                  "имя переменной отрезается, а не уходит в сервер как токен: "
+                  f"{_br.read_token(_br_tmp)!r}")
+            check(_br._token_value("PLAYWRIGHT_MCP_EXTENSION_TOKEN=abc") == "abc"
+                  and _br._token_value("abc") == "abc"
+                  and _br._token_value('MY_TOKEN="a-b"') == "a-b",
+                  "токен принимается и с именем переменной, и без него, "
+                  "и в кавычках")
 
             # Живая проверка: поддельный сервер отвечает как настоящий
             # Playwright MCP. Открывать настоящий браузер для этого не нужно.
