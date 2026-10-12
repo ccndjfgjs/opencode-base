@@ -49,6 +49,12 @@ from pathlib import Path
 #: Файл выбора рядом с настройками opencode.
 CONFIG_NAME = "mcp-browsers.json"
 
+#: Токен расширения Playwright — также рядом с настройками, отдельным
+#: закрытым файлом (по образцу mcp-obs-password.txt). Нужен только в
+#: режиме «мои сессии», чтобы не спрашивать одобрение при каждом
+#: подключении.
+TOKEN_NAME = "mcp-browsers-token.txt"
+
 #: Пакет моста. Версию выбирает npx сам: @latest.
 PACKAGE = "@playwright/mcp@latest"
 
@@ -255,6 +261,50 @@ def write_choice(dest: Path, choice: Choice) -> tuple[list[str], list[str]]:
                     "страницу и прочитает заголовок. Только после неё "
                     "«Включить».")
     return messages, errors
+
+
+def token_path(dest: Path) -> Path:
+    """Файл с токеном расширения Playwright: рядом с настройками.
+
+    Токен нужен только в режиме «мои сессии» — чтобы Chrome не
+    спрашивал одобрение при каждом подключении. Лежит отдельным
+    закрытым файлом (по образцу пароля OBS), к git не привязан.
+    """
+    return Path(dest) / TOKEN_NAME
+
+
+def write_token(dest: Path, token: str, progress=None) -> tuple[bool, str]:
+    """Сохраняет токен расширения в отдельный файл."""
+    path = token_path(dest)
+    try:
+        path.write_text(
+            "Токен расширения Playwright для режима «мои сессии».\n"
+            "Нужен, чтобы Chrome не спрашивал одобрение при каждом\n"
+            "подключении. Хранится отдельно от opencode.jsonc, потому\n"
+            "что конфиг открыт и переносится. Сбросить можно в\n"
+            "расширении Playwright.\n\n"
+            f"{token}\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        return False, f"Токен сохранить не вышло: {exc}"
+    if progress:
+        progress(f"Токен сохранён: {path}")
+    return True, f"Токен сохранён: {path}"
+
+
+def read_token(dest: Path) -> str:
+    """Читает токен из своего файла. Пустая строка, если файла нет."""
+    try:
+        text = token_path(dest).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+    for line in text.splitlines():
+        line = line.strip()
+        if line and not line.startswith(("Токен", "Нужен", "Хранится",
+                                         "Сбросить", "opencode")):
+            return line
+    return ""
 
 
 def profile_dir(dest: Path, key: str) -> Path:

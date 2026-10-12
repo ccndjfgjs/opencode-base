@@ -2604,6 +2604,33 @@ class BrowserChoiceDialog(QDialog):
         row_profile.addWidget(self.profile_box, 1)
         box.addLayout(row_profile)
 
+        row_token = QHBoxLayout()
+        row_token.addWidget(ui.label("Токен расширения:", kind="title"))
+        self.token_field = QLineEdit(browsers.read_token(self.dest))
+        self.token_field.setPlaceholderText(
+            "Вставь токен из расширения Playwright — и Chrome перестанет "
+            "спрашивать одобрение"
+        )
+        self.token_field.setObjectName("password")
+        self.token_field.setEchoMode(QLineEdit.EchoMode.Password)
+        self.token_field.textChanged.connect(self._refresh)
+        row_token.addWidget(self.token_field, 1)
+        self.btn_token_paste = QPushButton("Вставить")
+        self.btn_token_paste.setToolTip(
+            "Токен из буфера обмена. Нажми «Вставить токен», когда в буфере "
+            "будет токен из расширения Playwright"
+        )
+        self.btn_token_paste.clicked.connect(self._fill_token)
+        row_token.addWidget(self.btn_token_paste)
+        self.btn_token_show = QPushButton("Показать")
+        self.btn_token_show.setCheckable(True)
+        self.btn_token_show.toggled.connect(self._toggle_token)
+        row_token.addWidget(self.btn_token_show)
+        box.addLayout(row_token)
+
+        self.token_status = ui.label("", wrap=True)
+        box.addWidget(self.token_status)
+
         self.headless = QCheckBox("Скрыть окно браузера — работать без него")
         self.headless.setChecked(self.choice.headless)
         self.headless.setToolTip(
@@ -2687,19 +2714,63 @@ class BrowserChoiceDialog(QDialog):
             item.kind == "playwright" and browsers.playwright_firefox_dir() is None
         )
         self.headless.setEnabled(profile != "sessions")
+        sessions = profile == "sessions"
+        self.token_field.setVisible(sessions)
+        self.btn_token_show.setVisible(sessions)
+        self.btn_token_paste.setVisible(sessions)
+        if sessions:
+            if not self.token_field.text().strip():
+                self.token_status.setText(
+                    "Токен пуст: скопируй токен из расширения Playwright "
+                    "и нажми «Вставить»."
+                )
+            else:
+                self.token_status.setText("Токен вставлен: будет без запроса одобрения.")
         self.command_hint.setText(
             "Запуск: " + " ".join(browsers.command(self.dest, self._build_choice()))
             + ". Профиль: "
             + str(browsers.profile_dir(self.dest, key))
         )
 
+    def _toggle_token(self, show: bool) -> None:
+        mode = (QLineEdit.EchoMode.Normal if show
+                else QLineEdit.EchoMode.Password)
+        self.token_field.setEchoMode(mode)
+
+    def _fill_token(self) -> None:
+        self.token_field.setText(
+            QApplication.clipboard().text().strip()
+            if QApplication.clipboard() else ""
+        )
+        self._refresh()
+
     def _save(self) -> None:
+        if self._current_profile() == "sessions" and not \
+                self.token_field.text().strip():
+            self.status.setStyleSheet(f"color: {ui.ERROR};")
+            self.status.setText("Вставьте токен: в режиме «мои сессии» без "
+                                "токена Chrome будет спрашивать одобрение "
+                                "при каждом подключении. Вставь токен или "
+                                "выбери другой профиль.")
+            return
         messages, errors = browsers.write_choice(self.dest, self._build_choice())
         if errors:
             # Окно не закрывается: человек должен видеть, что именно не так,
             # и поправить это здесь же.
             self.status.setText("Не записано. " + " ".join(errors))
             return
+        # Токен сохраняем только в режиме «мои сессии» (поле вовсе скрыто
+        # в других профилях, но защитимся и проверкой). Пустой токен не
+        # трогаем: не стираем то, что уже вписано, если человек не решил
+        # убрать его явно (кнопки «Убрать» в окне нет — есть файл).
+        if self._current_profile() == "sessions" and \
+                self.token_field.text().strip():
+            _saved, _note = browsers.write_token(self.dest,
+                                                 self.token_field.text().strip())
+            self.token_status.setText(_note)
+            if not _saved:
+                self.status.setText("Токен не записался: " + self.token_status.text())
+                return
         self.messages = messages
         self.accept()
 
@@ -4248,8 +4319,9 @@ class CapsTab(ScrollPage):
         self.btn_br_choose = QPushButton("Выбрать браузер")
         self.btn_br_choose.setToolTip(
             "Браузеры: Chrome, Edge, Яндекс.Браузер или Firefox; профиль "
-            "нейросети и показывать ли окно. Выбор ляжет в mcp-browsers.json "
-            "рядом с настройками opencode"
+            "нейросети и показывать ли окно. В режиме «мои сессии» — "
+            "токен расширения Playwright, чтобы не спрашивать одобрение. "
+            "Выбор ляжет в mcp-browsers.json рядом с настройками opencode"
         )
         self.btn_br_choose.setEnabled(False)
         self.btn_br_check = QPushButton("Проверить браузер")

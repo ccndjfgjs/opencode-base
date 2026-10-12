@@ -49,26 +49,6 @@ def say(text: str) -> None:
     print(f"[browsers-bridge] {text}", file=sys.stderr, flush=True)
 
 
-def read_token(settings: Path) -> str:
-    """Читает токен расширения Playwright из файла рядом с настройками.
-
-    В режиме «мои сессии» расширение Playwright спрашивает одобрение на
-    каждое подключение. Токен из расширения убирает этот запрос — он
-    передаётся серверу переменной окружения PLAYWRIGHT_MCP_EXTENSION_TOKEN.
-    Файл хранится рядом с настройками, как пароль OBS, и закрыт от git.
-    """
-    path = settings / "mcp-browsers-token.txt"
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return ""
-    for line in text.splitlines():
-        line = line.strip()
-        if line and not line.startswith(("токен", "PLAYWRIGHT")):
-            return line
-    return ""
-
-
 def main() -> int:
     try:
         import browsers  # noqa: PLC0415 — рядом лежит
@@ -100,7 +80,7 @@ def main() -> int:
     if choice.profile == "sessions":
         say("режим «мои сессии»: нужен запущенный Chrome или Edge с "
             "расширением Playwright")
-        token = read_token(settings)
+        token = browsers.read_token(settings)
         if token:
             env["PLAYWRIGHT_MCP_EXTENSION_TOKEN"] = token
             say("токен расширения прочитан, одобрение подключения отключено")

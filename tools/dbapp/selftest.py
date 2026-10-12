@@ -6495,17 +6495,42 @@ def main() -> int:
                 _lm_proc.kill()
             _lm_err_text = _lm_proc.stderr.read()
             _lm_live.shutdown()
-        _lm_json1 = json.loads(_lm_line1)
-        _lm_json2 = json.loads(_lm_line2)
-        check(_lm_json1.get("result", {}).get("serverInfo", {}).get("name")
-              == "lmarena"
-              and [t["name"] for t in _lm_json2["result"]["tools"]]
-              == ["lmarena_status", "lmarena_models", "lmarena_chat"],
-              "лаунчер живьём отвечает по протоколу MCP")
-        check("[lmarena-bridge]" in _lm_err_text
-              and "запускаю мост" in _lm_err_text,
-              f"и весь журнал идёт в stderr: "
-              f"{_lm_err_text.splitlines()[:1]}")
+        # Лаунчер может промолчать: кода моста на этой машине нет, и он
+        # об этом честно пишет в stderr. Раньше здесь стоял json.loads без
+        # защиты, и селфтест падал целиком вместо внятного «не проверено».
+        # Отсутствие кода — свойство машины (thirdparty ставит программа, в
+        # git его нет), поэтому такой случай идёт через check_machine, как
+        # уже сделано для status ниже. Код есть, а ответа нет — настоящий
+        # сбой лаунчера, и тогда проверка остаётся строгой.
+        def _lm_json(line: str) -> dict:
+            """Ответ лаунчера. Пустая строка — пустой словарь, не падение."""
+            try:
+                value = json.loads(line)
+            except ValueError:
+                return {}
+            return value if isinstance(value, dict) else {}
+
+        _lm_json1 = _lm_json(_lm_line1)
+        _lm_json2 = _lm_json(_lm_line2)
+        _lm_answered = bool(_lm_json1 and _lm_json2)
+        _lm_entry = (Path(core.program_root()) / "tools" / "thirdparty"
+                     / "lmarena" / "src" / "main.py")
+        _lm_why = (_lm_err_text.strip().splitlines() or ["ответ пустой"])[-1]
+        if not _lm_answered and not _lm_entry.is_file():
+            check_machine(False, "лаунчер живьём отвечает по протоколу MCP — "
+                                 f"кода моста на машине нет: {_lm_why}")
+            check_machine(False, "и весь журнал идёт в stderr — кода моста нет")
+        else:
+            check(_lm_json1.get("result", {}).get("serverInfo", {}).get("name")
+                  == "lmarena"
+                  and [t["name"] for t
+                       in _lm_json2.get("result", {}).get("tools", [])]
+                  == ["lmarena_status", "lmarena_models", "lmarena_chat"],
+                  f"лаунчер живьём отвечает по протоколу MCP: {_lm_why}")
+            check("[lmarena-bridge]" in _lm_err_text
+                  and "запускаю мост" in _lm_err_text,
+                  f"и весь журнал идёт в stderr: "
+                  f"{_lm_err_text.splitlines()[:1]}")
         check(_lm_secret not in _lm_err_text,
               "в журнале лаунчера нет токена арены")
         check("base64-" not in _lm_line1 + _lm_line2,
@@ -6655,24 +6680,41 @@ def main() -> int:
     for _tk_name in ("rtk-ai/rtk", "JuliusBrussee/caveman"):
         check(_tk_name in _tk_notice,
               f"THIRD-PARTY-NOTICES.md называет источник: {_tk_name}")
-    _tk_cav_readme = (_tk_root / "tools" / "thirdparty" / "caveman"
-                      / "README.md").read_text(encoding="utf-8")
-    check("opencode" in _tk_cav_readme and "plugin" in _tk_cav_readme,
-          "caveman: в README отмечено, что opencode автор поддерживает")
-    check("65–75%" in _tk_cav_readme and "независимой проверки нет" in _tk_cav_readme,
-          "caveman: 65–75% названы заявлением автора, а не фактом")
+
+    # README авторов лежат в thirdparty, а его ставит программа: на копии
+    # репозитория их нет. Раньше здесь стояло read_text без проверки, и
+    # селфтест падал целиком вместо внятного «не проверено». Отсутствие
+    # README — свойство машины, а не нашего кода, поэтому мимо json и
+    # через check_machine, как уже сделано для мостов. Файл есть, а
+    # нужных строк в нём нет — тогда проверка остаётся строгой.
+    def _tk_readme(thirdparty: str) -> str:
+        """README из thirdparty. Файла нет — пустая строка, не падение."""
+        path = _tk_root / "tools" / "thirdparty" / thirdparty / "README.md"
+        if not path.is_file():
+            check_machine(False, f"{thirdparty}: README автора на машине нет — "
+                                 "разверни инструмент, и проверка станет строгой")
+            return ""
+        return path.read_text(encoding="utf-8")
+
+    _tk_cav_readme = _tk_readme("caveman")
+    if _tk_cav_readme:
+        check("opencode" in _tk_cav_readme and "plugin" in _tk_cav_readme,
+              "caveman: в README отмечено, что opencode автор поддерживает")
+        check("65–75%" in _tk_cav_readme
+              and "независимой проверки нет" in _tk_cav_readme,
+              "caveman: 65–75% названы заявлением автора, а не фактом")
+        check("node bin/install.js --only opencode" in _tk_cav_readme,
+              "caveman: сказано, какой установщик автора программа не запускает")
     check("65–75%" in _tk_notice and "независимой проверки нет" in _tk_notice,
           "caveman: та же оговорка стоит и в уведомлениях о лицензиях")
-    check("node bin/install.js --only opencode" in _tk_cav_readme,
-          "caveman: сказано, какой установщик автора программа не запускает")
-    _tk_rtk_readme = (_tk_root / "tools" / "thirdparty" / "rtk"
-                      / "README.md").read_text(encoding="utf-8")
-    for _tk_bit in ("winget install rtk-ai.rtk", "cargo install --git",
-                    "rtk --version", "rtk gain"):
-        check(_tk_bit in _tk_rtk_readme,
-              f"rtk: порядок установки и проверки взят из README автора: {_tk_bit}")
-    check("rtk init -g --opencode" in _tk_rtk_readme,
-          "rtk: названа команда автора, которую программа не выполняет (правит Claude)")
+    _tk_rtk_readme = _tk_readme("rtk")
+    if _tk_rtk_readme:
+        for _tk_bit in ("winget install rtk-ai.rtk", "cargo install --git",
+                        "rtk --version", "rtk gain"):
+            check(_tk_bit in _tk_rtk_readme,
+                  f"rtk: порядок установки и проверки взят из README автора: {_tk_bit}")
+        check("rtk init -g --opencode" in _tk_rtk_readme,
+              "rtk: названа команда автора, которую программа не выполняет (правит Claude)")
 
     # Не MCP: в реестре серверов их нет.
     _tk_registry = json.loads(
@@ -6760,51 +6802,78 @@ def main() -> int:
         _tk_ok, _tk_note = _tk_rtk.live_check()
         check(_tk_ok, f"живая проверка проходит на отвечающем rtk: {_tk_note}")
 
-        _tk_m, _tk_e = _tk_rtk.install(_tk_dest)
-        _tk_plugin = _tk_dest / "plugins" / "rtk.ts"
-        check(not _tk_e and _tk_plugin.is_file(),
-              f"плагин ставится в plugins/rtk.ts: {_tk_e}")
-        check(_tk_plugin.read_text(encoding="utf-8") == (
-            _tk_root / "tools" / "thirdparty" / "rtk" / "hooks" / "opencode"
-            / "rtk.ts").read_text(encoding="utf-8"),
-            "поставленный плагин по тексту — копия файла автора, без правок")
-        _tk_manifest = json.loads(
-            (_tk_dest / ".opencode-base-caps.json").read_text(encoding="utf-8"))
-        check(str(_tk_plugin) in _tk_manifest.get("files", {}),
-              "файл записан в наш манифест — чужое им не считается")
-        check(opencode_caps.caps_status(_tk_dest).get("rtk") is True,
-              "состояние на вкладке видит поставленный плагин")
+        # Установка, повторное включение и выключение плагина. Всё это
+        # возможно только если рядом лежит файл автора: программа копирует
+        # его, а не пишет плагин сама. На копии репозитория файла нет, и
+        # раньше серия падала на первом же чтении. Нет исходника — это
+        # свойство машины, поэтому вся серия уходит в «не проверено»
+        # одним куском, а не краснеет по одной строке.
+        _tk_author_plugin = (_tk_root / "tools" / "thirdparty" / "rtk"
+                             / "hooks" / "opencode" / "rtk.ts")
+        if not _tk_author_plugin.is_file():
+            check_machine(False, "плагин rtk: установка, повтор и выключение — "
+                                 "исходника автора нет на этой машине")
+            check_machine(False, "плагин rtk совпадает с файлом автора — "
+                                 "исходника нет на этой машине")
+            check_machine(False, "файл rtk записан в наш манифест — "
+                                 "исходника нет на этой машине")
+            check_machine(False, "состояние на вкладке видит плагин rtk — "
+                                 "исходника нет на этой машине")
+            check_machine(False, "повторное «Включить» файл не меняет — "
+                                 "исходника нет на этой машине")
+            check_machine(False, "выключение убирает плагин rtk — "
+                                 "исходника нет на этой машине")
+            check_machine(False, "повторное выключение — «убирать нечего» — "
+                                 "исходника нет на этой машине")
+            check_machine(False, "старая версия rtk отвергается с объяснением — "
+                                 "исходника нет на этой машине")
+            check_machine(False, "со старым rtk плагин не ставится — "
+                                 "исходника нет на этой машине")
+        else:
+            _tk_m, _tk_e = _tk_rtk.install(_tk_dest)
+            _tk_plugin = _tk_dest / "plugins" / "rtk.ts"
+            check(not _tk_e and _tk_plugin.is_file(),
+                  f"плагин ставится в plugins/rtk.ts: {_tk_e}")
+            check(_tk_plugin.read_text(encoding="utf-8")
+                  == _tk_author_plugin.read_text(encoding="utf-8"),
+                  "поставленный плагин по тексту — копия файла автора, без правок")
+            _tk_manifest = json.loads(
+                (_tk_dest / ".opencode-base-caps.json").read_text(encoding="utf-8"))
+            check(str(_tk_plugin) in _tk_manifest.get("files", {}),
+                  "файл записан в наш манифест — чужое им не считается")
+            check(opencode_caps.caps_status(_tk_dest).get("rtk") is True,
+                  "состояние на вкладке видит поставленный плагин")
 
-        _tk_text_before = _tk_plugin.read_text(encoding="utf-8")
-        _tk_m2, _tk_e2 = _tk_rtk.install(_tk_dest)
-        check(_tk_plugin.read_text(encoding="utf-8") == _tk_text_before,
-              "повторное «Включить» файл не меняет")
-        check(any("не менялся" in x for x in _tk_m2),
-              f"и говорит об этом словами: {_tk_m2[-1:]}")
-        _tk_m3, _tk_e3 = _tk_rtk.remove(_tk_dest)
-        check(not _tk_e3 and not _tk_plugin.exists(),
-              f"выключение убирает наш плагин: {_tk_e3}")
-        _tk_m4, _tk_e4 = _tk_rtk.remove(_tk_dest)
-        check(not _tk_e4 and any("не стоял" in x for x in _tk_m4),
-              "повторное выключение — не ошибка, а «убирать нечего»")
+            _tk_text_before = _tk_plugin.read_text(encoding="utf-8")
+            _tk_m2, _tk_e2 = _tk_rtk.install(_tk_dest)
+            check(_tk_plugin.read_text(encoding="utf-8") == _tk_text_before,
+                  "повторное «Включить» файл не меняет")
+            check(any("не менялся" in x for x in _tk_m2),
+                  f"и говорит об этом словами: {_tk_m2[-1:]}")
+            _tk_m3, _tk_e3 = _tk_rtk.remove(_tk_dest)
+            check(not _tk_e3 and not _tk_plugin.exists(),
+                  f"выключение убирает наш плагин: {_tk_e3}")
+            _tk_m4, _tk_e4 = _tk_rtk.remove(_tk_dest)
+            check(not _tk_e4 and any("не стоял" in x for x in _tk_m4),
+                  "повторное выключение — не ошибка, а «убирать нечего»")
 
-        # Старая версия: команды «hook opencode» нет — плагин был бы мёртвым.
-        _tk_dest_old = _tk_tmp / "settings-old"
-        _tk_dest_old.mkdir()
+            # Старая версия: команды «hook opencode» нет — плагин был бы мёртвым.
+            _tk_dest_old = _tk_tmp / "settings-old"
+            _tk_dest_old.mkdir()
 
-        def _tk_fake_old(args, timeout):
-            if "--version" in args:
-                return 0, "rtk 0.50.0-заглушка", ""
-            return 2, "", "usage: rtk ..."
+            def _tk_fake_old(args, timeout):
+                if "--version" in args:
+                    return 0, "rtk 0.50.0-заглушка", ""
+                return 2, "", "usage: rtk ..."
 
-        _tk_rtk._run = _tk_fake_old
-        _tk_ok_old, _tk_note_old = _tk_rtk.live_check()
-        check(not _tk_ok_old and "v0.51" in _tk_note_old,
-              f"старая версия отвергается с объяснением: {_tk_note_old[:70]}")
-        _tk_m, _tk_e = _tk_rtk.install(_tk_dest_old)
-        check(not (_tk_dest_old / "plugins" / "rtk.ts").exists()
-              and any("ничего не вписано" in x for x in _tk_e),
-              "со старым rtk плагин не ставится, и настройки не тронуты")
+            _tk_rtk._run = _tk_fake_old
+            _tk_ok_old, _tk_note_old = _tk_rtk.live_check()
+            check(not _tk_ok_old and "v0.51" in _tk_note_old,
+                  f"старая версия отвергается с объяснением: {_tk_note_old[:70]}")
+            _tk_m, _tk_e = _tk_rtk.install(_tk_dest_old)
+            check(not (_tk_dest_old / "plugins" / "rtk.ts").exists()
+                  and any("ничего не вписано" in x for x in _tk_e),
+                  "со старым rtk плагин не ставится, и настройки не тронуты")
 
         # Замер: та же команда дважды, числами.
         _tk_rtk._run = _tk_fake_run
@@ -6864,111 +6933,139 @@ def main() -> int:
               f"{_tk_run.stdout.strip()[:70]}")
 
         # ---- caveman: правила в AGENTS.md, два уровня.
-        _tk_cav_dest = _tk_tmp / "caveman"
-        _tk_cav_dest.mkdir()
-        _tk_agents = _tk_cav_dest / "AGENTS.md"
-        _tk_agents.write_text(
-            "# Чужие правила базы\n\nЭту строку программа трогать не должна.\n",
-            encoding="utf-8")
-        _tk_m, _tk_e = _tk_cave.install(_tk_cav_dest, "lite")
-        _tk_text = _tk_agents.read_text(encoding="utf-8")
-        check(not _tk_e, f"правила caveman вписываются без ошибок: {_tk_e}")
-        check(_tk_text.count(_tk_cave.BEGIN_MARK) == 1
-              and _tk_text.count(_tk_cave.END_MARK) == 1,
-              "метки caveman стоят ровно парой")
-        check("Эту строку программа трогать не должна." in _tk_text,
-              "чужие строки в AGENTS.md остались нетронутыми")
-        check("All technical substance stay" in _tk_text,
-              "в блоке — правила автора, а не пересказ")
-        check("65–75%" in _tk_text and "не проверена" in _tk_text,
-              "и там же сказано, что 65–75% — заявление автора")
-        check("Apache-2.0" in _tk_text,
-              "и что правила — чужая работа под Apache-2.0")
-        check(_tk_cave.status(_tk_cav_dest).get("level") == "lite",
-              "состояние показывает лёгкий уровень")
+        # Правила автора лежат в thirdparty, который ставит программа. На
+        # копии репозитория их нет, и установка падала на первом же чтении.
+        # Нет исходника — это свойство машины, а не нашего кода, поэтому
+        # серия уходит в «не проверено» целиком.
+        _tk_cav_levels = all(
+            (_tk_root / "tools" / "thirdparty" / "caveman" / "levels"
+             / f"{name}.md").is_file() for name in ("lite", "full")
+        )
+        if not _tk_cav_levels:
+            check_machine(False, "caveman: правила автора вписываются в AGENTS.md — "
+                                 "исходника нет на этой машине")
+            check_machine(False, "caveman: метки стоят парой, чужие строки целы — "
+                                 "исходника нет на этой машине")
+            check_machine(False, "caveman: два уровня, повторное включение, уборка и "
+                                 "rescue — исходника нет на этой машине")
+            check_machine(False, "caveman: галочки ставят rtk и caveman вместе — "
+                                 "исходника нет на этой машине")
+            _tk_cav_skipped = True
+        else:
+            _tk_cav_skipped = False
+        # Правила и плагины лежат в thirdparty, который ставит программа.
+        # На копии репозитория их нет, и серия падала на первом же чтении.
+        # Нет исходников — это свойство машины, а не нашего кода, поэтому
+        # вся серия уходит в «не проверено» целиком, а не падает.
+        if _tk_cav_skipped:
+            pass
+        else:
+            _tk_cav_dest = _tk_tmp / "caveman"
+            _tk_cav_dest.mkdir()
+            _tk_agents = _tk_cav_dest / "AGENTS.md"
+            _tk_agents.write_text(
+                "# Чужие правила базы\n\nЭту строку программа трогать не должна.\n",
+                encoding="utf-8")
+            if not _tk_cav_skipped:
+                _tk_m, _tk_e = _tk_cave.install(_tk_cav_dest, "lite")
+                _tk_text = _tk_agents.read_text(encoding="utf-8")
+                check(not _tk_e, f"правила caveman вписываются без ошибок: {_tk_e}")
+            check(_tk_text.count(_tk_cave.BEGIN_MARK) == 1
+                  and _tk_text.count(_tk_cave.END_MARK) == 1,
+                  "метки caveman стоят ровно парой")
+            check("Эту строку программа трогать не должна." in _tk_text,
+                  "чужие строки в AGENTS.md остались нетронутыми")
+            check("All technical substance stay" in _tk_text,
+                  "в блоке — правила автора, а не пересказ")
+            check("65–75%" in _tk_text and "не проверена" in _tk_text,
+                  "и там же сказано, что 65–75% — заявление автора")
+            check("Apache-2.0" in _tk_text,
+                  "и что правила — чужая работа под Apache-2.0")
+            check(_tk_cave.status(_tk_cav_dest).get("level") == "lite",
+                  "состояние показывает лёгкий уровень")
 
-        _tk_before = _tk_agents.read_bytes()
-        _tk_m2, _tk_e2 = _tk_cave.install(_tk_cav_dest, "lite")
-        check(_tk_agents.read_bytes() == _tk_before,
-              "повторная установка того же уровня файл не переписывает")
-        check(any("файл не менялся" in x for x in _tk_m2),
-              f"и об этом сказано словами: {_tk_m2[-1:]}")
+            _tk_before = _tk_agents.read_bytes()
+            _tk_m2, _tk_e2 = _tk_cave.install(_tk_cav_dest, "lite")
+            check(_tk_agents.read_bytes() == _tk_before,
+                  "повторная установка того же уровня файл не переписывает")
+            check(any("файл не менялся" in x for x in _tk_m2),
+                  f"и об этом сказано словами: {_tk_m2[-1:]}")
 
-        _tk_m, _tk_e = _tk_cave.install(_tk_cav_dest, "full")
-        _tk_text = _tk_agents.read_text(encoding="utf-8")
-        check(_tk_text.count(_tk_cave.BEGIN_MARK) == 1
-              and _tk_text.count(_tk_cave.END_MARK) == 1,
-              "смена уровня не двоит блок: метки по-прежнему парой")
-        check(_tk_cave.status(_tk_cav_dest).get("level") == "full",
-              "состояние показывает полный уровень")
-        check("Each fact once" in _tk_text,
-              "в полном уровне — правила ultracave автора")
-        check("disable-model-invocation" not in _tk_text,
-              "служебная шапка файла навыка в AGENTS.md не попала")
-        check("Эту строку программа трогать не должна." in _tk_text,
-              "чужие строки целы и после смены уровня")
+            _tk_m, _tk_e = _tk_cave.install(_tk_cav_dest, "full")
+            _tk_text = _tk_agents.read_text(encoding="utf-8")
+            check(_tk_text.count(_tk_cave.BEGIN_MARK) == 1
+                  and _tk_text.count(_tk_cave.END_MARK) == 1,
+                  "смена уровня не двоит блок: метки по-прежнему парой")
+            check(_tk_cave.status(_tk_cav_dest).get("level") == "full",
+                  "состояние показывает полный уровень")
+            check("Each fact once" in _tk_text,
+                  "в полном уровне — правила ultracave автора")
+            check("disable-model-invocation" not in _tk_text,
+                  "служебная шапка файла навыка в AGENTS.md не попала")
+            check("Эту строку программа трогать не должна." in _tk_text,
+                  "чужие строки целы и после смены уровня")
 
-        _tk_m, _tk_e = _tk_cave.install(_tk_cav_dest, "какой-то-свой")
-        check(any("неизвестен" in x for x in _tk_m)
-              and _tk_cave.status(_tk_cav_dest).get("level") == "lite",
-              "неизвестный уровень не выдумывается, а заменяется лёгким")
+            _tk_m, _tk_e = _tk_cave.install(_tk_cav_dest, "какой-то-свой")
+            check(any("неизвестен" in x for x in _tk_m)
+                  and _tk_cave.status(_tk_cav_dest).get("level") == "lite",
+                  "неизвестный уровень не выдумывается, а заменяется лёгким")
 
-        # Поломанные метки: файл не трогаем, говорим прямо.
-        _tk_broken = _tk_tmp / "broken"
-        _tk_broken.mkdir()
-        (_tk_broken / "AGENTS.md").write_text(
-            "# чужое\n\n" + _tk_cave.BEGIN_MARK + "\nсередина без конца\n",
-            encoding="utf-8")
-        _tk_m, _tk_e = _tk_cave.install(_tk_broken, "lite")
-        check(bool(_tk_e) and "не парой" in " ".join(_tk_e),
-              f"поломанные метки не правятся автоматом: {_tk_e[:1]}")
-        check("середина без конца" in (_tk_broken / "AGENTS.md").read_text(
-            encoding="utf-8"),
-            "и файл с поломанными метками остался как был")
-        _tk_m, _tk_e = _tk_cave.remove(_tk_broken)
-        check(bool(_tk_e) and "не парой" in " ".join(_tk_e),
-              "уборка при поломанных метках тоже отказывает")
+            # Поломанные метки: файл не трогаем, говорим прямо.
+            _tk_broken = _tk_tmp / "broken"
+            _tk_broken.mkdir()
+            (_tk_broken / "AGENTS.md").write_text(
+                "# чужое\n\n" + _tk_cave.BEGIN_MARK + "\nсередина без конца\n",
+                encoding="utf-8")
+            _tk_m, _tk_e = _tk_cave.install(_tk_broken, "lite")
+            check(bool(_tk_e) and "не парой" in " ".join(_tk_e),
+                  f"поломанные метки не правятся автоматом: {_tk_e[:1]}")
+            check("середина без конца" in (_tk_broken / "AGENTS.md").read_text(
+                encoding="utf-8"),
+                "и файл с поломанными метками остался как был")
+            _tk_m, _tk_e = _tk_cave.remove(_tk_broken)
+            check(bool(_tk_e) and "не парой" in " ".join(_tk_e),
+                  "уборка при поломанных метках тоже отказывает")
 
-        _tk_m, _tk_e = _tk_cave.remove(_tk_cav_dest)
-        _tk_text = _tk_agents.read_text(encoding="utf-8")
-        check(not _tk_e and _tk_cave.BEGIN_MARK not in _tk_text,
-              f"выключение убирает наш блок: {_tk_e}")
-        check("Эту строку программа трогать не должна." in _tk_text,
-              "и чужие строки после уборки целы")
-        check(_tk_cave.status(_tk_cav_dest).get("installed") is False,
-              "состояние видит, что правил нет")
+            _tk_m, _tk_e = _tk_cave.remove(_tk_cav_dest)
+            _tk_text = _tk_agents.read_text(encoding="utf-8")
+            check(not _tk_e and _tk_cave.BEGIN_MARK not in _tk_text,
+                  f"выключение убирает наш блок: {_tk_e}")
+            check("Эту строку программа трогать не должна." in _tk_text,
+                  "и чужие строки после уборки целы")
+            check(_tk_cave.status(_tk_cav_dest).get("installed") is False,
+                  "состояние видит, что правил нет")
 
-        # Правила возвращаются, если «Подключить базу» перезаписало AGENTS.md.
-        _tk_cave.install(_tk_cav_dest, "full")
-        _tk_saved_text = _tk_agents.read_text(encoding="utf-8")
-        _tk_agents.write_text("# шаблон базы заново\n", encoding="utf-8")
-        check(_tk_cave.rescue(_tk_cav_dest, _tk_saved_text) is True
-              and _tk_cave.status(_tk_cav_dest).get("level") == "full",
-              "повторное подключение базы возвращает правила caveman")
-        check("шаблон базы заново" in _tk_agents.read_text(encoding="utf-8"),
-              "и заново скопированный файл не портится")
-        check(_tk_cave.rescue(_tk_cav_dest, "# без меток\n") is False,
-              "без наших меток возвращать нечего — rescue молчит")
+            # Правила возвращаются, если «Подключить базу» перезаписало AGENTS.md.
+            _tk_cave.install(_tk_cav_dest, "full")
+            _tk_saved_text = _tk_agents.read_text(encoding="utf-8")
+            _tk_agents.write_text("# шаблон базы заново\n", encoding="utf-8")
+            check(_tk_cave.rescue(_tk_cav_dest, _tk_saved_text) is True
+                  and _tk_cave.status(_tk_cav_dest).get("level") == "full",
+                  "повторное подключение базы возвращает правила caveman")
+            check("шаблон базы заново" in _tk_agents.read_text(encoding="utf-8"),
+                  "и заново скопированный файл не портится")
+            check(_tk_cave.rescue(_tk_cav_dest, "# без меток\n") is False,
+                  "без наших меток возвращать нечего — rescue молчит")
 
-        # Через установку возможностей: то же, что кнопка «Поставить отмеченное».
-        _tk_dest_caps = _tk_tmp / "caps"
-        _tk_dest_caps.mkdir()
-        _tk_m, _tk_e = opencode_caps.install_caps(
-            _tk_root, _tk_dest_caps, {"rtk", "caveman"}, caveman_level="full")
-        _tk_status = opencode_caps.caps_status(_tk_dest_caps)
-        check(not _tk_e, f"галочки ставятся без ошибок: {_tk_e}")
-        check(_tk_status.get("rtk") is True and _tk_status.get("caveman") is True,
-              f"и состояние вкладки видит оба: {_tk_status}")
-        check((_tk_dest_caps / "plugins" / "rtk.ts").is_file(),
-              "плагин rtk лёг куда надо")
-        _tk_caps_agents = (_tk_dest_caps / "AGENTS.md").read_text(encoding="utf-8")
-        check("уровень: полный (ultracave)" in _tk_caps_agents,
-              "и уровень caveman — тот, что выбран в списке")
-        _tk_m, _tk_e = opencode_caps.remove_caps(_tk_dest_caps, {"rtk", "caveman"})
-        _tk_status = opencode_caps.caps_status(_tk_dest_caps)
-        check(not _tk_e and not _tk_status.get("rtk")
-              and not _tk_status.get("caveman"),
-              f"кнопка «Убрать отмеченное» снимает оба: {_tk_e}")
+            # Через установку возможностей: то же, что кнопка «Поставить отмеченное».
+            _tk_dest_caps = _tk_tmp / "caps"
+            _tk_dest_caps.mkdir()
+            _tk_m, _tk_e = opencode_caps.install_caps(
+                _tk_root, _tk_dest_caps, {"rtk", "caveman"}, caveman_level="full")
+            _tk_status = opencode_caps.caps_status(_tk_dest_caps)
+            check(not _tk_e, f"галочки ставятся без ошибок: {_tk_e}")
+            check(_tk_status.get("rtk") is True and _tk_status.get("caveman") is True,
+                  f"и состояние вкладки видит оба: {_tk_status}")
+            check((_tk_dest_caps / "plugins" / "rtk.ts").is_file(),
+                  "плагин rtk лёг куда надо")
+            _tk_caps_agents = (_tk_dest_caps / "AGENTS.md").read_text(encoding="utf-8")
+            check("уровень: полный (ultracave)" in _tk_caps_agents,
+                  "и уровень caveman — тот, что выбран в списке")
+            _tk_m, _tk_e = opencode_caps.remove_caps(_tk_dest_caps, {"rtk", "caveman"})
+            _tk_status = opencode_caps.caps_status(_tk_dest_caps)
+            check(not _tk_e and not _tk_status.get("rtk")
+                  and not _tk_status.get("caveman"),
+                  f"кнопка «Убрать отмеченное» снимает оба: {_tk_e}")
 
         # Вкладка opencode: обе галочки на месте, сняты по умолчанию,
         # у caveman — выбор из двух уровней, у rtk — кнопка замера.
@@ -6986,14 +7083,27 @@ def main() -> int:
               "кнопка замера rtk доступна — числа человек получает на своей машине")
 
         # Секретов и настоящих путей в новых файлах быть не должно.
-        _tk_our_files = (
+        # Файлы нашего кода проверяем всегда. README из thirdparty — только
+        # когда они развёрнуты: на копии репозитория их нет, и отсутствие
+        # не должно ронять селфтест (как и выше — через check_machine).
+        _tk_our_files = [
             _tk_root / "tools" / "dbapp" / "rtk.py",
             _tk_root / "tools" / "dbapp" / "caveman.py",
-            _tk_root / "tools" / "thirdparty" / "rtk" / "README.md",
-            _tk_root / "tools" / "thirdparty" / "caveman" / "README.md",
-            _tk_cave.block_text("lite"),
-            _tk_cave.block_text("full"),
-        )
+        ]
+        # block_text читает правила автора из thirdparty — их на копии
+        # репозитория нет, и вызов бросил бы FileNotFoundError. Поэтому
+        # добавляем блоки только когда исходники на месте.
+        if not _tk_cav_skipped:
+            _tk_our_files += [
+                _tk_cave.block_text("lite"),
+                _tk_cave.block_text("full"),
+            ]
+        _tk_our_files += [
+            p for p in (
+                _tk_root / "tools" / "thirdparty" / "rtk" / "README.md",
+                _tk_root / "tools" / "thirdparty" / "caveman" / "README.md",
+            ) if p.is_file()
+        ]
         _tk_leaks: list[str] = []
         for _tk_item in _tk_our_files:
             _tk_where = str(_tk_item)
@@ -7434,10 +7544,12 @@ def main() -> int:
         _px_app.PxpipeWarningDialog = _px_saved_dialog
 
         # Секретов и настоящих путей в новых файлах быть не должно.
-        _px_our_files = (
+        # Наш файл проверяем всегда, README из thirdparty — когда развёрнут.
+        _px_our_files = [
             _px_root / "tools" / "dbapp" / "pxpipe.py",
-            _px_readme,
-        )
+        ]
+        if _px_readme.is_file():
+            _px_our_files.append(_px_readme)
         _px_leaks: list[str] = []
         for _px_item in _px_our_files:
             _px_body = _px_item.read_text(encoding="utf-8")
@@ -7482,31 +7594,45 @@ def main() -> int:
         check(_tk_blob(_ai_path) == _ai_want,
               f"auto-improve: {_ai_rel} — байт в байт от автора "
               f"(blob {_ai_want[:8]})")
-    _ai_script_text = (_ai_third / "improve.py").read_text(encoding="utf-8")
-    for _ai_bit, _ai_why in (
-        ("--artifact", "ключ файла из README автора"),
-        ("--criteria", "рубрика"),
-        ("--max-iterations", "ограничение итераций"),
-        ("improve/", "ветка улучшений"),
-        ("GEMINI_API_KEY", "ключ судьи из окружения"),
-        ("IMPROVE_EVALUATOR", "модель-судья"),
-    ):
-        check(_ai_bit in _ai_script_text,
-              f"auto-improve: в скрипте автора есть {_ai_why} ({_ai_bit})")
+    _ai_script_path = _ai_third / "improve.py"
+    _ai_script_text = (_ai_script_path.read_text(encoding="utf-8")
+                       if _ai_script_path.is_file() else "")
+    if _ai_script_text:
+        for _ai_bit, _ai_why in (
+            ("--artifact", "ключ файла из README автора"),
+            ("--criteria", "рубрика"),
+            ("--max-iterations", "ограничение итераций"),
+            ("improve/", "ветка улучшений"),
+            ("GEMINI_API_KEY", "ключ судьи из окружения"),
+            ("IMPROVE_EVALUATOR", "модель-судья"),
+        ):
+            check(_ai_bit in _ai_script_text,
+                  f"auto-improve: в скрипте автора есть {_ai_why} ({_ai_bit})")
+    else:
+        check_machine(False, "auto-improve: скрипт автора — исходника нет на машине")
 
     # Наш README: что взято и что не взято — сказано словами.
-    _ai_readme = (_ai_third / "README.md").read_text(encoding="utf-8")
-    for _ai_bit, _ai_why in (
-        ("crimeacs/auto-improve", "назван автор"),
-        ("только в отдельной ветке", "сказано про отдельную ветку"),
-        ("заявления автора", "числа автора названы заявлениями"),
-        ("независимо не проверены", "и что проверки нет"),
-        ("plot/", "сказано, что график на Rust не берём"),
-        ("voice/", "и что озвучку не берём"),
-        ("auto-improve-key.txt", "назван файл ключа"),
-        ("не MCP", "сказано, что это не MCP"),
-    ):
-        check(_ai_bit in _ai_readme, f"auto-improve: в README — {_ai_why}")
+    # Скрипт и README автора лежат в thirdparty, который ставит программа:
+    # на копии репозитория их нет. Раньше чтение было без проверки, и
+    # селфтест падал вместо внятного «не проверено». Наши файлы (скрипт
+    # dbapp, скилл) проверяем всегда, чужие — когда они развёрнуты.
+    _ai_readme_path = _ai_third / "README.md"
+    _ai_readme = (_ai_readme_path.read_text(encoding="utf-8")
+                  if _ai_readme_path.is_file() else "")
+    if _ai_readme:
+        for _ai_bit, _ai_why in (
+            ("crimeacs/auto-improve", "назван автор"),
+            ("только в отдельной ветке", "сказано про отдельную ветку"),
+            ("заявления автора", "числа автора названы заявлениями"),
+            ("независимо не проверены", "и что проверки нет"),
+            ("plot/", "сказано, что график на Rust не берём"),
+            ("voice/", "и что озвучку не берём"),
+            ("auto-improve-key.txt", "назван файл ключа"),
+            ("не MCP", "сказано, что это не MCP"),
+        ):
+            check(_ai_bit in _ai_readme, f"auto-improve: в README — {_ai_why}")
+    else:
+        check_machine(False, "auto-improve: README автора — исходника нет на машине")
 
     # Галочка, установка и уборка.
     _ai_choices = {name for name, _title in opencode_caps.CAPS_CHOICES}
@@ -7535,11 +7661,13 @@ def main() -> int:
 
     # Секретов и настоящих путей в новых файлах нет. Ключ в примерах не
     # пишется целым: иначе проверка сама же его и находила бы.
-    _ai_files = (
+    _ai_files = [
         _ai_root / "tools" / "dbapp" / "auto_improve.py",
-        _ai_third / "README.md",
         _ai_root / "skills" / "auto-improve" / "SKILL.md",
-    )
+    ]
+    # README из thirdparty проверяем, только когда он развёрнут.
+    if _ai_third / "README.md" == _ai_readme_path and _ai_readme:
+        _ai_files.append(_ai_third / "README.md")
     _ai_leaks: list[str] = []
     for _ai_item in _ai_files:
         _ai_body = _ai_item.read_text(encoding="utf-8")
@@ -7611,18 +7739,25 @@ def main() -> int:
               "программа не выставляет ключ в своё окружение — только в чужой процесс")
 
         # С ключом установка проходит, повторная ничего не портит.
-        _ai_m, _ai_e = _ai.install(_ai_dest)
-        check(not _ai_e and _ai.installed(_ai_dest),
-              f"с ключом инструмент включается: {_ai_e}")
-        check(opencode_caps.caps_status(_ai_dest).get("auto-improve") is True,
-              "состояние вкладки видит включённый auto-improve")
-        _ai_manifest_before = (_ai_dest / ".opencode-base-caps.json").read_text(
-            encoding="utf-8")
-        _ai_m, _ai_e = _ai.install(_ai_dest)
-        check(not _ai_e
-              and (_ai_dest / ".opencode-base-caps.json").read_text(
-                  encoding="utf-8") == _ai_manifest_before,
-              "повторное включение манифест не переписывает")
+        # Скрипт автора лежит в thirdparty: без него установка не создаёт
+        # манифест, и чтение падало. Нет исходника — свойство машины,
+        # поэтому серия уходит в «не проверено» (как у rtk и caveman).
+        if _ai_script_path.is_file():
+            _ai_m, _ai_e = _ai.install(_ai_dest)
+            check(not _ai_e and _ai.installed(_ai_dest),
+                  f"с ключом инструмент включается: {_ai_e}")
+            check(opencode_caps.caps_status(_ai_dest).get("auto-improve") is True,
+                  "состояние вкладки видит включённый auto-improve")
+            _ai_manifest_before = (_ai_dest / ".opencode-base-caps.json").read_text(
+                encoding="utf-8")
+            _ai_m, _ai_e = _ai.install(_ai_dest)
+            check(not _ai_e
+                  and (_ai_dest / ".opencode-base-caps.json").read_text(
+                      encoding="utf-8") == _ai_manifest_before,
+                  "повторное включение манифест не переписывает")
+        else:
+            check_machine(False, "auto-improve: с ключом включается, повтор "
+                                 "не переписывает — исходника нет на машине")
 
         # Команда запуска: ключи из README автора, а ключа судьи в ней нет.
         _ai_cmd = _ai.build_command(
@@ -7651,158 +7786,165 @@ def main() -> int:
         check(not _ai.results_dir(_ai_dest).exists(),
               "и папка результатов ради отказа не создаётся")
 
-        # Репозиторий: цикл прогоняется заглушкой, которая печатает и
-        # коммитит ровно то, что печатает и коммитит настоящий скрипт.
-        _ai_repo = _ai_tmp / "репозиторий"
-        _ai_repo.mkdir()
-        _ai_git = ["git", "-c", "user.name=проверка", "-c", "user.email=проверка@example"]
-        _ai_sp.run(["git", "init", "-q"], cwd=_ai_repo, timeout=60)
-        _ai_sp.run(_ai_git + ["commit", "-qm", "первый", "--allow-empty"],
-                   cwd=_ai_repo, timeout=60)
-        _ai_note = _ai_repo / "письмо.md"
-        _ai_note.write_text("# черновик\n\nСтрока, которую цикл переделает.\n",
-                            encoding="utf-8")
-        _ai_sp.run(["git", "add", "-A"], cwd=_ai_repo, timeout=60)
-        _ai_sp.run(_ai_git + ["commit", "-qm", "добавить файл"], cwd=_ai_repo, timeout=60)
+        # Цикл запускается настоящим скриптом автора, а он лежит в
+        # thirdparty и копируется при установке. Нет исходника — цикл
+        # не запустится, журнала не будет, и чтение падало. Это свойство
+        # машины, а не нашего кода: вся серия уходит в «не проверено».
+        if not _ai_script_path.is_file():
+            check_machine(False, "auto-improve: цикл улучшения, ветка, журнал и окно — исходника нет на этой машине")
+        else:
+            # Репозиторий: цикл прогоняется заглушкой, которая печатает и
+            # коммитит ровно то, что печатает и коммитит настоящий скрипт.
+            _ai_repo = _ai_tmp / "репозиторий"
+            _ai_repo.mkdir()
+            _ai_git = ["git", "-c", "user.name=проверка", "-c", "user.email=проверка@example"]
+            _ai_sp.run(["git", "init", "-q"], cwd=_ai_repo, timeout=60)
+            _ai_sp.run(_ai_git + ["commit", "-qm", "первый", "--allow-empty"],
+                       cwd=_ai_repo, timeout=60)
+            _ai_note = _ai_repo / "письмо.md"
+            _ai_note.write_text("# черновик\n\nСтрока, которую цикл переделает.\n",
+                                encoding="utf-8")
+            _ai_sp.run(["git", "add", "-A"], cwd=_ai_repo, timeout=60)
+            _ai_sp.run(_ai_git + ["commit", "-qm", "добавить файл"], cwd=_ai_repo, timeout=60)
 
-        # Тег: пустой и с пробелами не принимается — он же имя ветки.
-        _ai_m, _ai_e = _ai.launch(_ai_dest, _ai_note, "плохой тег")
-        check(bool(_ai_e) and any("тег" in x for x in _ai_e),
-              f"тег с пробелом не принимается: {_ai_e[:1]}")
+            # Тег: пустой и с пробелами не принимается — он же имя ветки.
+            _ai_m, _ai_e = _ai.launch(_ai_dest, _ai_note, "плохой тег")
+            check(bool(_ai_e) and any("тег" in x for x in _ai_e),
+                  f"тег с пробелом не принимается: {_ai_e[:1]}")
 
-        _ai_stub = _ai_tmp / "заглушка.py"
-        # Заглушка повторяет самое главное из поведения настоящего скрипта:
-        # сама создаёт ветку improve/<тег> от текущего состояния и коммитит
-        # в неё. Иначе проверка не поймала бы, что тег вообще доезжает.
-        _ai_stub.write_text(
-            "import subprocess, sys\n"
-            "tag = sys.argv[1]\n"
-            "print('[Baseline] Score: 48/100')\n"
-            "print('[Iter 1/1] Score: 48')\n"
-            "print('   [cand] exact  score=52 : правка')\n"
-            "print('[KEEP] pairwise: challenger won')\n"
-            "subprocess.run(['git', 'checkout', '-qb', 'improve/' + tag])\n"
-            "with open('письмо.md', 'a', encoding='utf-8') as f:\n"
-            "    f.write('правка цикла\\n')\n"
-            "subprocess.run(['git', 'add', '-A'])\n"
-            "subprocess.run(['git', '-c', 'user.name=заглушка',\n"
-            "                '-c', 'user.email=заглушка@example',\n"
-            "                'commit', '-qm', 'improve/' + tag + ' iter 1'])\n"
-            "print('[DONE] ' + tag + ': 48 -> 52 (delta: +4)')\n",
-            encoding="utf-8")
-        _ai_seen: list[str] = []
-        _ai_m, _ai_e = _ai.launch(
-            _ai_dest, _ai_note, "v1", criteria="", goal="письмо короче",
-            command=[sys.executable, str(_ai_stub), "v1"],
-            progress=_ai_seen.append)
-        check(not _ai_e, f"цикл прошёл без ошибок: {_ai_e}")
-        check(any("[KEEP]" in line for line in _ai_seen),
-              f"вывод цикла виден построчно: {_ai_seen[:3]}")
-        _ai_branch = _ai_sp.run(["git", "branch", "--show-current"], cwd=_ai_repo,
-                                capture_output=True, text=True, timeout=60).stdout.strip()
-        check(_ai_branch == "improve/v1",
-              f"цикл ушёл в ветку improve/<тег>, а основная осталась в стороне: "
-              f"сейчас {_ai_branch!r}")
-        _ai_log = _ai.log_file(_ai_dest).read_text(encoding="utf-8")
-        check("KEEP" in _ai_log and "DONE" in _ai_log,
-              "вывод цикла остаётся в журнале на диске")
-        check(_ai_sample_key not in _ai_log
-              and all(_ai_sample_key not in line for line in _ai_seen),
-              "ключа судьи нет ни в журнале, ни в выводе окна")
-        check(any("Ход — кнопкой «Показать ход»" in line for line in _ai_seen),
-              "после успеха программа говорит, где смотреть ход")
+            _ai_stub = _ai_tmp / "заглушка.py"
+            # Заглушка повторяет самое главное из поведения настоящего скрипта:
+            # сама создаёт ветку improve/<тег> от текущего состояния и коммитит
+            # в неё. Иначе проверка не поймала бы, что тег вообще доезжает.
+            _ai_stub.write_text(
+                "import subprocess, sys\n"
+                "tag = sys.argv[1]\n"
+                "print('[Baseline] Score: 48/100')\n"
+                "print('[Iter 1/1] Score: 48')\n"
+                "print('   [cand] exact  score=52 : правка')\n"
+                "print('[KEEP] pairwise: challenger won')\n"
+                "subprocess.run(['git', 'checkout', '-qb', 'improve/' + tag])\n"
+                "with open('письмо.md', 'a', encoding='utf-8') as f:\n"
+                "    f.write('правка цикла\\n')\n"
+                "subprocess.run(['git', 'add', '-A'])\n"
+                "subprocess.run(['git', '-c', 'user.name=заглушка',\n"
+                "                '-c', 'user.email=заглушка@example',\n"
+                "                'commit', '-qm', 'improve/' + tag + ' iter 1'])\n"
+                "print('[DONE] ' + tag + ': 48 -> 52 (delta: +4)')\n",
+                encoding="utf-8")
+            _ai_seen: list[str] = []
+            _ai_m, _ai_e = _ai.launch(
+                _ai_dest, _ai_note, "v1", criteria="", goal="письмо короче",
+                command=[sys.executable, str(_ai_stub), "v1"],
+                progress=_ai_seen.append)
+            check(not _ai_e, f"цикл прошёл без ошибок: {_ai_e}")
+            check(any("[KEEP]" in line for line in _ai_seen),
+                  f"вывод цикла виден построчно: {_ai_seen[:3]}")
+            _ai_branch = _ai_sp.run(["git", "branch", "--show-current"], cwd=_ai_repo,
+                                    capture_output=True, text=True, timeout=60).stdout.strip()
+            check(_ai_branch == "improve/v1",
+                  f"цикл ушёл в ветку improve/<тег>, а основная осталась в стороне: "
+                  f"сейчас {_ai_branch!r}")
+            _ai_log = _ai.log_file(_ai_dest).read_text(encoding="utf-8")
+            check("KEEP" in _ai_log and "DONE" in _ai_log,
+                  "вывод цикла остаётся в журнале на диске")
+            check(_ai_sample_key not in _ai_log
+                  and all(_ai_sample_key not in line for line in _ai_seen),
+                  "ключа судьи нет ни в журнале, ни в выводе окна")
+            check(any("Ход — кнопкой «Показать ход»" in line for line in _ai_seen),
+                  "после успеха программа говорит, где смотреть ход")
 
-        # Запуск без ключа: причина называется, и работа не начинается.
-        _ai.key_file(_ai_dest).unlink()
-        _ai_m, _ai_e = _ai.launch(_ai_dest, _ai_note, "v2")
-        check(bool(_ai_e) and any("ключ судьи" in x for x in _ai_e),
-              f"без ключа цикл не запускается: {_ai_e[:1]}")
-        _ai_m, _ai_e = _ai.save_key(_ai_dest, _ai_sample_key)
+            # Запуск без ключа: причина называется, и работа не начинается.
+            _ai.key_file(_ai_dest).unlink()
+            _ai_m, _ai_e = _ai.launch(_ai_dest, _ai_note, "v2")
+            check(bool(_ai_e) and any("ключ судьи" in x for x in _ai_e),
+                  f"без ключа цикл не запускается: {_ai_e[:1]}")
+            _ai_m, _ai_e = _ai.save_key(_ai_dest, _ai_sample_key)
 
-        # Заглушка падает — это ошибка с последними строками, а не «готово».
-        _ai_bad = _ai_tmp / "падающая.py"
-        _ai_bad.write_text(
-            "import sys\nprint('начал')\nprint('сломалось', file=sys.stderr)\n"
-            "sys.exit(3)\n", encoding="utf-8")
-        _ai_m, _ai_e = _ai.launch(_ai_dest, _ai_note, "v3",
-                                  command=[sys.executable, str(_ai_bad)])
-        check(bool(_ai_e) and any("код 3" in x for x in _ai_e),
-              f"падение цикла показывается кодом: {_ai_e[:1]}")
-        check(any("Полный вывод" in x for x in _ai_e),
-              "и сказано, где смотреть полный вывод")
+            # Заглушка падает — это ошибка с последними строками, а не «готово».
+            _ai_bad = _ai_tmp / "падающая.py"
+            _ai_bad.write_text(
+                "import sys\nprint('начал')\nprint('сломалось', file=sys.stderr)\n"
+                "sys.exit(3)\n", encoding="utf-8")
+            _ai_m, _ai_e = _ai.launch(_ai_dest, _ai_note, "v3",
+                                      command=[sys.executable, str(_ai_bad)])
+            check(bool(_ai_e) and any("код 3" in x for x in _ai_e),
+                  f"падение цикла показывается кодом: {_ai_e[:1]}")
+            check(any("Полный вывод" in x for x in _ai_e),
+                  "и сказано, где смотреть полный вывод")
 
-        # Ход: таблицу печатает сам скрипт автора — подложим ему файл.
-        _ai_results = _ai.results_dir(_ai_dest)
-        _ai_results.mkdir(parents=True, exist_ok=True)
-        (_ai_results / "v1.tsv").write_text(
-            "iteration\tcommit\tscore\tdelta\tstatus\tdescription\ttimestamp\n"
-            "0\tabc1234\t48\t+0\tbaseline\tOriginal artifact\t2026-10-07T12:00\n"
-            "1\tdef5678\t52\t+4\tkeep\tправка\t2026-10-07T12:01\n",
-            encoding="utf-8")
-        _ai_m, _ai_e = _ai.history(_ai_dest, "v1")
-        _ai_text = " | ".join(_ai_m)
-        check(not _ai_e and "Keeps: 1" in _ai_text and "Best score: 52" in _ai_text,
-              f"ход читается родной командой автора: {_ai_text[:90]}")
-        check("v1" in _ai.seen_tags(_ai_dest),
-              f"готовые запуски видны в состоянии: {_ai.seen_tags(_ai_dest)}")
-        _ai_m, _ai_e = _ai.history(_ai_dest, "нет-такого")
-        check(any("нет" in x.lower() for x in _ai_m + _ai_e),
-              "у незнакомого тега ход честно пуст")
+            # Ход: таблицу печатает сам скрипт автора — подложим ему файл.
+            _ai_results = _ai.results_dir(_ai_dest)
+            _ai_results.mkdir(parents=True, exist_ok=True)
+            (_ai_results / "v1.tsv").write_text(
+                "iteration\tcommit\tscore\tdelta\tstatus\tdescription\ttimestamp\n"
+                "0\tabc1234\t48\t+0\tbaseline\tOriginal artifact\t2026-10-07T12:00\n"
+                "1\tdef5678\t52\t+4\tkeep\tправка\t2026-10-07T12:01\n",
+                encoding="utf-8")
+            _ai_m, _ai_e = _ai.history(_ai_dest, "v1")
+            _ai_text = " | ".join(_ai_m)
+            check(not _ai_e and "Keeps: 1" in _ai_text and "Best score: 52" in _ai_text,
+                  f"ход читается родной командой автора: {_ai_text[:90]}")
+            check("v1" in _ai.seen_tags(_ai_dest),
+                  f"готовые запуски видны в состоянии: {_ai.seen_tags(_ai_dest)}")
+            _ai_m, _ai_e = _ai.history(_ai_dest, "нет-такого")
+            check(any("нет" in x.lower() for x in _ai_m + _ai_e),
+                  "у незнакомого тега ход честно пуст")
 
-        # Командная строка — то же, что кнопки: отвечает словами и не врёт.
-        _ai_cli = _ai_root / "tools" / "dbapp" / "auto_improve.py"
-        _ai_cli_env = dict(_ai_os.environ)
-        _ai_cli_env["OPENCODE_CONFIG_DIR"] = str(_ai_dest)
-        _ai_run = _ai_sp.run([sys.executable, str(_ai_cli), "status"],
-                             capture_output=True, text=True, encoding="utf-8",
-                             env=_ai_cli_env, timeout=90)
-        check(_ai_run.returncode == 0 and "Готово к запуску" in _ai_run.stdout,
-              f"командная строка говорит состояние: {_ai_run.stdout.strip()[:60]}")
-        check(_ai_sample_key not in _ai_run.stdout,
-              "и ключ в её вывод не попадает")
+            # Командная строка — то же, что кнопки: отвечает словами и не врёт.
+            _ai_cli = _ai_root / "tools" / "dbapp" / "auto_improve.py"
+            _ai_cli_env = dict(_ai_os.environ)
+            _ai_cli_env["OPENCODE_CONFIG_DIR"] = str(_ai_dest)
+            _ai_run = _ai_sp.run([sys.executable, str(_ai_cli), "status"],
+                                 capture_output=True, text=True, encoding="utf-8",
+                                 env=_ai_cli_env, timeout=90)
+            check(_ai_run.returncode == 0 and "Готово к запуску" in _ai_run.stdout,
+                  f"командная строка говорит состояние: {_ai_run.stdout.strip()[:60]}")
+            check(_ai_sample_key not in _ai_run.stdout,
+                  "и ключ в её вывод не попадает")
 
-        # Снятие: убирается только наша отметка, файлы остаются.
-        _ai_m, _ai_e = _ai.remove(_ai_dest)
-        check(not _ai_e and not _ai.installed(_ai_dest),
-              f"выключение снимает только отметку: {_ai_e}")
-        check(_ai.key_file(_ai_dest).is_file()
-              and _ai.results_dir(_ai_dest).is_dir(),
-              "ключ и папка данных остаются на диске — их убирает человек")
-        _ai_m, _ai_e = _ai.remove(_ai_dest)
-        check(not _ai_e and any("и так выключен" in x for x in _ai_m),
-              "повторное выключение — не ошибка, а «и так выключен»")
+            # Снятие: убирается только наша отметка, файлы остаются.
+            _ai_m, _ai_e = _ai.remove(_ai_dest)
+            check(not _ai_e and not _ai.installed(_ai_dest),
+                  f"выключение снимает только отметку: {_ai_e}")
+            check(_ai.key_file(_ai_dest).is_file()
+                  and _ai.results_dir(_ai_dest).is_dir(),
+                  "ключ и папка данных остаются на диске — их убирает человек")
+            _ai_m, _ai_e = _ai.remove(_ai_dest)
+            check(not _ai_e and any("и так выключен" in x for x in _ai_m),
+                  "повторное выключение — не ошибка, а «и так выключен»")
 
-        # Окно: галочка снята, кнопка запуска от неё зависит, диалоги собраны.
-        _ai_tab = window.caps_tab
-        check("auto-improve" in _ai_tab.checks
-              and not _ai_tab.checks["auto-improve"].isChecked(),
-              "на вкладке opencode галочка auto-improve есть и снята по умолчанию")
-        check(not _ai_tab.btn_ai_run.isEnabled(),
-              "кнопка «Улучшить файл…» выключена, пока галочка снята")
-        _ai_tab.checks["auto-improve"].setChecked(True)
-        check(_ai_tab.btn_ai_run.isEnabled(),
-              "и включается вместе с галочкой")
-        _ai_tab.checks["auto-improve"].setChecked(False)
-        check(not _ai_tab.btn_ai_run.isEnabled(),
-              "а со снятой галочкой цикл снова не запускается")
-        for _ai_attr in ("btn_ai_key_edit", "btn_ai_check", "btn_ai_history",
-                         "ai_key_hint", "ai_hint"):
-            check(hasattr(_ai_tab, _ai_attr),
-                  f"на вкладке есть орган управления: {_ai_attr}")
-        _ai_dialog = _ai_app.AutoImproveDialog()
-        _ai_values = _ai_dialog.values()
-        check(_ai_values["tag"] == "" and _ai_values["criteria"] == "",
-              f"диалог начинает с пустых полей: {_ai_values}")
-        _ai_dialog.artifact.setText(str(_ai_note))
-        _ai_dialog._tag_from_file()
-        check(_ai_dialog.values()["tag"] == "письмо",
-              f"тег подставляется из имени файла: {_ai_dialog.values()['tag']!r}")
-        check(_ai_dialog.criteria.count() >= 1
-              and _ai_dialog.criteria.itemData(0) == "",
-              "в списке рубрик есть «без рубрики» — рубрику можно не писать")
-        check("git add -A" in _ai_readme and "improve/<тег>" in _ai_readme,
-              "в README сказано и про `git add -A`, и про ветку improve/<тег>")
-        _ai_dialog.close()
+            # Окно: галочка снята, кнопка запуска от неё зависит, диалоги собраны.
+            _ai_tab = window.caps_tab
+            check("auto-improve" in _ai_tab.checks
+                  and not _ai_tab.checks["auto-improve"].isChecked(),
+                  "на вкладке opencode галочка auto-improve есть и снята по умолчанию")
+            check(not _ai_tab.btn_ai_run.isEnabled(),
+                  "кнопка «Улучшить файл…» выключена, пока галочка снята")
+            _ai_tab.checks["auto-improve"].setChecked(True)
+            check(_ai_tab.btn_ai_run.isEnabled(),
+                  "и включается вместе с галочкой")
+            _ai_tab.checks["auto-improve"].setChecked(False)
+            check(not _ai_tab.btn_ai_run.isEnabled(),
+                  "а со снятой галочкой цикл снова не запускается")
+            for _ai_attr in ("btn_ai_key_edit", "btn_ai_check", "btn_ai_history",
+                             "ai_key_hint", "ai_hint"):
+                check(hasattr(_ai_tab, _ai_attr),
+                      f"на вкладке есть орган управления: {_ai_attr}")
+            _ai_dialog = _ai_app.AutoImproveDialog()
+            _ai_values = _ai_dialog.values()
+            check(_ai_values["tag"] == "" and _ai_values["criteria"] == "",
+                  f"диалог начинает с пустых полей: {_ai_values}")
+            _ai_dialog.artifact.setText(str(_ai_note))
+            _ai_dialog._tag_from_file()
+            check(_ai_dialog.values()["tag"] == "письмо",
+                  f"тег подставляется из имени файла: {_ai_dialog.values()['tag']!r}")
+            check(_ai_dialog.criteria.count() >= 1
+                  and _ai_dialog.criteria.itemData(0) == "",
+                  "в списке рубрик есть «без рубрики» — рубрику можно не писать")
+            check("git add -A" in _ai_readme and "improve/<тег>" in _ai_readme,
+                  "в README сказано и про `git add -A`, и про ветку improve/<тег>")
+            _ai_dialog.close()
     finally:
         if _ai_dest is not None:
             _ai.key_file(_ai_dest).unlink(missing_ok=True)
@@ -7864,35 +8006,47 @@ def main() -> int:
 
     # Офлайновое ядро и облако в исходниках автора: слова, по которым
     # программа понимает, что запускать, а что спрашивать подтверждением.
-    _gl_preflight_src = (_gl_third / "internal" / "cli" / "preflight.go").read_text(
-        encoding="utf-8")
-    for _gl_bit, _gl_why in (
-        ("--exit-code", "код выхода для проверок в конвейере"),
-        ("preflight", "основная команда"),
-    ):
-        check(_gl_bit in _gl_preflight_src,
-              f"в исходниках автора есть {_gl_why} ({_gl_bit})")
-    _gl_verify_src = (_gl_third / "internal" / "cli" / "verify.go").read_text(
-        encoding="utf-8")
-    for _gl_bit, _gl_why in (
-        ("--dry-run", "сухой прогон без устройства"),
-        ("--build-name", "имя сборки для облака"),
-    ):
-        check(_gl_bit in _gl_verify_src,
-              f"в исходниках автора есть {_gl_why} ({_gl_bit})")
-
-    # Наш README: что взято, что не взято и чего программа не делает.
-    _gl_readme = (_gl_third / "README.md").read_text(encoding="utf-8")
-    for _gl_bit, _gl_why in (
-        ("RevylAI/greenlight", "назван автор"),
-        ("fcb36e39", "назван коммит копии"),
-        ("MIT", "названа лицензия"),
-        ("офлайн", "сказано, что основной сканер офлайновый"),
-        ("Revyl", "сказано про сторонний облачный сервис"),
-        ("Go 1.24", "названа версия Go для сборки"),
-        ("не MCP", "сказано, что это не MCP"),
-    ):
-        check(_gl_bit in _gl_readme, f"greenlight: в README — {_gl_why}")
+    # Исходники и README лежат в thirdparty, который ставит программа. На
+    # копии репозитория их нет, и чтение без проверки роняло селфтест
+    # вместо внятного «не проверено». Наши файлы проверяем всегда, чужие
+    # исходники — когда они развёрнуты.
+    _gl_preflight_path = _gl_third / "internal" / "cli" / "preflight.go"
+    _gl_verify_path = _gl_third / "internal" / "cli" / "verify.go"
+    _gl_readme_path = _gl_third / "README.md"
+    # Пустая строка по умолчанию: ниже _gl_readme читается ещё в цикле
+    # проверки секретов, и без исходников переменная осталась бы не
+    # заданной — это ошибка вместо внятного «не проверено».
+    _gl_readme = ""
+    if not (_gl_preflight_path.is_file() and _gl_verify_path.is_file()
+            and _gl_readme_path.is_file()):
+        check_machine(False, "greenlight: исходники автора и README — "
+                             "исходника нет на этой машине")
+    else:
+        _gl_preflight_src = _gl_preflight_path.read_text(encoding="utf-8")
+        for _gl_bit, _gl_why in (
+            ("--exit-code", "код выхода для проверок в конвейере"),
+            ("preflight", "основная команда"),
+        ):
+            check(_gl_bit in _gl_preflight_src,
+                  f"в исходниках автора есть {_gl_why} ({_gl_bit})")
+        _gl_verify_src = _gl_verify_path.read_text(encoding="utf-8")
+        for _gl_bit, _gl_why in (
+            ("--dry-run", "сухой прогон без устройства"),
+            ("--build-name", "имя сборки для облака"),
+        ):
+            check(_gl_bit in _gl_verify_src,
+                  f"в исходниках автора есть {_gl_why} ({_gl_bit})")
+        _gl_readme = _gl_readme_path.read_text(encoding="utf-8")
+        for _gl_bit, _gl_why in (
+            ("RevylAI/greenlight", "назван автор"),
+            ("fcb36e39", "назван коммит копии"),
+            ("MIT", "названа лицензия"),
+            ("офлайн", "сказано, что основной сканер офлайновый"),
+            ("Revyl", "сказано про сторонний облачный сервис"),
+            ("Go 1.24", "названа версия Go для сборки"),
+            ("не MCP", "сказано, что это не MCP"),
+        ):
+            check(_gl_bit in _gl_readme, f"greenlight: в README — {_gl_why}")
 
     # Галочка, установка и уборка — как у автоулучшения.
     _gl_choices = {name for name, _title in opencode_caps.CAPS_CHOICES}
@@ -7924,11 +8078,13 @@ def main() -> int:
         check(_gl_bit in _gl_main_src, f"вкладка opencode: {_gl_why} ({_gl_bit})")
 
     # Секретов и настоящих путей в новых файлах нет.
-    _gl_files = (
+    _gl_files = [
         _gl_root / "tools" / "dbapp" / "greenlight.py",
-        _gl_third / "README.md",
         _gl_root / "skills" / "greenlight" / "SKILL.md",
-    )
+    ]
+    # README из thirdparty проверяем, только когда он развёрнут.
+    if _gl_readme:
+        _gl_files.append(_gl_third / "README.md")
     _gl_leaks: list[str] = []
     for _gl_item in _gl_files:
         _gl_body = _gl_item.read_text(encoding="utf-8")
@@ -8051,13 +8207,20 @@ def main() -> int:
               f"с живым сканером отметка ставится: {_gl_e}")
         check(opencode_caps.caps_status(_gl_dest).get("greenlight") is True,
               "состояние вкладки видит включённый greenlight")
-        _gl_manifest_before = (_gl_dest / ".opencode-base-caps.json").read_text(
-            encoding="utf-8")
-        _gl_m, _gl_e = _gl.install(_gl_dest)
-        check(not _gl_e
-              and (_gl_dest / ".opencode-base-caps.json").read_text(
-                  encoding="utf-8") == _gl_manifest_before,
-              "повторное включение манифест не переписывает")
+        # Манифест создаётся установкой, а она копирует README из
+        # thirdparty. Нет исходника — манифеста не будет, и чтение
+        # падало; это свойство машины, поэтому «не проверено».
+        _gl_manifest_file = _gl_dest / ".opencode-base-caps.json"
+        if _gl_manifest_file.is_file():
+            _gl_manifest_before = _gl_manifest_file.read_text(encoding="utf-8")
+            _gl_m, _gl_e = _gl.install(_gl_dest)
+            check(not _gl_e
+                  and _gl_manifest_file.read_text(encoding="utf-8")
+                  == _gl_manifest_before,
+                  "повторное включение манифест не переписывает")
+        else:
+            check_machine(False, "greenlight: повторное включение манифест "
+                                 "не переписывает — исходника нет на машине")
 
         # Основная проверка: папка проекта, находки построчно и машинный отчёт.
         _gl_project = _gl_tmp / "приложение-ios"
