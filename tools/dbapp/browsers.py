@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -302,6 +303,23 @@ def write_token(dest: Path, token: str, progress=None) -> tuple[bool, str]:
     return True, f"Токен сохранён: {path}"
 
 
+def _token_value(raw: str) -> str:
+    """Отрезает имя переменной, если оно попало вместе с токеном.
+
+    Страница расширения показывает токен строкой
+    `PLAYWRIGHT_MCP_EXTENSION_TOKEN=abc-def`, и её кнопка копирования
+    копирует **строку целиком**. Человек вставляет её в поле как есть —
+    и сервер получает мусор, который расширение справедливо отвергает
+    молча. Поэтому лишнее отрезаем сами, а не перекладываем ошибку на
+    человека, который вставил ровно то, что ему показали.
+    """
+    value = raw.strip().strip("\"'")
+    name, sep, tail = value.partition("=")
+    if sep and re.fullmatch(r"[A-Za-z0-9_]*TOKEN", name):
+        value = tail.strip().strip("\"'")
+    return value
+
+
 def read_token(dest: Path) -> str:
     """Читает токен из своего файла. Пустая строка, если токена нет.
 
@@ -324,7 +342,7 @@ def read_token(dest: Path) -> str:
             continue
         if any(ch.isspace() for ch in line):
             continue
-        return line
+        return _token_value(line)
     return ""
 
 
