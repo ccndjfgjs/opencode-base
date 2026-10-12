@@ -5421,7 +5421,8 @@ def main() -> int:
                 "    if name == 'browser_tabs':",
                 "        return {'content': [{'type': 'text',",
                 "                 'text': '### Result' + chr(10)",
-                "                       + '- 0: (current) [Моя вкладка]'}]}",
+                "                       + '- 0: (current) [Welcome](chrome-extension://'",
+                "                       + 'mmlmfjhmonkocbjadbfplnigmagldckm/connect.html)'}]}",
                 "    if name == 'browser_evaluate':",
                 "        return {'content': [{'type': 'text',",
                 "                 'text': '### Result' + chr(10) + chr(34)",
@@ -5461,6 +5462,22 @@ def main() -> int:
                   f"то есть никуда не полезла: {_br_note4}")
             check("снимок" not in _br_note4,
                   f"и снимок чужого экрана не делала: {_br_note4}")
+            check("служебная вкладка убрана" in _br_note4,
+                  f"и служебную вкладку расширения закрыла, а не оставила "
+                  f"мёртвой: {_br_note4}")
+            # Рядом с вкладкой человека служебную закрывать нельзя:
+            # индекс не тот — вместе с ней уйдёт и его работа.
+            _br_sess_many = _br_tmp / "подделка_сессии_своими.py"
+            _br_sess_many.write_text(_br_sess.read_text(encoding="utf-8").replace(
+                "'- 0: (current) [Welcome](chrome-extension://'",
+                "'- 0: (current) [Работа](https://example.org/)' + chr(10)"
+                "                       + '- 1: (current) [Welcome](chrome-extension://'"),
+                encoding="utf-8")
+            _br_ok5, _br_note5 = _br.probe(
+                _br_tmp, timeout=30, command=[sys.executable, str(_br_sess_many)])
+            check(_br_ok5 and "служебная вкладка убрана" not in _br_note5
+                  and "вкладок 2" in _br_note5,
+                  f"а рядом с вкладками человека ничего не трогает: {_br_note5}")
             _br.write_choice(_br_tmp,
                              _br.Choice(browser="chrome", profile="separate"))
 
