@@ -264,6 +264,13 @@ def write_choice(dest: Path, choice: Choice) -> tuple[list[str], list[str]]:
     return messages, errors
 
 
+#: Идентификатор расширения Playwright в Chrome. Нужен не для установки
+#: (её делает человек), а чтобы узнать служебную вкладку расширения и
+#: убрать её после проверки: сервер к тому моменту уже умер, и вкладка
+#: остаётся в браузере человека мёртвым мусором.
+EXTENSION_ID = "mmlmfjhmonkocbjadbfplnigmagldckm"
+
+
 def token_path(dest: Path) -> Path:
     """Файл с токеном расширения Playwright: рядом с настройками.
 
@@ -664,9 +671,19 @@ def probe(dest: Path, timeout: int = PROBE_TIMEOUT,
             if title.get("isError") or not page:
                 return False, ("Подключение есть, а страницу прочитать не "
                                f"вышло: {_clean(page or 'пустой ответ')}")
+            # Проверка открывает вкладку расширения, а сервер после неё
+            # умирает: вкладка остаётся мёртвой и при обновлении ругается
+            # «Failed to connect to MCP relay». Закрываем её — но только если
+            # она одна. Рядом вкладки человека не трогаем ни одной.
+            left = ""
+            if tabs == 1 and EXTENSION_ID in text:
+                call("browser_tabs", {"action": "close", "index": 0}, 6,
+                     min(timeout, 30))
+                left = ", служебная вкладка убрана"
             return True, (f"{name} {version}: инструментов {len(tools)}, "
                           f"подключение к твоим вкладкам живое, вкладок "
-                          f"{tabs}, заголовок текущей: {_clean(page[:60])}")
+                          f"{tabs}, заголовок текущей: {_clean(page[:60])}"
+                          f"{left}")
 
         # Шаг 1: браузер открывает страницу. Данные в адресе, а не в сети:
         # проверка не должна зависеть от того, есть ли интернет.
