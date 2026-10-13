@@ -759,12 +759,17 @@ def chat(dest: Path, model: str, prompt: str,
 
 
 def chat_models(dest: Path) -> tuple[list[str], str]:
-    """Имена моделей моста — то, что можно вписать в провайдера opencode."""
+    """Имена моделей моста — то, что можно вписать в провайдера opencode.
+
+    Повторяющиеся publicName (одна и та же модель в разных категориях
+    каталога арены) сокращаются до одного: в JSON-объекте провайдера
+    дубли ключей недопустимы.
+    """
     items, note = models(dest)
     if note:
         return [], note
     names = [str(item.get("id")) for item in items if item.get("id")]
-    return names, ""
+    return list(dict.fromkeys(names)), ""
 
 
 # ------------------------------------------------------------------ провайдер в opencode

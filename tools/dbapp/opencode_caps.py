@@ -825,10 +825,12 @@ def install_providers(
         for name in sorted(selection):
             _title, _key, preset_block = PROVIDER_PRESETS[name]
             block = override.get(name) or preset_block
-            bounds = find_key_object(text, "provider")
-            assert bounds is not None
-            if not has_entry(text[bounds[0] : bounds[1]], name):
-                text = insert_entry(text, "provider", name, block)
+            # Всегда вставляем: insert_entry сам удаляет прежнюю запись с
+            # этим именем и вставляет новую. У динамических провайдеров
+            # (LMArena) список моделей живой и меняется — существующая
+            # запись должна обновляться, а не пропускаться, иначе в
+            # настройках остаётся протухший список моделей.
+            text = insert_entry(text, "provider", name, block)
         text = fix_trailing_commas(text)
         if not check_jsonc(text):
             raise ValueError("после вставки файл не читается — откат")

@@ -933,6 +933,39 @@ async def get_initial_data():
                     debug_print(f"✅ Saved {len(models)} models")
                 else:
                     debug_print("⚠️ Could not find models in page")
+                    # Fallback: the arena stopped embedding initialModels in the
+                    # HTML (it now renders "$undefined"); the live catalog comes
+                    # from its own endpoint. Fetch it from the same page so the
+                    # session cookies and cf_clearance still apply. Records carry
+                    # the same fields (id, publicName, organization, capabilities),
+                    # so the chat path works unchanged.
+                    try:
+                        catalog = await page.evaluate(
+                            "async () => { const r = await fetch('/nextjs-api/model-catalog',"
+                            " { headers: { 'Accept': 'application/json' } });"
+                            " if (!r.ok) return null; return await r.json(); }"
+                        )
+                        flat: list = []
+                        if isinstance(catalog, list):
+                            for category in catalog:
+                                if (isinstance(category, dict)
+                                        and isinstance(category.get("models"), list)):
+                                    flat.extend(m for m in category["models"]
+                                                if isinstance(m, dict))
+                        seen: set = set()
+                        unique: list = []
+                        for m in flat:
+                            key = str(m.get("id") or m.get("publicName") or "")
+                            if key and key not in seen:
+                                seen.add(key)
+                                unique.append(m)
+                        if unique:
+                            save_models(unique)
+                            debug_print(f"✅ Saved {len(unique)} models from model-catalog fallback")
+                        else:
+                            debug_print("⚠️ model-catalog fallback returned no usable models")
+                    except Exception as e:
+                        debug_print(f"❌ model-catalog fallback failed: {e}")
             except Exception as e:
                 debug_print(f"❌ Error extracting models: {e}")
 
@@ -2502,11 +2535,15 @@ async def api_chat_completions(request: Request, api_key: dict = Depends(rate_li
              
             payload = {
                 "id": session_id,
-                "mode": "direct",
+                # Arena (окт 2026) запретила "direct" при создании новой сессии:
+                # "'direct' mode is not allowed when starting a new
+                # conversation". "direct-battle" — новый режим: выбранная модель
+                # A плюс случайный соперник. modelBMessageId при этом шлать
+                # нельзя (сервер: "Direct chat must start with one model").
+                "mode": "direct-battle",
                 "modelAId": model_id,
                 "userMessageId": user_msg_id,
                 "modelAMessageId": model_msg_id,
-                "modelBMessageId": model_b_msg_id,
                 "userMessage": {
                     "content": prompt,
                     "experimental_attachments": experimental_attachments,
@@ -2517,7 +2554,7 @@ async def api_chat_completions(request: Request, api_key: dict = Depends(rate_li
             }
             url = f"https://arena.ai{STREAM_CREATE_EVALUATION_PATH}"
             debug_print(f"📤 Target URL: {url}")
-            debug_print(f"📦 Payload structure: Simple userMessage format")
+            debug_print(f"📦 Payload structure: direct-battle (new session), no modelBMessageId")
             debug_print(f"🔍 Full payload: {json.dumps(payload, indent=2)}")
             http_method = "POST"
         else:
@@ -4390,7 +4427,12 @@ async def api_chat_completions(request: Request, api_key: dict = Depends(rate_li
             log_http_status(response.status_code, "LMArena API Response")
             
             # Use aread() to ensure we buffer streaming-capable responses (like BrowserFetchStreamResponse)
-            response_bytes = await response.aread()
+            # cloudscraper/requests responses have no aread(); they are already
+            # fully buffered — read .content synchronously instead.
+            if hasattr(response, "aread"):
+                response_bytes = await response.aread()
+            else:
+                response_bytes = response.content
             response_text_body = response_bytes.decode("utf-8", errors="replace")
             
             debug_print(f"📏 Response length: {len(response_text_body)} characters")
