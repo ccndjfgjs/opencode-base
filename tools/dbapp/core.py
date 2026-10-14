@@ -2644,7 +2644,6 @@ def refresh_skills(base: Path) -> list[str]:
 
 
 #: Файлы, которые программа считает своими, а база получает копией.
-#: Файлы, которые программа считает своими, а база получает копией.
 BASE_DATA_FILES = ("mcp-registry.json", "THIRD-PARTY-NOTICES.md")
 
 #: Папка в backups, где лежит версия, которую программа положила в базу
@@ -2693,6 +2692,15 @@ def sync_base_data(base: Path, program: Path | None = None) -> list[str]:
             )
             continue
         backup = _keep_previous(base, dst_file)
+        if dst_bytes is not None and shipped is None:
+            # Первая сверка после обновления программы: отличить «отстала»
+            # от «правили руками» ещё нечем, прошлой выдачи нет. Файл всё
+            # равно обновляем — иначе новая программа молча показывала бы
+            # старый список, — но говорим, что проверить было нечем и куда
+            # легла прежняя копия. Молчать здесь нельзя.
+            backup += ("; первая сверка после обновления программы, отличить "
+                       "правку от отставания было нечем — прежняя копия "
+                       "отложена")
         try:
             dst_file.parent.mkdir(parents=True, exist_ok=True)
             dst_file.write_bytes(src_bytes)

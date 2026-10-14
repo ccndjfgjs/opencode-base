@@ -4986,12 +4986,28 @@ class CapsTab(ScrollPage):
         # Что обновилось из программы — говорим вслух. Молча обновившийся
         # реестр выглядит как «ничего не изменилось», а человек потом
         # гадает, откуда взялись серверы и куда делись прежние.
-        for line in getattr(self, "_reg_sync_notes", []) or []:
+        notes = getattr(self, "_reg_sync_notes", []) or []
+        for line in notes:
             self.log.add(f"Реестр базы: {line}", "ok")
-        if getattr(self, "_reg_sync_notes", None):
+        # Подсказка — только про то, что случилось на самом деле. Если
+        # обновился один лишь файл уведомлений, писать «реестр обновлён»
+        # значило бы сказать неправду.
+        if any("mcp-registry.json" in line for line in notes):
+            if any("меняли руками" in line for line in notes):
+                self.reg_hint.setText(
+                    "Реестр в базе правили руками — программа его не тронула. "
+                    "Её версия лежит в .workbuddy-ai/backups/дано-программой, "
+                    "показанные серверы — из твоей копии."
+                )
+            else:
+                self.reg_hint.setText(
+                    "Реестр в базе обновлён из программы — прежняя копия "
+                    "отложена в .workbuddy-ai/backups."
+                )
+        elif notes:
             self.reg_hint.setText(
-                "Реестр в базе обновлён из программы — прежняя копия "
-                "отложена в .workbuddy-ai/backups."
+                "Файлы программы в базе обновлены, прежние копии отложены "
+                "в .workbuddy-ai/backups."
             )
 
     def _reg_config_saved(self, server: mcp_registry.Server) -> bool:
