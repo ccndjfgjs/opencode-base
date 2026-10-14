@@ -513,6 +513,33 @@ Apache-2.0 строже MIT: уведомление об авторских пр
 
 ---
 
+## Мосты движков — запускаются, в базу не копируются
+
+Исходники этих проектов в репозиторий не клались. Лаунчер только
+стартует опубликованный пакет или встроенную команду. Версии сняты
+14.10.2026 с PyPI, npm и живым `winget show` на этой машине; живым
+редактором не подтверждались.
+
+| Мост | Проект | Лицензия | Что закреплено |
+|---|---|---|---|
+| Unity | [CoplayDev/unity-mcp](https://github.com/CoplayDev/unity-mcp) | MIT | `mcpforunityserver==10.3.0` |
+| Unreal | [ChiR24/Unreal_mcp](https://github.com/ChiR24/Unreal_mcp) | MIT | `unreal-engine-mcp-server@0.6.0-beta-e` |
+| Godot | [hi-godot/godot-ai](https://github.com/hi-godot/godot-ai) | MIT | пакет `godot-ai` 4.3.0; команду пишет док |
+| TikTok | [getmcpads-com/tiktok-ads-mcp-server](https://github.com/getmcpads-com/tiktok-ads-mcp-server) | Apache-2.0 | `@getmcpads/tiktok-ads-mcp-server@2.0.1` |
+| Roblox Studio | встроенный сервер, [документация](https://create.roblox.com/docs/studio/mcp) | лицензия Studio | команда `mcp.bat`, чужой пакет не берётся |
+| CapCut | [sun-guannan/VectCutAPI](https://github.com/sun-guannan/VectCutAPI) | Apache-2.0 | исходники не копировались. В базу пишется только адрес MCP, который дал человек |
+| Spotify | [XavierFabregat/spotify-mcp](https://github.com/XavierFabregat/spotify-mcp) | MIT | `@xavifabregat/spotify-mcp@0.1.2`, исходники не копировались |
+| ChatGPT API | документация OpenAI Responses | условия OpenAI | свой код лаунчера, ключ не хранится в базе |
+| Codex | документация Codex CLI | условия OpenAI | свой код лаунчера, CLI не копировался |
+| Cursor | документация Cursor CLI | условия Cursor | свой код лаунчера, CLI не копировался |
+
+Не аффилировано с Unity Technologies, Epic Games, Roblox, Godot, TikTok или ByteDance.
+Дерево VectCutAPI в репозиторий не клалось: опубликованного пакета нет,
+а облачный рендер у них закрытый. На capcut.com программа не ходим — там
+не MCP, и адрес сайта она отвергает.
+
+---
+
 ## Чего в базе нет и почему
 
 | Проект | Решение | Причина |
@@ -521,6 +548,11 @@ Apache-2.0 строже MIT: уведомление об авторских пр
 | `blendermcp.org/setup` | не взят | Сторонний сайт-посредник, не официальный проект; гайда для OpenCode нет, толкает платный продукт |
 | `virgiliojr94/book-to-skill` | не взят как скилл | 32,8 тыс. звёзд, MIT, но это Python-конвертер с зависимостями (pyproject.toml, uv.lock). Просто скопировать нельзя. Описан в `инструкции/MCP-серверы.md` как инструмент с честной пометкой о требованиях |
 | `arjun988/blender-skills` | ссылка не дана | В вашем списке упоминались «94 скилла по 3D», но ссылки на этот репозиторий не было, а предоставленная ссылка ведёт на `ahujasid/mcp-for-blender` — это MCP-сервер, не скиллы |
+| `chongdashu/unreal-mcp`, `flopperam/unreal-engine-mcp` | не взяты | лицензии нет, в публикуемую базу класть нельзя |
+| `ltseverydayyou/roblox-mcp-bridge` и прочие executor | не взяты | это обход платформы, не мост студии; для аккаунта Roblox кончается баном |
+| скрейперы TikTok | не взяты | обход входа и сбор чужих данных не делаются |
+| VK Музыка и Яндекс.Музыка | не взяты | открытого API на включение трека нет; частные клиенты скачивают файл или внедряются в окно плеера |
+| сайт chatgpt.com | не взят | официального MCP нет; браузер и куки не используются. Есть мост к API по своему ключу |
 
 ---
 

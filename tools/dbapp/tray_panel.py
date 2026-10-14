@@ -66,20 +66,30 @@ CATEGORY_TITLES = {
 CATEGORY_BY_ID = {
     # Модели: не мост к программе, а источник моделей для opencode.
     "lmarena": "models",
-    # На Node.js. У всех шести мост поднимается через npm или npx.
+    # На Node.js. Мост поднимается через npm или npx.
     "windows-admin": "javascript",
     "excel": "javascript",
     "obs": "javascript",
     "dbhub": "javascript",
     "browsers": "javascript",
     "omniroute": "javascript",
-    # На Python.
+    "unreal": "javascript",
+    "tiktok": "javascript",
+    "spotify": "javascript",
+    # На Python: uvx тянет сервер Unity и godot-ai.
     "blender": "python",
     "android-emulator": "python",
     "ldplayer": "python",
-    # Настоящего рантайма нет: плагин внутри IDE и сервер вендора.
+    "unity": "python",
+    "godot": "python",
+    # Настоящего рантайма нет: плагин внутри IDE или сервер на стороне вендора.
     "android-studio": "ide",
+    "roblox-studio": "ide",
     "adobe-creativity": "cloud",
+    "capcut": "cloud",
+    "chatgpt": "cloud",
+    "codex": "cloud",
+    "cursor": "cloud",
 }
 
 BASE_BRIDGES_TITLE = "Мосты базы"

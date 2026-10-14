@@ -61,6 +61,16 @@ tools/pc-bridge/shots/
 # Живой список прокси — обновляется кнопкой в окне, отдельно от эталона
 tools/antiblock/public_socks5.local.txt
 
+# Секреты мостов. Лежат рядом с настройками opencode, но если их
+# скопируют в базу — публиковать нельзя.
+mcp-tiktok.txt
+mcp-unreal.txt
+mcp-godot-attach.json
+mcp-capcut.json
+mcp-spotify.txt
+mcp-chatgpt.txt
+mcp-cursor.txt
+
 # Личные данные пользователя — не публикуются
 profile.md
 facts.md

@@ -10836,9 +10836,9 @@ def main() -> int:
     # --- настоящий реестр
     _base = core.program_root()
     _servers = mcp_registry.load_servers(_base)
-    check(len(_servers) == 12, f"реестр читается, 12 серверов: {len(_servers)}")
+    check(len(_servers) == 22, f"реестр читается, 22 сервера: {len(_servers)}")
     check(all(s.program_install is not None for s in _servers),
-          "у всех 12 серверов есть блок program_install")
+          "у всех 22 серверов есть блок program_install")
     _by_id = {s.id: s.program_install for s in _servers}
     if all(_by_id.values()):
         check(_by_id["blender"].winget_id == "BlenderFoundation.Blender"
@@ -10891,9 +10891,15 @@ def main() -> int:
         for _a in _p.alternatives:
             if isinstance(_a, dict) and _a.get("winget_id"):
                 _winget_ids.add(str(_a["winget_id"]))
+    # Шесть новых идентификаторов сверены живым `winget show` 14.10.2026:
+    # Epic Games Launcher 1.3.210.0, Godot 4.7.2, Roblox Studio 1.6.3.172,
+    # CapCut 9.4.0.4015, Spotify 1.3.4.258, Codex CLI 0.161.0.
     _want_ids = {"Adobe.CreativeCloud", "BlueStack.BlueStacks",
-                 "BlenderFoundation.Blender", "Google.AndroidStudio",
-                 "OBSProject.OBSStudio", "OpenJS.NodeJS.LTS"}
+                 "BlenderFoundation.Blender", "EpicGames.EpicGamesLauncher",
+                 "GodotEngine.GodotEngine", "Google.AndroidStudio",
+                 "OBSProject.OBSStudio", "OpenJS.NodeJS.LTS",
+                 "Roblox.RobloxStudio", "ByteDance.CapCut",
+                 "Spotify.Spotify", "OpenAI.Codex"}
     check(_winget_ids == _want_ids,
           f"идентификаторы в реестре — те самые, включая варианты: {sorted(_winget_ids)}")
     # ---- 8м. Движок вкладки «Программы»
@@ -10921,13 +10927,15 @@ def main() -> int:
         check(any("серверов 0" in b for b in _bad2),
               f"и называет причину — ноль серверов: {(_bad2 or [''])[0][:70]}")
 
-        # Все двенадцать на месте, и у каждого четыре ответа.
+        # Все двадцать два на месте, и у каждого четыре ответа.
         _views = pmod.server_views(_base)
-        check(len(_views) == 12, f"движок прочитал все двенадцать серверов: {len(_views)}")
+        check(len(_views) == 22, f"движок прочитал все двадцать два сервера: {len(_views)}")
         _by = {v.id: v for v in _views}
         for _sid in ("windows-admin", "excel", "blender", "adobe-creativity",
                      "android-studio", "obs", "android-emulator", "ldplayer",
-                     "dbhub", "browsers", "omniroute", "lmarena"):
+                     "dbhub", "browsers", "omniroute", "lmarena",
+                     "unity", "unreal", "roblox-studio", "godot", "tiktok",
+                     "capcut", "spotify", "chatgpt", "codex", "cursor"):
             check(_sid in _by, f"сервер {_sid} есть в движке")
 
         # Порог версии сравнивается, а не просто запоминается. Пример DBHub
@@ -11016,13 +11024,14 @@ def main() -> int:
         _needs = pmod.bridge_needs(_base)
         check(len(_needs) == 2, f"в разделе «нужно мостам» два предмета: {len(_needs)}")
         _nn = {n.program: n for n in _needs}
-        check("Node.js" in _nn and _nn["Node.js"].wanted_by_count == 6,
-              "Node.js требуют шестеро серверов из двенадцати: LMArena на Python")
+        check("Node.js" in _nn and _nn["Node.js"].wanted_by_count == 9,
+              "Node.js требуют девять серверов из двадцати двух: LMArena и "
+              "OmniRoute на Node, Unreal, TikTok и Spotify — тоже")
         check(_nn.get("Node.js") is not None
               and _nn["Node.js"].install.winget_id == "OpenJS.NodeJS.LTS",
               "у Node.js настоящий идентификатор winget")
-        check("uv / uvx" in _nn and _nn["uv / uvx"].required_by == ["blender"],
-              "uv требует только blender — и его тоже не было в списке программ")
+        check("uv / uvx" in _nn and _nn["uv / uvx"].required_by == ["blender", "unity", "godot"],
+              "uv требуют blender, unity и godot — и uv не было в списке программ")
 
         # Раздел не должен молчать, если его нет.
         check(pmod.bridge_section_problem(_base) == "",
@@ -11272,8 +11281,9 @@ def main() -> int:
         check(_node is not None, "Node.js — карточка есть")
         _node_servers = set(_node.servers) if _node else set()
         check(_node_servers == {"windows-admin", "excel", "obs", "dbhub",
-                               "browsers", "omniroute"},
-              f"Node.js одной карточкой на шестерых серверов: {sorted(_node_servers)}")
+                               "browsers", "omniroute", "unreal", "tiktok",
+                               "spotify"},
+              f"Node.js одной карточкой на девяти серверах: {sorted(_node_servers)}")
         check(sum(1 for c in _cards if c.name == "Node.js") == 1,
               "и не двумя карточками, как он описан в реестре")
         check("нужна:" in pcard.needed_by_text(_node, pcard.servers_by_name(_pbase)),
