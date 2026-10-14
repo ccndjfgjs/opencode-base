@@ -1112,6 +1112,60 @@ def main() -> int:
                 _no_why = [s.get("id") for s in _srv if not s.get("why") or not s.get("verdict")]
                 check(not _no_why, f"у всех серверов есть зачем и вердикт (нет: {_no_why})")
 
+        # ---- 5е. Синхронизация реестра: отставшее и правленое руками.
+        # Реестр — файл программы, но база держит копию. Пока копия не
+        # обновлялась при открытии вкладки, окно молча показывало старый
+        # список и перенесённые мосты было не подключить. Но и откатывать
+        # ручные правки молча нельзя: молчаливый откат хуже старого
+        # списка. Различаем не догадкой, а сверкой с тем, что программа
+        # дала в прошлый раз.
+        echo("\n--- 5е. Синхронизация реестра базы ---")
+        _sync_base = Path(tempfile.mkdtemp(prefix="regsync-"))
+        try:
+            _sync_src = core.program_file("mcp-registry.json")
+            _sync_body = _sync_src.read_bytes()
+            _reg_copy = _sync_base / "mcp-registry.json"
+            _reg_copy.write_bytes(_sync_body)
+            # второй файл программы тоже кладём заранее: иначе первый
+            # вызов скопирует его, и проверка «молчит» искала бы не то
+            (_sync_base / "THIRD-PARTY-NOTICES.md").write_bytes(
+                core.program_file("THIRD-PARTY-NOTICES.md").read_bytes())
+            check(core.sync_base_data(_sync_base) == [],
+                  "совпадающий с программой реестр синхронизация не трогает")
+
+            # отставшая копия: её дала программа, человек не трогал
+            _shipped = (_sync_base / ".workbuddy-ai" / "backups"
+                        / core.SHIPPED_DIR / "mcp-registry.json")
+            _shipped.parent.mkdir(parents=True, exist_ok=True)
+            _stale = json.loads(_sync_body.decode("utf-8"))
+            _stale["servers"] = _stale["servers"][:12]
+            _stale_body = json.dumps(_stale, ensure_ascii=False, indent=2) + "\n"
+            _reg_copy.write_text(_stale_body, encoding="utf-8")
+            _shipped.write_text(_stale_body, encoding="utf-8")
+            _notes = core.sync_base_data(_sync_base)
+            check(any("Скопировано: mcp-registry.json" in n for n in _notes),
+                  f"отставший реестр обновлён: {_notes}")
+            check(any("прежняя копия" in n for n in _notes),
+                  "и прежняя копия отложена, а не выброшена")
+
+            # правка человека: файл совпадает и с программой нет, и с тем,
+            # что программа давала, — значит его правили руками
+            _mine = json.loads(_sync_body.decode("utf-8"))
+            _mine["servers"][0]["name"] = "имя, которое поставил человек"
+            _reg_copy.write_text(
+                json.dumps(_mine, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8")
+            _before = _reg_copy.read_bytes()
+            _notes = core.sync_base_data(_sync_base)
+            check(any("меняли руками" in n for n in _notes),
+                  f"о ручной правке сказано словами: {_notes}")
+            check(_reg_copy.read_bytes() == _before,
+                  "правка человека не откатилась молча")
+            check((_shipped.parent / "новая-mcp-registry.json").is_file(),
+                  "версия программы положена рядом — взять, если захочется")
+        finally:
+            shutil.rmtree(_sync_base, ignore_errors=True)
+
         # ---- 5д. Реестр серверов MCP: команды, проверка, вкл/выкл.
         # Сделано 28.09 по просьбе пользователя: серверы из реестра должны быть
         # видны в программе и включаться кнопкой. Раньше реестр был только
