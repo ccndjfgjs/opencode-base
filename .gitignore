@@ -76,6 +76,9 @@ profile.md
 facts.md
 projects.md
 созданные-базы.json
+# Переключатели «Интеграция с Obsidian» в окне — состояние этой машины,
+# как и список баз выше. В базу и на GitHub они не едут.
+создание-базы.json
 debug.log
 themes/
 sessions/

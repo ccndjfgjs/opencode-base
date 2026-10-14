@@ -23,6 +23,7 @@ if __package__ in (None, ""):
     import browsers  # type: ignore[import-not-found]
     import caveman  # type: ignore[import-not-found]
     import dbhub  # type: ignore[import-not-found]
+    import engine_setup  # type: ignore[import-not-found]
     import lmarena  # type: ignore[import-not-found]
     import auto_improve  # type: ignore[import-not-found]
     import greenlight  # type: ignore[import-not-found]
@@ -34,9 +35,9 @@ if __package__ in (None, ""):
     import winget_install  # type: ignore[import-not-found]
 else:  # запуск как модуль
     from . import (core, ui, mcp_registry, opencode_caps, android_studio,
-                   auto_improve, bridges, browsers, caveman, dbhub, greenlight,
-                   lmarena, omniroute, program_cards, pxpipe, qwen_review, rtk,
-                   winget_install)
+                   auto_improve, bridges, browsers, caveman, dbhub, engine_setup,
+                   greenlight, lmarena, omniroute, program_cards, pxpipe,
+                   qwen_review, rtk, winget_install)
 
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QFontMetrics
@@ -531,6 +532,31 @@ class CreateTab(ScrollPage):
         link_layout.addWidget(self.link_hint)
         outer.addWidget(box_link)
 
+        # --- Obsidian. Два независимых переключателя, не один.
+        box_obs = QGroupBox("Интеграция с Obsidian")
+        obs_layout = QVBoxLayout(box_obs)
+        self.chk_obsidian = QCheckBox("Поддержка Obsidian")
+        self.chk_obsidian.setObjectName("obsidian-support")
+        obs_layout.addWidget(self.chk_obsidian)
+        obs_layout.addWidget(ui.label(
+            "Создать базу знаний, совместимую с Obsidian, с возможностью "
+            "открытия и редактирования заметок непосредственно в Obsidian.",
+            kind="dim",
+            wrap=True,
+        ))
+        self.chk_obsidian_agent = QCheckBox("Obsidian Agent")
+        self.chk_obsidian_agent.setObjectName("obsidian-agent")
+        obs_layout.addWidget(self.chk_obsidian_agent)
+        obs_layout.addWidget(ui.label(
+            "Подключить ИИ-агента для создания, редактирования, поиска "
+            "и организации заметок в базе знаний.",
+            kind="dim",
+            wrap=True,
+        ))
+        self.obsidian_hint = ui.label("", kind="dim", wrap=True)
+        obs_layout.addWidget(self.obsidian_hint)
+        outer.addWidget(box_obs)
+
         # --- кнопка и отчёт
         buttons = QHBoxLayout()
         self.btn_preview = QPushButton("Проверить")
@@ -542,9 +568,13 @@ class CreateTab(ScrollPage):
         self.btn_open = QPushButton("Открыть папку")
         self.btn_open.setEnabled(False)
         self.btn_open.clicked.connect(self._open_result)
+        self.btn_obsidian = QPushButton("Открыть в Obsidian")
+        self.btn_obsidian.setEnabled(False)
+        self.btn_obsidian.clicked.connect(self._open_obsidian)
         buttons.addWidget(self.btn_preview)
         buttons.addStretch(1)
         buttons.addWidget(self.btn_open)
+        buttons.addWidget(self.btn_obsidian)
         buttons.addWidget(self.btn_create)
         outer.addLayout(buttons)
 
@@ -566,6 +596,9 @@ class CreateTab(ScrollPage):
         self.program_list.itemSelectionChanged.connect(self._program_changed)
         self.link_check.toggled.connect(self._link_toggled)
         self.link_place.currentIndexChanged.connect(self._link_place_changed)
+        self.chk_obsidian.toggled.connect(self._obsidian_toggled)
+        self.chk_obsidian_agent.toggled.connect(self._obsidian_toggled)
+        self._load_obsidian_prefs()
         self._fill_programs()
         self._mode_changed()
         self._link_toggled()
@@ -574,6 +607,65 @@ class CreateTab(ScrollPage):
         # Qt сожмёт её и элементы наедут друг на друга
         outer.activate()
         self.refresh_height()
+
+    # ---- Obsidian: три метода, которых в патче не было
+
+    def _load_obsidian_prefs(self) -> None:
+        """Переключатели — как в прошлый раз. Битые настройки — оба сняты.
+
+        Настройка лежит рядом с программой, а не в базе: это состояние
+        окна, а не данные пользователя.
+        """
+        import obsidian_base
+
+        obsidian, agent = obsidian_base.load_prefs()
+        self.chk_obsidian.setChecked(obsidian)
+        self.chk_obsidian_agent.setChecked(agent)
+        self._obsidian_hint_only()
+
+    def _obsidian_toggled(self) -> None:
+        """Сохраняет выбор и объясняет, чего ждать. Молчание here — враньё."""
+        import obsidian_base
+
+        obsidian = self.chk_obsidian.isChecked()
+        agent = self.chk_obsidian_agent.isChecked()
+        error = obsidian_base.save_prefs(obsidian, agent)
+        self._obsidian_hint_only(error)
+
+    def _obsidian_hint_only(self, error: str | None = None) -> None:
+        """Подпись под переключателями. Отдельно от сохранения."""
+        import obsidian_base
+
+        if error:
+            self.obsidian_hint.setText(error)
+            return
+        if not (self.chk_obsidian.isChecked() or self.chk_obsidian_agent.isChecked()):
+            self.obsidian_hint.setText("")
+            return
+        if obsidian_base.find_obsidian() is None:
+            self.obsidian_hint.setText(obsidian_base.missing_obsidian_text())
+            return
+        self.obsidian_hint.setText(
+            "Obsidian найден. Открыть хранилище можно кнопкой под "
+            "созданной базой. Ответ самого Obsidian программа не проверяет."
+        )
+
+    def _open_obsidian(self) -> None:
+        """Открывает хранилище официальным адресом, а не командой.
+
+        Отказ называет причину: нет папки, нет программы или Obsidian
+        не открыл адрес. Молчаливого «открыто» здесь быть не может.
+        """
+        import obsidian_base
+
+        target = self._created
+        if target is None or not Path(target).is_dir():
+            self._warn("База не создана, открывать нечего.")
+            return
+        ok, note = obsidian_base.open_vault(Path(target))
+        self.log.add(note, "ok" if ok else "warn")
+        if not ok:
+            self._warn(note)
 
     def _fill_programs(self) -> None:
         from PyQt6.QtGui import QColor
@@ -829,6 +921,24 @@ class CreateTab(ScrollPage):
         else:
             self.log.add("Ярлык создаваться не будет.", "dim")
 
+        if self.chk_obsidian.isChecked() or self.chk_obsidian_agent.isChecked():
+            if self.chk_obsidian.isChecked():
+                self.log.add(
+                    "Obsidian: создастся Главная.md, если её нет. "
+                    "Чужие заметки не перезаписываются.",
+                    "info",
+                )
+            if self.chk_obsidian_agent.isChecked():
+                self.log.add(
+                    "Obsidian Agent: файл @obsidian ляжет в .opencode/agents этой базы. "
+                    "Общие настройки OpenCode не меняются. Живой правки заметок нет.",
+                    "info",
+                )
+            if self.chk_obsidian.isChecked():
+                import obsidian_base
+                if obsidian_base.find_obsidian() is None:
+                    self.log.add(obsidian_base.missing_obsidian_text(), "warn")
+
         if self.attach_check.isChecked():
             program = self._selected_program()
             if program:
@@ -881,6 +991,7 @@ class CreateTab(ScrollPage):
         self.btn_create.setEnabled(False)
         self.btn_preview.setEnabled(False)
         self.btn_open.setEnabled(False)
+        self.btn_obsidian.setEnabled(False)
 
         # запоминаем выбор про ярлык до запуска работы: во время работы
         # поля окна читать нельзя
@@ -888,9 +999,26 @@ class CreateTab(ScrollPage):
         link_place = self.link_place.currentData() or ""
         link_custom = self.link_custom_edit.text()
         link_name = plan.name
+        # То же с переключателями Obsidian: во время работы поля уже
+        # недоступны, а решение принято до неё.
+        want_obsidian = self.chk_obsidian.isChecked()
+        want_agent = self.chk_obsidian_agent.isChecked()
+        self._obsidian_extra = {"notes": [], "errors": [], "wanted": want_obsidian}
 
         def job(progress):
             core.create_base(plan, progress)
+            if want_obsidian or want_agent:
+                import obsidian_base
+                notes, errors = obsidian_base.apply(
+                    plan.target, obsidian=want_obsidian, agent=want_agent,
+                )
+                self._obsidian_extra = {
+                    "notes": notes, "errors": errors, "wanted": want_obsidian,
+                }
+                for line in notes:
+                    progress(line)
+                for line in errors:
+                    progress(line)
             attached = None
             if attach and program is not None:
                 progress(f"Подключение к «{program.title}»…")
@@ -940,6 +1068,7 @@ class CreateTab(ScrollPage):
         if isinstance(result, Exception):
             self.log.add(f"Прервано: {result}", "error")
             self.btn_open.setEnabled(False)
+            self.btn_obsidian.setEnabled(False)
             self._warn(f"Создание прервано:\n{result}")
             return
 
@@ -947,23 +1076,35 @@ class CreateTab(ScrollPage):
             return
         self._created = plan.target
         self.btn_open.setEnabled(True)
+        extra = getattr(self, "_obsidian_extra", None) or {}
+        self.btn_obsidian.setEnabled(bool(extra.get("wanted")) and plan.target.is_dir())
         self.base_ready.emit(str(plan.target))
 
+        extra = getattr(self, "_obsidian_extra", None) or {}
+        obsidian_errors = list(extra.get("errors") or [])
         if isinstance(result, core.AttachResult):
-            if result.errors:
+            if result.errors or obsidian_errors:
                 self.log.add("Готово, но с замечаниями:", "warn")
                 for error in result.errors:
                     self.log.add(f"  {error}", "error")
-                self._warn(
-                    "База создана, но подключить удалось не всё:\n\n"
-                    + "\n".join(result.errors)
-                )
+                for error in obsidian_errors:
+                    self.log.add(f"  {error}", "error")
+                parts = []
+                if result.errors:
+                    parts.append("Подключить удалось не всё:\n" + "\n".join(result.errors))
+                if obsidian_errors:
+                    parts.append("Obsidian:\n" + "\n".join(obsidian_errors))
+                self._warn("База создана, но не всё прошло:\n\n" + "\n\n".join(parts))
             else:
                 self.log.add("Готово: база создана и подключена.", "ok")
                 self._inform_done(plan.target, result)
         else:
-            self.log.add("Готово: база создана.", "ok")
-            self._inform_done(plan.target, None)
+            if obsidian_errors:
+                self.log.add("База создана, Obsidian — с замечаниями:", "warn")
+                self._warn("База создана, но Obsidian:\n\n" + "\n".join(obsidian_errors))
+            else:
+                self.log.add("Готово: база создана.", "ok")
+                self._inform_done(plan.target, None)
 
     def _inform_done(self, target: Path, result: core.AttachResult | None) -> None:
         text = f"База создана:\n{target}"
@@ -2396,6 +2537,246 @@ class ObsPasswordDialog(QDialog):
 
     def save_path(self) -> Path | None:
         return self._path
+
+
+class EngineSetupDialog(QDialog):
+    """Спрашивает только то, чего у программы нет: путь, команду или токен.
+
+    Окно не обещает, что редактор или кабинет ответили. Для Unity и
+    Roblox спрашивать нечего — здесь только проверка и кнопка вписать
+    команду, если проверка прошла.
+    """
+
+    def __init__(self, server_id: str, server_name: str, note: str,
+                 can_write: bool, parent=None) -> None:
+        super().__init__(parent)
+        self.server_id = server_id
+        self.setWindowTitle(f"Настройка: {server_name}")
+        self.setMinimumWidth(640)
+        self.project = QLineEdit()
+        self.plugin = QLineEdit()
+        self.command = QPlainTextEdit()
+        self.token = QLineEdit()
+        self.app_id = QLineEdit()
+        self.url = QLineEdit()
+        # Поле модели. В патче его не было, а chatgpt до него обращался:
+        # окно падало бы с AttributeError на третьей секунде. Сделано
+        # здесь и проверено — тихо это оставлять нельзя.
+        self.model = QLineEdit()
+
+        box = QVBoxLayout(self)
+        box.setSpacing(8)
+        box.addWidget(ui.label(
+            "Программа запишет только свой файл рядом с настройками opencode "
+            "и впишет команду. Плагин в редактор она не ставит. Зелёной "
+            "галочки «готово» после этого не будет: живого ответа не было.",
+            wrap=True,
+        ))
+        if note:
+            box.addWidget(ui.label(note, wrap=True))
+
+        if server_id == "unreal":
+            box.addWidget(ui.label(
+                "Папка проекта или файл .uproject. Плагин EngineWire должен "
+                "уже лежать в Plugins/EngineWire. Старый McpAutomationBridge "
+                "не подходит.",
+                wrap=True,
+            ))
+            row = QHBoxLayout()
+            self.project.setPlaceholderText(r"D:\Games\MyGame или MyGame.uproject")
+            row.addWidget(self.project, 1)
+            browse = QPushButton("Папка…")
+            browse.clicked.connect(self._browse_project)
+            file_btn = QPushButton(".uproject…")
+            file_btn.clicked.connect(self._browse_uproject)
+            row.addWidget(browse)
+            row.addWidget(file_btn)
+            box.addLayout(row)
+            row2 = QHBoxLayout()
+            self.plugin.setPlaceholderText("Папка плагина, если она не внутри проекта")
+            row2.addWidget(self.plugin, 1)
+            plug = QPushButton("Плагин…")
+            plug.clicked.connect(self._browse_plugin)
+            row2.addWidget(plug)
+            box.addLayout(row2)
+        elif server_id == "godot":
+            box.addWidget(ui.label(
+                "Вставь JSON из дока Godot AI, кнопку «Run this manually». "
+                "В команде должно быть слово attach. Адрес "
+                "http://127.0.0.1:8000/mcp не подходит. Текст команды в "
+                "журнал не попадёт.",
+                wrap=True,
+            ))
+            self.command.setPlaceholderText(
+                '{ "command": ["uvx", "godot-ai", "attach"] }'
+            )
+            self.command.setMinimumHeight(120)
+            box.addWidget(self.command)
+        elif server_id == "tiktok":
+            box.addWidget(ui.label(
+                "Access token и App ID из своего кабинета TikTok Business. "
+                "В opencode.jsonc они не пишутся и в журнал не попадают.",
+                wrap=True,
+            ))
+            self.token.setEchoMode(QLineEdit.EchoMode.Password)
+            self.token.setPlaceholderText("Access token")
+            token_row = QHBoxLayout()
+            token_row.addWidget(self.token, 1)
+            show = QPushButton("Показать")
+            show.setCheckable(True)
+            show.toggled.connect(self._toggle_token)
+            token_row.addWidget(show)
+            box.addLayout(token_row)
+            self.app_id.setPlaceholderText("App ID")
+            box.addWidget(self.app_id)
+        elif server_id == "capcut":
+            box.addWidget(ui.label(
+                "У CapCut нет своего сервера MCP в интернете. Сюда вписывается "
+                "адрес, который дал твой хост: https и чужой MCP, не страница "
+                "capcut.com. Программа по этому адресу сейчас не ходит и ролик "
+                "не экспортирует. Черновик потом открывается в CapCut.",
+                wrap=True,
+            ))
+            self.url.setPlaceholderText("https://хост-твоего-сервера/mcp")
+            box.addWidget(self.url)
+            self.token.setEchoMode(QLineEdit.EchoMode.Password)
+            self.token.setPlaceholderText("Токен, если хост его просит. Можно пустым")
+            token_row = QHBoxLayout()
+            token_row.addWidget(self.token, 1)
+            show = QPushButton("Показать")
+            show.setCheckable(True)
+            show.toggled.connect(self._toggle_token)
+            token_row.addWidget(show)
+            box.addLayout(token_row)
+        elif server_id == "spotify":
+            box.addWidget(ui.label(
+                "Client ID своего приложения Spotify. Пакет ходит в Web API, "
+                "это не программа Spotify. Воспроизведение просит Premium и "
+                "уже открытый Spotify. Браузер эта кнопка не открывает.",
+                wrap=True,
+            ))
+            self.app_id.setPlaceholderText("SPOTIFY_CLIENT_ID")
+            box.addWidget(self.app_id)
+        elif server_id == "chatgpt":
+            box.addWidget(ui.label(
+                "Ключ и имя модели из кабинета OpenAI. Запросы идут только на "
+                "api.openai.com. Сайт chatgpt.com не открывается. Имя модели "
+                "скопируй из кабинета: программа его не выдумывает.",
+                wrap=True,
+            ))
+            self.token.setEchoMode(QLineEdit.EchoMode.Password)
+            self.token.setPlaceholderText("Ключ API, без слова Bearer")
+            token_row = QHBoxLayout()
+            token_row.addWidget(self.token, 1)
+            show = QPushButton("Показать")
+            show.setCheckable(True)
+            show.toggled.connect(self._toggle_token)
+            token_row.addWidget(show)
+            box.addLayout(token_row)
+            self.model.setPlaceholderText("Имя модели из кабинета")
+            box.addWidget(self.model)
+        elif server_id == "cursor":
+            box.addWidget(ui.label(
+                "Ключ можно оставить пустым, если вход в Cursor CLI уже сделан. "
+                "В командную строку и в журнал он не попадает. --yolo не передаётся.",
+                wrap=True,
+            ))
+            self.token.setEchoMode(QLineEdit.EchoMode.Password)
+            self.token.setPlaceholderText("Ключ Cursor, можно пустым")
+            token_row = QHBoxLayout()
+            token_row.addWidget(self.token, 1)
+            show = QPushButton("Показать")
+            show.setCheckable(True)
+            show.toggled.connect(self._toggle_token)
+            token_row.addWidget(show)
+            box.addLayout(token_row)
+
+        self.status = ui.label("", wrap=True)
+        self.status.setObjectName("hint")
+        box.addWidget(self.status)
+
+        row3 = QHBoxLayout()
+        row3.addStretch(1)
+        cancel = QPushButton("Отмена")
+        cancel.clicked.connect(self.reject)
+        self.btn_ok = QPushButton("Записать и включить")
+        if server_id in ("unity", "roblox-studio"):
+            self.btn_ok.setText("Вписать команду")
+            self.btn_ok.setEnabled(can_write)
+            if not can_write:
+                self.status.setText("Вписывать нечего: сначала закрой причину выше.")
+        self.btn_ok.setObjectName("primary")
+        self.btn_ok.setDefault(True)
+        self.btn_ok.clicked.connect(self._accept)
+        row3.addWidget(cancel)
+        row3.addWidget(self.btn_ok)
+        box.addLayout(row3)
+
+    def _toggle_token(self, show: bool) -> None:
+        mode = (QLineEdit.EchoMode.Normal if show
+                else QLineEdit.EchoMode.Password)
+        self.token.setEchoMode(mode)
+
+    def _browse_project(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Папка проекта Unreal")
+        if path:
+            self.project.setText(path)
+
+    def _browse_uproject(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Файл проекта Unreal", "", "Unreal (*.uproject)"
+        )
+        if path:
+            self.project.setText(path)
+
+    def _browse_plugin(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Папка EngineWire")
+        if path:
+            self.plugin.setText(path)
+
+    def _accept(self) -> None:
+        if self.server_id == "unreal" and not self.project.text().strip():
+            self.status.setText("Укажи папку проекта или файл .uproject.")
+            return
+        if self.server_id == "godot" and not self.command.toPlainText().strip():
+            self.status.setText("Вставь команду из дока. Пустую не записываю.")
+            return
+        if self.server_id == "tiktok":
+            if not self.token.text().strip() or not self.app_id.text().strip():
+                self.status.setText("Нужны и токен, и App ID. Пустое не записываю.")
+                return
+        if self.server_id == "capcut" and not self.url.text().strip():
+            self.status.setText("Впиши адрес MCP. Сайт CapCut сюда не подставляется.")
+            return
+        if self.server_id == "spotify" and not self.app_id.text().strip():
+            self.status.setText("Нужен Client ID. Пустое не записываю.")
+            return
+        if self.server_id == "chatgpt":
+            if not self.token.text().strip() or not self.model.text().strip():
+                self.status.setText("Нужны и ключ, и имя модели. Пустое не записываю.")
+                return
+        self.accept()
+
+    def project_path(self) -> str:
+        return self.project.text().strip()
+
+    def plugin_path(self) -> str:
+        return self.plugin.text().strip()
+
+    def command_text(self) -> str:
+        return self.command.toPlainText()
+
+    def token_value(self) -> str:
+        return self.token.text().strip()
+
+    def app_id_value(self) -> str:
+        return self.app_id.text().strip()
+
+    def url_value(self) -> str:
+        return self.url.text().strip()
+
+    def model_value(self) -> str:
+        return self.model.text().strip()
 
 
 class DbhubConnectionDialog(QDialog):
@@ -4282,10 +4663,10 @@ class CapsTab(ScrollPage):
         self.btn_reg_on = QPushButton("Включить")
         self.btn_reg_auto = QPushButton("Настроить автоматически")
         self.btn_reg_auto.setToolTip(
-            "Android Studio: поставить плагин из набора программы, включить "
-            "сервер в студии, проверить его и вписать в настройки opencode. "
-            "DBHub: проверить связь с базой живым запросом и вписать сервер. "
-            "Браузеры: открыть страницу выбранным браузером и вписать сервер"
+            "Описание берётся по выбранной строке: что кнопка сделает "
+            "именно с этим сервером. Мосты редакторов, CapCut, Spotify, "
+            "ChatGPT API, Codex и Cursor настраивают только свою часть — "
+            "файл или проверку. Чужое окно не открывает ни одна строка."
         )
         self.btn_reg_auto.setEnabled(False)
         self.btn_reg_off = QPushButton("Выключить")
@@ -4609,24 +4990,29 @@ class CapsTab(ScrollPage):
             return False
         return mcp_registry.load_manual_config(dest, server.id) is not None
 
-    # Серверы, которые программа умеет настроить целиком сама.
+    # Серверы, у которых кнопка «Настроить автоматически» есть.
+    # Первые семь настраиваются целиком, остальные — только своей частью:
+    # записать файл или сказать, чего не хватает. Чужое окно кнопка не
+    # открывает ни в одном случае.
     AUTO_SERVERS = ("android-studio", "obs", "android-emulator", "dbhub",
-                    "browsers", "omniroute", "lmarena")
+                    "browsers", "omniroute", "lmarena",
+                    "unity", "unreal", "roblox-studio", "godot", "tiktok",
+                    "capcut", "spotify", "chatgpt", "codex", "cursor")
 
     def _reg_auto_possible(self, server: mcp_registry.Server | None) -> tuple[bool, str]:
         """Можно ли настроить автоматически и что этому мешает.
 
-        Автонастройка умеет ровно семь вещей: Android Studio, OBS,
-        эмулятор Android, DBHub, браузеры, OmniRoute и LMArena. Остальные
-        серверы запускаются командой, и «Настроить автоматически» для них
-        был бы кнопкой вроде работающей.
+        У семи старых серверов кнопка делает настройку целиком. У десяти
+        мостов движков и агентов — только то, что не требует чужого
+        окна: записать файл или сказать, чего не хватает. У остальных
+        серверов она была бы кнопкой вроде работающей.
         """
         if server is None:
             return False, (
                 "Выберите строку в списке: автонастройка есть у Android "
                 "Studio, OBS, Android-эмулятора, DBHub, Браузеров, "
-                "OmniRoute и LMArena. У LDPlayer она не нужна — ему "
-                "достаточно кнопки «Включить»."
+                "OmniRoute, LMArena и у мостов движков. У LDPlayer она не "
+                "нужна — ему достаточно кнопки «Включить»."
             )
         if server.id not in self.AUTO_SERVERS:
             return False, (
@@ -4634,6 +5020,147 @@ class CapsTab(ScrollPage):
                 "командой, достаточно кнопки «Включить»."
             )
         return True, ""
+
+    def _reg_auto_tip(self, server: mcp_registry.Server | None) -> str:
+        """Что именно сделает кнопка у выбранной строки.
+
+        Подсказка на кнопке, а не текст в подробностях: человек
+        наводит курсор до нажатия и должен видеть, откроется ли
+        чужое окно. Ни одна из этих строк его не открывает.
+        """
+        tips = {
+            "android-studio": (
+                "Поставить плагин из набора, включить сервер в студии, "
+                "проверить его и вписать в настройки opencode."
+            ),
+            "obs": (
+                "Спросить пароль, включить WebSocket-сервер OBS и вписать мост. "
+                "Студию программа не открывает."
+            ),
+            "android-emulator": (
+                "Включить отладку, подключить эмулятор по adb и вписать мост."
+            ),
+            "dbhub": (
+                "Проверить живую связь с базой и вписать мост. Без "
+                "подключения к базе скажет, что делать."
+            ),
+            "browsers": (
+                "Открыть страницу, прочитать заголовок и вписать мост. "
+                "Браузер выбирается кнопкой рядом."
+            ),
+            "omniroute": (
+                "Развернуть мост, запустить, дождаться ответа API и вписать "
+                "провайдеров."
+            ),
+            "lmarena": (
+                "Спросить у модели ответ через арену и только потом вписать "
+                "мост. Не ответила — в настройки не пишется ничего."
+            ),
+            "unity": (
+                "Проверить uvx и вписать команду. Пакет в редактор не ставит "
+                "и живой ответ не обещает."
+            ),
+            "unreal": (
+                "Спросить путь проекта, записать mcp-unreal.txt, если есть "
+                "EngineWire, и вписать команду. Редактор не открывает."
+            ),
+            "roblox-studio": (
+                "Проверить mcp.bat. Если его нет, откажется. Студию не открывает."
+            ),
+            "godot": (
+                "Принять команду attach и записать mcp-godot-attach.json. "
+                "Редактор не открывает."
+            ),
+            "tiktok": (
+                "Записать токен в mcp-tiktok.txt, не в журнал и не в "
+                "opencode.jsonc. Кабинет не открывает."
+            ),
+            "capcut": (
+                "Записать твой https-адрес MCP. На capcut.com не ходит, "
+                "редактор не открывает и ролик не экспортирует."
+            ),
+            "spotify": (
+                "Записать Client ID. В аккаунт не входит и трек не включает. "
+                "Нужны Premium и открытый Spotify."
+            ),
+            "chatgpt": (
+                "Записать ключ и имя модели. На сайт chatgpt.com не ходит "
+                "и живой запрос не делает."
+            ),
+            "codex": (
+                "Проверить команду codex. Пароль не спрашивает. По умолчанию "
+                "только чтение."
+            ),
+            "cursor": (
+                "Проверить команду agent и записать ключ, если он нужен. "
+                "--yolo не передаёт."
+            ),
+        }
+        if server is None:
+            return "Сначала выберите строку."
+        return tips.get(server.id, "Для этой строки автонастройки нет.")
+
+    def _reg_engine_setup(self, server: mcp_registry.Server, dest: Path) -> None:
+        """Записывает только свой файл и вписывает команду. Готовым не считает.
+
+        Окно спрашивает ровно то, чего у программы нет: путь, команду или
+        токен. Значение секрета ни в журнал, ни в подсказку не идёт.
+        """
+        note = ""
+        can_write = True
+        if server.id == "unity":
+            can_write, note = engine_setup.unity_ready()
+        elif server.id == "roblox-studio":
+            can_write, note = engine_setup.roblox_ready()
+        elif server.id == "codex":
+            can_write, note = engine_setup.codex_ready()
+        elif server.id == "cursor":
+            can_write, note = engine_setup.cursor_ready()
+        dialog = EngineSetupDialog(server.id, server.name, note, can_write, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        mirror = ""
+        if server.id == "unreal":
+            ok, note = engine_setup.save_unreal(
+                dest, dialog.project_path(), dialog.plugin_path()
+            )
+            mirror = engine_setup.UNREAL_NAME
+        elif server.id == "godot":
+            ok, note = engine_setup.save_godot(dest, dialog.command_text())
+            mirror = engine_setup.GODOT_NAME
+        elif server.id == "tiktok":
+            ok, note = engine_setup.save_tiktok(
+                dest, dialog.token_value(), dialog.app_id_value()
+            )
+            mirror = engine_setup.TIKTOK_NAME
+        elif server.id == "capcut":
+            ok, note = engine_setup.save_capcut(
+                dest, dialog.url_value(), dialog.token_value()
+            )
+        elif server.id == "spotify":
+            ok, note = engine_setup.save_spotify(dest, dialog.app_id_value())
+            mirror = engine_setup.SPOTIFY_NAME
+        elif server.id == "chatgpt":
+            ok, note = engine_setup.save_chatgpt(
+                dest, dialog.token_value(), dialog.model_value()
+            )
+            mirror = engine_setup.CHATGPT_NAME
+        elif server.id == "cursor":
+            ok, note = engine_setup.save_cursor(dest, dialog.token_value())
+            mirror = engine_setup.CURSOR_NAME
+        elif server.id in ("unity", "roblox-studio", "codex"):
+            ok = can_write
+        else:
+            self._warn("Этот мост отсюда не настраивается.")
+            return
+        if not ok:
+            self._warn(note)
+            return
+        if mirror:
+            extra = engine_setup.mirror_for_launcher(dest, mirror)
+            if extra:
+                note = note + " " + extra
+        self.log.add(note, "ok")
 
     def _reg_state_text(self, server: mcp_registry.Server) -> str:
         """Состояние для колонки. Короткое - иначе таблица разъезжается.
@@ -4794,11 +5321,12 @@ class CapsTab(ScrollPage):
 
     def _reg_show_detail(self) -> None:
         server = self._reg_current()
-        # Кнопка автонастройки жива только для Android Studio. Для
-        # остальных серверов её нажатие было бы враньём, поэтому гасим
+        # Кнопка жива только там, где у неё есть настоящее действие.
+        # Для остальных строк нажатие было бы враньём, поэтому гасим
         # её, а не ждём ошибки по нажатию.
         possible, _ = self._reg_auto_possible(server)
         self.btn_reg_auto.setEnabled(possible)
+        self.btn_reg_auto.setToolTip(self._reg_auto_tip(server))
         # Кнопки подключений — только у DBHub: больше ни один сервер
         # не ходит в базы, и «Добавить подключение» у него означало бы
         # пустую кнопку.
@@ -4935,21 +5463,23 @@ class CapsTab(ScrollPage):
             lines.append("")
             lines.append(f"Безопасность: {raw['safety']}")
 
-        if server.manual_setup:
-            steps = server.setup_steps
-            if steps:
-                lines.append("")
-                lines.append("Как настроить — по шагам:")
-                for index, step in enumerate(steps, start=1):
-                    lines.append(f"  {index}. {step}")
-            if raw.get("only_while_running"):
-                lines.append("")
-                lines.append(
-                    f"Пока студия закрыта: {raw['only_while_running']}"
-                )
-            if raw.get("ready_here_note") and not server.ready_here:
-                lines.append("")
-                lines.append(f"Сейчас: {raw['ready_here_note']}")
+        # Шаги показываем всем, у кого они есть, а не только серверу
+        # с ручной конфигурацией. Иначе OBS, эмулятор и десять новых
+        # мостов молчали, хотя текст в реестре уже лежал.
+        steps = server.setup_steps
+        if steps:
+            lines.append("")
+            lines.append("Как настроить — по шагам:")
+            for index, step in enumerate(steps, start=1):
+                lines.append(f"  {index}. {step}")
+        if server.manual_setup and raw.get("only_while_running"):
+            lines.append("")
+            lines.append(
+                f"Пока студия закрыта: {raw['only_while_running']}"
+            )
+        if raw.get("ready_here_note") and not server.ready_here:
+            lines.append("")
+            lines.append(f"Сейчас: {raw['ready_here_note']}")
 
         if raw.get("verdict"):
             lines.append("")
@@ -5100,6 +5630,12 @@ class CapsTab(ScrollPage):
             self._warn("Выберите сервер в списке.")
             return
 
+        # CapCut — удалённый адрес. Общее окно «скопируй из студии» ему
+        # врёт: адрес MCP даёт хост, а не редактор.
+        if server.id == "capcut":
+            self._reg_engine_setup(server, dest)
+            return
+
         # Сервер, который включается внутри другой программы, сначала
         # спрашивает конфигурацию. Без неё запись в настройки была бы
         # враньём: блок без токена заведомо не подключится.
@@ -5122,6 +5658,21 @@ class CapsTab(ScrollPage):
         if server.id == "lmarena":
             self._reg_auto()
             return
+
+        # Файл моста программа умеет проверить сама. Без него команда
+        # впишется, а лаунчер сразу откажется. Спрашиваем, не молчим.
+        gap = engine_setup.gap(dest, server.id) if server.id in engine_setup.IDS else ""
+        if gap:
+            answer = QMessageBox.question(
+                self,
+                "Лаунчер откажется",
+                gap + "\n\nОткрыть настройку вместо простого включения?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                self._reg_engine_setup(server, dest)
+                return
 
         def job(progress):
             return mcp_registry.enable(dest, server, progress=progress)
@@ -5424,6 +5975,13 @@ class CapsTab(ScrollPage):
         possible, why = self._reg_auto_possible(server)
         if not possible or server is None:
             self._warn(why)
+            return
+
+        # Мосты движков и агентов настраиваются не здесь: у них нет
+        # своего файла конфигурации, их настройка — это окно с одним
+        # вопросом. Всё, что можно сделать без чужого окна, делает оно.
+        if server.id in engine_setup.IDS:
+            self._reg_engine_setup(server, dest)
             return
 
         # Ключ реестра с путём установки OBS. Без него студия не знает,
@@ -7633,29 +8191,52 @@ class HelpTab(ScrollPage):
 
         outer.addWidget(ui.label("Как пользоваться программой", kind="title"))
 
-        outer.addWidget(self._section("1. Что такое эта программа"))
+        outer.addWidget(self._section("1. Что это"))
         outer.addWidget(self._step(
-            "Это конструктор баз данных для OpenCode. Она создаёт новые базы по "
-            "встроенному шаблону, подключает их к OpenCode и помогает управлять "
-            "обходом блокировок. Сама базы не хранит — они лежат отдельно на "
-            "вашем компьютере (папка DataBases на рабочем столе)."
+            "Это окно для базы OpenCode. База — папка с текстовыми файлами: "
+            "память, библиотека, скиллы, инструкции. Сами базы лежат отдельно, "
+            "обычно в DataBases на рабочем столе. Окно их создаёт, подключает "
+            "к OpenCode, ставит возможности и показывает, какие сторонние "
+            "серверы можно включить."
+        ))
+        outer.addWidget(self._step(
+            "Запуск: двойной щелчок по «Управление-базой.cmd» в корне базы. "
+            "Нужен Python с PyQt6. Системный Python без этого пакета окно не "
+            "откроет. Вкладок восемь, ниже — что делает каждая и чего она не "
+            "делает. Зелёной галочки «чужой сервер уже ответил» здесь нет: "
+            "программа так не пишет, пока ответа не было."
         ))
 
         outer.addWidget(self._section("2. Первый запуск"))
         outer.addWidget(self._step(
-            "При первом запуске программа создаёт папку DataBases на рабочем "
-            "столе и показывает окно-приветствие. Дальше новые базы можно "
-            "складывать туда же — программа сама будет находить их кнопкой "
-            "«Сканировать»."
+            "Программа создаёт папку DataBases на рабочем столе и показывает "
+            "приветствие. Новые базы лучше класть туда же: кнопка «Сканировать» "
+            "на второй вкладке ищет их на рабочем столе и в DataBases по файлу "
+            ".opencode-base.json."
         ))
 
         outer.addWidget(self._section("3. Создать новую базу"))
         outer.addWidget(self._step(
-            "Первая вкладка «Создать новую базу»:\n"
-            "1) выберите папку, где создать базу (по умолчанию — DataBases);\n"
-            "2) введите имя базы (латиницей или русским);\n"
-            "3) нажмите «Создать» — программа развернёт базу со всей "
-            "файловой структурой, шаблонами, скиллами и инструкциями."
+            "Вкладка «Новая база».\n"
+            "1. Папка-родитель. По умолчанию DataBases.\n"
+            "2. Имя папки. Пробелы и русские буквы можно. Нельзя знаки "
+            "< > : \" / \\ | ? * и служебные имена Windows вроде CON.\n"
+            "3. Галочка «Разрешить пароли и ключи» по умолчанию снята. "
+            "Без неё нейросеть откажется записывать секреты.\n"
+            "4. Откуда взять содержимое: пустой шаблон или копия образца, "
+            "со скиллами или без.\n"
+            "5. «Подключить базу к программе сразу» — копия уходит в настройки "
+            "OpenCode. Папки ваших проектов не трогаются. Прежние файлы памяти "
+            "уходят в _previous-version.\n"
+            "6. Ярлык. Он должен вести на файл «Открыть-базу.cmd», не на папку.\n"
+            "Сначала «Проверить» — это только план, ничего не пишется. "
+            "Потом «Создать базу».\n"
+            "Перед кнопками есть «Интеграция с Obsidian». Два переключателя "
+            "независимы. Оба выключены — ничего нового. «Поддержка Obsidian» "
+            "добавляет Главная.md, если её нет, и кнопку «Открыть в Obsidian». "
+            "Чужие заметки не затираются. «Obsidian Agent» кладёт файл @obsidian "
+            "в базу. Это не живой запуск модели. Если Obsidian не установлен, "
+            "база всё равно создаётся."
         ))
         outer.addWidget(self._step(
             "База — это папка с текстовыми файлами: память, библиотека знаний, "
@@ -7666,7 +8247,7 @@ class HelpTab(ScrollPage):
 
         outer.addWidget(self._section("4. Подключить существующую базу"))
         outer.addWidget(self._step(
-            "Вторая вкладка «Подключить существующую»:\n"
+            "Вторая вкладка «Подключить»:\n"
             "1) нажмите «Сканировать» — программа найдёт все базы с файлом-"
             "идентификатором .opencode-base.json на рабочем столе и в DataBases;\n"
             "2) выбазу из списка или укажите папку вручную через «Обзор…»;\n"
@@ -7688,13 +8269,49 @@ class HelpTab(ScrollPage):
         outer.addWidget(self._step(
             "Здесь ставятся в настройки OpenCode только отмеченные возможности:\n"
             "— команда /голос (голосовой ввод);\n"
-            "— мост ПК (файлы, скриншоты, список программ);\n"
-            "— мост памяти NCP (7 инструментов);\n"
-            "— 13 агентов (поиск, план, код, проверка и другие);\n"
-            "— обход блокировок (запуск OpenCode через прокси)."
+            "— агенты и скиллы (поиск, план, код, проверка и другие);\n"
+            "— обход блокировок (запуск OpenCode через прокси).\n"
+            "Мосты ПК и памяти сюда галочками не входят: они едут с базой и "
+            "включаются кнопкой «Подключить»."
         ))
 
-        outer.addWidget(self._section("7. Обход блокировок"))
+        outer.addWidget(self._section("7. Серверы MCP — блок на вкладке «opencode»"))
+        outer.addWidget(self._step(
+            "Это не мосты базы. Это сторонние программы из реестра. Таблица: "
+            "сервер, состояние, лицензия, число инструментов. Подробности — "
+            "в тексте под таблицей.\n"
+            "До «Проверить всё» состояние честно «не проверено». Проверка "
+            "запускает чужие команды и ничего не устанавливает.\n"
+            "«Включить» вписывает команду в opencode.jsonc. «Выключить» убирает "
+            "только этот блок. «Открыть источник» открывает страницу проекта.\n"
+            "«Настроить автоматически» делает разное:\n"
+            "— Android Studio, OBS, эмулятор, DBHub, Браузеры, OmniRoute и "
+            "LMArena: настраивает целиком, насколько это можно без чужого окна;\n"
+            "— Unity, Unreal, Roblox Studio, Godot, TikTok, CapCut, Spotify, "
+            "ChatGPT API, Codex и Cursor: только свою часть. Файл или проверка. "
+            "Редактор, сайт и браузер кнопка не открывает и готовым мост не "
+            "считает.\n"
+            "У LDPlayer этой кнопки нет: ему хватает «Включить».\n"
+            "Что именно сделает кнопка у выбранной строки — написано в "
+            "подсказке на самой кнопке.\n"
+            "После включения перезапустите OpenCode. Пока чужой сервер сам не "
+            "ответил, говорить «подключено» нельзя."
+        ))
+        outer.addWidget(self._step(
+            "Что можно попросить в терминале OpenCode после настройки и перезапуска:\n"
+            "— Spotify: «включи трек». Нужны Premium, открытое приложение и "
+            "один раз вход пакета. Это Web API, не скачивание файла.\n"
+            "— ChatGPT API: «создай новый ответ и продолжи его». Это не сайт "
+            "chatgpt.com. Нужны свой ключ и имя модели из кабинета.\n"
+            "— Codex: «создай новый чат и выполни команду». По умолчанию только "
+            "чтение. Полный доступ к диску не даётся.\n"
+            "— Cursor: «создай новый чат и отправь команду». Файлы без явной "
+            "просьбы не правятся.\n"
+            "VK Музыка и Яндекс.Музыка в списке нет: открытого API на включение "
+            "трека нет, скачивать файл программа не будет."
+        ))
+
+        outer.addWidget(self._section("8. Обход блокировок"))
         outer.addWidget(self._step(
             "Обход работает только для запущенного через ярлык OpenCode.\n"
             "Каналы по приоритету:\n"
@@ -7707,21 +8324,33 @@ class HelpTab(ScrollPage):
             "запуска: видно, через что идёт трафик и что отвалилось."
         ))
 
-        outer.addWidget(self._section("8. Темы (вкладка «Темы»)"))
+        outer.addWidget(self._section("9. Темы (вкладка «Темы»)"))
         outer.addWidget(self._step(
             "Папка themes/ в конструкторе и в базе. Заготовка темы OpenCode — "
             "Markdown-файл с полями: цвета, шрифт, размер. Скопируйте заготовку, "
             "заполните своими значениями и попросите ассистента применить тему."
         ))
 
-        outer.addWidget(self._section("9. Перенос на другой компьютер"))
+        outer.addWidget(self._section("10. Обновление самой программы"))
+        outer.addWidget(self._step(
+            "Программа обновляется файлом из репозитория, не через git pull.\n"
+            "«Проверить обновление» смотрит, есть ли новое. Пока не нажали, "
+            "«Скачать и применить» выключена: неизвестно, что качать.\n"
+            "Перед применением делается бэкап. «Вернуть из бэкапа» откатывает "
+            "последнее обновление."
+        ))
+
+        outer.addWidget(self._section("11. Перенос на другой компьютер"))
         outer.addWidget(self._step(
             "Скопируйте папку базы целиком, установите Python с PyQt6, запустите "
             "«Управление-базой.cmd». Программа сама найдёт базу, подключит мосты "
-            "и настроит OpenCode. Ничего вручную прописывать не нужно."
+            "и настроит OpenCode. Ничего вручную прописывать не нужно.\n"
+            "Секреты мостов (mcp-tiktok.txt, mcp-spotify.txt, mcp-chatgpt.txt "
+            "и другие) в репозиторий не входят: их надо создать заново кнопкой "
+            "настройки. Живое подключение само на новом компьютере не появится."
         ))
 
-        outer.addWidget(self._section("10. Если что-то не работает"))
+        outer.addWidget(self._section("12. Если что-то не работает"))
         outer.addWidget(self._step(
             "— OpenCode не видит базу → проверьте memory-base-path.txt и "
             "перезапустите OpenCode;\n"
@@ -7729,7 +8358,16 @@ class HelpTab(ScrollPage):
             "посмотрите лог в окне;\n"
             "— мост NCP не отвечает → проверьте library_path в "
             "tools/ncp-bridge/config.json;\n"
-            "— программа не открывается → нужен Python 3 с пакетом PyQt6."
+            "— программа не открывается → нужен Python 3 с пакетом PyQt6;\n"
+            "— сервер в таблице «не проверено» → это нормально, пока не нажали "
+            "«Проверить всё»;\n"
+            "— «Включить» вписало команду, а в терминале тишина → перезапустите "
+            "OpenCode. Если лаунчер пишет, что нет файла или команды, откройте "
+            "«Настроить автоматически»;\n"
+            "— Spotify не включает трек → нет Premium, приложение не открыто "
+            "или не сделан вход пакета. Программа трек не подделывает;\n"
+            "— ChatGPT открывает сайт → не должен. Мост ходит только на "
+            "api.openai.com по вашему ключу."
         ))
 
 
