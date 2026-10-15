@@ -37,8 +37,16 @@ def plain_prompt(text: str) -> bool:
 
 
 def codex_exec_argv(exe: str, prompt: str, sandbox: str) -> list[str]:
+    """Аргументы `codex exec`.
+
+    Флаг --skip-git-repo-check нужен обязательно: без него Codex отказывается
+    начинать работу вне доверенной папки git. Проверено живьём 15.10.2026 на
+    пустой папке — он печатает «Not inside a trusted directory» и выходит с
+    кодом 1. Рабочую папку задаёт вызывающий через cwd, глобальный флаг
+    --yolo и полный доступ сюда по-прежнему не попадают.
+    """
     mode = sandbox if sandbox in CODEX_SANDBOXES else "read-only"
-    return [exe, "exec", "--json", "--sandbox", mode, prompt]
+    return [exe, "exec", "--json", "--skip-git-repo-check", "--sandbox", mode, prompt]
 
 
 def codex_queue_argv(exe: str, thread_id: str, message: str) -> list[str]:
@@ -47,15 +55,28 @@ def codex_queue_argv(exe: str, thread_id: str, message: str) -> list[str]:
     ]
 
 
-def cursor_create_argv(exe: str) -> list[str]:
-    return [exe, "create-chat"]
+def _program(exe: str | list[str]) -> list[str]:
+    """Программа запуска как список.
+
+    Cursor CLI на Windows ставится пакетным файлом `agent.cmd`, а мосты к
+    агентам пакетные файлы не используют: через cmd.exe аргументы разбираются
+    заново, и в них попадает текст запроса, который пишет модель. Под пакетником
+    лежит обычная программа на node: `node.exe index.js`. Поэтому программа
+    может быть не одним файлом, а несколькими элементами. Прежние вызовы с
+    одним файлом работают как раньше.
+    """
+    return list(exe) if isinstance(exe, (list, tuple)) else [exe]
 
 
-def cursor_send_argv(exe: str, chat_id: str, prompt: str, mode: str,
+def cursor_create_argv(exe: str | list[str]) -> list[str]:
+    return [*_program(exe), "create-chat"]
+
+
+def cursor_send_argv(exe: str | list[str], chat_id: str, prompt: str, mode: str,
                      allow_edits: bool, workspace: str = "") -> list[str]:
     picked = mode if mode in CURSOR_MODES else "ask"
     argv = [
-        exe, "-p", "--trust", "--resume", chat_id,
+        *_program(exe), "-p", "--trust", "--resume", chat_id,
         "--mode", picked, "--output-format", "text", prompt,
     ]
     # Правка файлов только если человек явно попросил режим агента и правки.

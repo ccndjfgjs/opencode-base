@@ -90,6 +90,9 @@ CATEGORY_BY_ID = {
     "chatgpt": "cloud",
     "codex": "cloud",
     "cursor": "cloud",
+    # Claude — такой же облачный разговор, как Codex и Cursor: поднимается
+    # локальной командой, а сама программа живёт в облаке.
+    "claude": "cloud",
 }
 
 BASE_BRIDGES_TITLE = "Мосты базы"

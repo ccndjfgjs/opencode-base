@@ -17,6 +17,7 @@ sys.path.insert(0, str(HERE))
 import agent_argv  # noqa: E402
 import chatgpt_bridge_launcher as chatgpt  # noqa: E402
 import codex_bridge_launcher as codex  # noqa: E402
+import cursor_bridge_launcher as cursor  # noqa: E402
 import spotify_bridge_launcher as spotify  # noqa: E402
 
 
@@ -30,6 +31,15 @@ def main() -> None:
     check(spotify.PACKAGE == "@xavifabregat/spotify-mcp@0.1.2",
           "Spotify закреплён на 0.1.2, не на @latest")
     check("@latest" not in spotify.PACKAGE, "в пакете Spotify нет @latest")
+
+    bare = " | ".join(spotify.startup_notes("", False, False))
+    check("входа нет" in bare and "не найдено" in bare,
+          "без входа и без приложения лаунчер говорит и то, и другое")
+    check("браузер" in bare, "про вход сказано, что браузер не открывается")
+    check("SPOTIFY_CLIENT_ID" not in bare, "значение client id в журнал не попадает")
+    ready = " | ".join(spotify.startup_notes("id", True, True))
+    check("входа нет" not in ready and "не найдено" not in ready,
+          "с входом и приложением лаунчер зря не пугает")
 
     body = chatgpt.build_body("model-from-user", "привет")
     check("tools" not in body and body["input"] == "привет",
@@ -79,6 +89,17 @@ def main() -> None:
           "опасная песочница Codex заменяется на чтение")
     check("--yolo" not in argv and "--full-auto" not in argv,
           "у Codex нет --yolo и --full-auto")
+    check("--skip-git-repo-check" in argv,
+          "Codex получает флаг, без которого отказывается вне папки git")
+    # Подсказка о входе ставится по словам, снятым с живого ответа самой
+    # программы. На выдуманной строке она молчит, на настоящей — срабатывает.
+    check(codex.login_hint("thread.started, всё в порядке") == "",
+          "на обычном тексте подсказка о входе не появляется")
+    check(codex.login_hint("Not logged in") == "",
+          "строка про вход без отказа тоже не даёт подсказки")
+    check("codex login" in codex.login_hint(
+        '{"error":{"code":"invalid_refresh_token"}}'),
+        "отказ во входе переводится на человеческий: войди codex login")
     check(agent_argv.codex_queue_argv("codex", "th_1", "дальше")[:2] == ["codex", "queue"],
           "сообщение в старый чат идёт через codex queue")
 
@@ -91,6 +112,11 @@ def main() -> None:
     ask = agent_argv.cursor_send_argv("agent", "chat_1", "объясни", "ask", True)
     check("--force" not in ask and "--yolo" not in ask,
           "режим ask не получает --force, даже если правки попросили")
+    # Слово «Not authenticated» взято из документации Cursor CLI, а не выдумано.
+    check("agent login" in cursor.login_hint("Error: Not authenticated"),
+          "отказ во входе Cursor переводится на человеческий: agent login")
+    check(cursor.login_hint("сделано: 3 файла") == "",
+          "на обычном тексте подсказка о входе Cursor не появляется")
     edit = agent_argv.cursor_send_argv(
         "agent", "chat_1", "поправь", "agent", True, "/tmp",
     )

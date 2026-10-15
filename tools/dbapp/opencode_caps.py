@@ -417,6 +417,28 @@ def insert_entry(text: str, obj_key: str, name: str, entry: str) -> str:
     return text[:closing] + block + text[closing:]
 
 
+def entry_is_current(text: str, obj_key: str, name: str, entry: str) -> bool:
+    """Наш блок уже стоит и совпадает с тем, что мы собираемся вписать.
+
+    Нужно для идемпотентности. `insert_entry` всегда убирает прежний блок и
+    вставляет новый, а при одинаковом содержимом это даёт побочный эффект:
+    после подчистки остаётся лишний перевод строки, и файл настроек меняется
+    при каждом повторном нажатии. Раньше считалось, что повторы до записи не
+    доходят — но `install_providers` вставляет блок безусловно, и допущение
+    перестало быть верным. Поэтому сравниваем содержимое и, если оно то же
+    же, не трогаем текст вовсе.
+    """
+    begin = BEGIN_TPL.format(name=f"{obj_key}.{name}")
+    end = END_TPL.format(name=f"{obj_key}.{name}")
+    match = re.search(re.escape(begin) + r"(.*?)" + re.escape(end),
+                      text, re.DOTALL)
+    if match is None:
+        return False
+    wanted = entry.strip().rstrip(",").strip()
+    have = match.group(1).strip()
+    return have == wanted
+
+
 def remove_entry(text: str, obj_key: str, name: str) -> str:
     """Убирает наш блок с метками; висячие запятые чистит.
 
@@ -830,7 +852,8 @@ def install_providers(
             # (LMArena) список моделей живой и меняется — существующая
             # запись должна обновляться, а не пропускаться, иначе в
             # настройках остаётся протухший список моделей.
-            text = insert_entry(text, "provider", name, block)
+            if not entry_is_current(text, "provider", name, block):
+                text = insert_entry(text, "provider", name, block)
         text = fix_trailing_commas(text)
         if not check_jsonc(text):
             raise ValueError("после вставки файл не читается — откат")

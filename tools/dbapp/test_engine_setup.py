@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -142,6 +143,101 @@ def main() -> None:
         joined = " ".join(command)
         check("danger-full-access" not in joined and "--yolo" not in joined and "--force" not in joined,
               f"команда {sid} не содержит опасный флаг")
+    # Вход Codex: окно и таблица должны говорить «войди», а не молчать.
+    # Команда статуса на машине читателя может быть любой, поэтому подменяем
+    # её: проверка должна работать везде, где есть Python.
+    saved_exe = setup.common.resolve_exe
+    saved_probe = setup.common.probe_command
+
+    def fake_exe(name: str) -> str | None:
+        return r"C:\путь\codex.exe" if name == "codex" else None
+
+    try:
+        setup.common.resolve_exe = fake_exe
+        setup.common.probe_command = lambda argv, timeout=15: (1, "Not logged in")
+        ok, note = setup.codex_ready()
+        check(ok and "codex login" in note and "Входа нет" in note,
+              "входа нет: мост вписать можно, окно просит войти")
+        check("Войди сам" in setup.gap(root, "codex"),
+              "таблица называет отсутствие входа, а не молчит")
+
+        setup.common.probe_command = lambda argv, timeout=15: (0, "Logged in using ChatGPT")
+        ok, note = setup.codex_ready()
+        check(ok and "Вход есть" in note, "вход подтверждён — окно не пугает зря")
+        check(setup.gap(root, "codex") == "", "с входом дырки в таблице нет")
+
+        setup.common.probe_command = lambda argv, timeout=15: (None, "")
+        ok, note = setup.codex_ready()
+        check(ok and "не проверялся" in note,
+              "молчание команды статуса не выдаётся за вход")
+        check("не подтвердился" in setup.gap(root, "codex"),
+              "таблица тоже не выдаёт молчание за вход")
+
+        setup.common.resolve_exe = lambda name: None
+        ok, note = setup.codex_ready()
+        check(not ok and "winget" in note and "codex login" in note,
+              "нет команды — окно прямо говорит, что ставить и как войти")
+    finally:
+        setup.common.resolve_exe = saved_exe
+        setup.common.probe_command = saved_probe
+
+    # Cursor CLI на машине читателя может стоять, а может нет. Поэтому
+    # ставим заглушку: она говорит ровно то, что документирует Cursor
+    # (docs/cli/reference/authentication) — «Not authenticated» и код 1.
+    saved_path = os.environ.get("PATH", "")
+    stub_dir = Path(tempfile.mkdtemp(prefix="cursor-stub-"))
+    stub_dir.joinpath("agent.cmd").write_text(
+        "@echo off\r\n"
+        "if \"%1\"==\"status\" (echo Not authenticated & exit /b 1)\r\n"
+        "echo заглушка, это не настоящий Cursor CLI\r\n",
+        encoding="utf-8",
+    )
+    os.environ["PATH"] = str(stub_dir) + os.pathsep + saved_path
+    try:
+        ok, note = setup.cursor_ready()
+        check(ok and "agent login" in note and "Not authenticated" in note,
+              "входа нет — окно называет и причину, и как войти")
+        check("agent login" in setup.gap(root, "cursor"),
+              "таблица Cursor тоже говорит про вход, а не молчит")
+        stub_dir.joinpath("agent.cmd").write_text(
+            "@echo off\r\nif \"%1\"==\"status\" (echo Logged in as tester & exit /b 0)\r\n",
+            encoding="utf-8",
+        )
+        ok, note = setup.cursor_ready()
+        check(ok and "Вход подтверждён" in note, "вход подтверждён — окно не пугает зря")
+        check(setup.gap(root, "cursor") == "", "с входом дырки в таблице нет")
+    finally:
+        os.environ["PATH"] = saved_path
+
+    # Spotify: файл с Client ID — это половина, вход пакета — вторая.
+    spotify_dir = root / "spotify"
+    spotify_dir.mkdir()
+    check("mcp-spotify.txt" in setup.gap(spotify_dir, "spotify"),
+          "без файла дырка Spotify называет файл")
+    setup.save_spotify(spotify_dir, "client-id")
+    saved_login = setup.spotify_login_saved
+    saved_app = setup.spotify_app_installed
+    try:
+        setup.spotify_login_saved = lambda: False
+        setup.spotify_app_installed = lambda: True
+        check("входа нет" in setup.gap(spotify_dir, "spotify"),
+              "файл записан, а входа нет — дырка всё равно есть")
+        ok, note = setup.save_spotify(spotify_dir, "client-id")
+        check("Premium" in note,
+              "кнопка после записи говорит про Premium, как в README пакета")
+        setup.spotify_login_saved = lambda: True
+        setup.spotify_app_installed = lambda: False
+        check("приложения Spotify" in setup.gap(spotify_dir, "spotify"),
+              "вход есть, но приложения нет — про это тоже сказано прямо")
+        setup.spotify_app_installed = lambda: True
+        check(setup.gap(spotify_dir, "spotify") == "",
+              "с файлом, входом и приложением дырки нет")
+    finally:
+        setup.spotify_login_saved = saved_login
+        setup.spotify_app_installed = saved_app
+    check(isinstance(setup.spotify_app_installed(), bool),
+          "проверка приложения Spotify отвечает, а не падает")
+
     print("настройка мостов: проверки прошли")
 
 

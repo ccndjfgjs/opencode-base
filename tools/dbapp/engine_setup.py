@@ -171,20 +171,33 @@ def gap(dest: Path, server_id: str) -> str:
         return capcut_gap(dest)
     if server_id == "codex":
         ok, note = codex_ready()
-        return "" if ok else note
+        if not ok:
+            return note
+        exe = common.resolve_exe("codex")
+        return codex_gap(exe) if exe else ""
     if server_id == "cursor":
         ok, note = cursor_ready()
-        return "" if ok else note
+        if not ok:
+            return note
+        exe = common.resolve_exe("agent")
+        return cursor_gap(exe) if exe else ""
+    if server_id == "claude":
+        ok, note = claude_ready()
+        if not ok:
+            return note
+        exe = claude_find()
+        return claude_gap(exe) if exe else ""
+    if server_id == "spotify":
+        return spotify_gap(dest)
     names = {
         "unreal": UNREAL_NAME,
         "godot": GODOT_NAME,
         "tiktok": TIKTOK_NAME,
-        "spotify": SPOTIFY_NAME,
         "chatgpt": CHATGPT_NAME,
     }
     name = names.get(server_id)
     if name and not (dest / name).is_file():
-        if server_id in ("spotify", "chatgpt"):
+        if server_id == "chatgpt":
             return (
                 f"Нет файла {name} рядом с настройками. «Включить» впишет команду, "
                 "но лаунчер откажется. «Настроить автоматически» запишет файл "
@@ -374,11 +387,28 @@ def save_spotify(dest: Path, client_id: str) -> tuple[bool, str]:
     error = _write(path, f"SPOTIFY_CLIENT_ID={clean}\n")
     if error:
         return False, error
-    return True, (
-        "Client ID записан в mcp-spotify.txt. Значение сюда не входит. "
+    tail = (
         "Пакет @xavifabregat/spotify-mcp@0.1.2 ходит в Spotify Web API. "
-        "Это не программа Spotify. Воспроизведение просит Premium и уже "
-        "открытое приложение. Вход делает мастер пакета, эта кнопка браузер не открывала."
+        "Это не программа Spotify. Вход делает мастер пакета (npx … init), "
+        "он открывает браузер — эта кнопка браузер не открывала."
+    )
+    if not spotify_login_saved():
+        tail += (
+            " Входа пока нет: папки ~/.spotify-mcp не найдено, значит пакет "
+            "ни разу не входил. Поиск и плейлист без входа не ответят."
+        )
+    if not spotify_app_installed():
+        tail += (
+            " Приложения Spotify на этом компьютере не найдено: по README пакета "
+            "управлять воспроизведением можно только запущенным приложением."
+        )
+    tail += (
+        " Premium нужен и для воспроизведения, и (с февраля 2026) для создания "
+        "своего приложения в кабинете Spotify — это тоже из README пакета. "
+        "Наличие подписки мост не проверяет."
+    )
+    return True, (
+        "Client ID записан в mcp-spotify.txt. Значение сюда не входит. " + tail
     )
 
 
@@ -427,7 +457,277 @@ def save_cursor(dest: Path, key: str = "") -> tuple[bool, str]:
     )
 
 
+def spotify_login_saved() -> bool:
+    """Пакет сохраняет свой вход в ~/.spotify-mcp. Нет папки — входа не было."""
+    return (Path.home() / ".spotify-mcp").exists()
+
+
+def spotify_app_installed() -> bool:
+    """Установлено ли приложение Spotify. Мосту оно не нужно, playback — да."""
+    return bool(common.spotify_app_path())
+
+
+def spotify_gap(dest: Path) -> str:
+    """Чего не хватает Spotify. Файл — половина, вход — вторая половина.
+
+    Отсутствие приложения дыркой не считаем: пакет ходит в Web API и поиск с
+    плейлистом работают без него. Предупреждение о приложении даёт save_spotify.
+    """
+    path = settings_file(Path(dest), SPOTIFY_NAME)
+    values = common.parse_kv(common.read_text(path))
+    if not values.get("SPOTIFY_CLIENT_ID", "").strip():
+        return (
+            f"Нет файла {SPOTIFY_NAME} с непустым SPOTIFY_CLIENT_ID. «Включить» "
+            "впишет команду, но лаунчер откажется."
+        )
+    if not spotify_login_saved():
+        return (
+            "Client ID записан, а входа нет: нет папки ~/.spotify-mcp. Вход делает "
+            "мастер пакета (npx … init), он открывает браузер — эта программа "
+            "браузер не открывает. Трек не включится, пока не войдёшь. По README "
+            "пакета Premium нужен и для входа в кабинет разработчика, и для "
+            "воспроизведения; подписку мост не проверяет."
+        )
+    if not spotify_app_installed():
+        return (
+            "Вход есть, но приложения Spotify на этом компьютере нет: по README "
+            "пакета управлять воспроизведением можно только запущенным "
+            "приложением. Поиск и плейлист через Web API работают."
+        )
+    return ""
+
+
+
+#: Помощники Claude берём из лаунчера: окно настройки и мост обязаны искать
+#: программу ОДИНАКОВО, иначе окно скажет «не найдена» при работающем мосте.
+CLAUDE_MIN_VERSION = (2, 1, 259)
+
+
+def claude_find():
+    """Итог поиска CLI Claude: путь, источник и причина, если не нашлась."""
+    import claude_bridge_launcher
+    return claude_bridge_launcher.find_claude_detail()
+
+
+def claude_version_of(exe: str):
+    """Версия CLI Claude. None — не прочиталась."""
+    import claude_bridge_launcher
+    return claude_bridge_launcher.claude_version(exe)
+
+
+def claude_compatible(version) -> bool:
+    """Подходит ли версия под минимальную."""
+    import claude_bridge_launcher
+    return claude_bridge_launcher.compatible(version)
+
+
+def claude_auth_state(exe: str) -> tuple[str, str]:
+    """Проверка входа: есть / нет / не проверилось. Команда входа не идёт."""
+    import claude_bridge_launcher
+    return claude_bridge_launcher.auth_state(exe)
+
+
+def claude_app_installed() -> bool:
+    """Стоит ли само приложение Claude, даже если CLI не найдена."""
+    import claude_bridge_launcher
+    return common._app_installed(claude_bridge_launcher.CLAUDE_SPEC.app_paths)
+
+
+
+# ---------------------------------------------------------------------------
+# Автоустановка CLI при подключении моста. Решение человека 15.10.2026.
+#
+# Команды взяты из документации программ, а не придуманы здесь:
+#   * Claude Code — winget-пакет из docs.claude.com (раздел установки);
+#   * Cursor CLI  — команда из cursor.com/docs/cli/installation.
+#
+# ГЛАВНОЕ ПРАВИЛО: установка живёт здесь и вызывается только при подключении
+# моста. Функции *_ready() только читают состояние и никогда ничего не ставят.
+# Иначе прогон самопроверки, который зовёт эти функции, установил бы программы
+# на машину — проверка изменила бы то, что проверяет.
+# ---------------------------------------------------------------------------
+
+AUTO_INSTALL = {
+    "claude": {
+        "label": "Claude Code",
+        "argv": ["winget", "install", "-e", "--id", "Anthropic.ClaudeCode",
+                 "--accept-source-agreements", "--accept-package-agreements"],
+        "shown": "winget install -e --id Anthropic.ClaudeCode",
+    },
+    "cursor": {
+        "label": "Cursor CLI",
+        "argv": ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                 "-Command", "irm 'https://cursor.com/install?win32=true' | iex"],
+        "shown": "irm 'https://cursor.com/install?win32=true' | iex",
+    },
+}
+
+#: Флаг для проверок и самопроверки. Пока он стоит, установка невозможна
+#: ни при каких обстоятельствах: ни один автопрогон не должен ставить софт.
+NO_INSTALL_ENV = "OPENCODE_NO_AUTO_INSTALL"
+
+
+def auto_install_allowed() -> bool:
+    """Можно ли сейчас ставить CLI. Тесты выставляют запрет через переменную."""
+    return os.environ.get(NO_INSTALL_ENV, "") == ""
+
+
+def install_cli(server_id: str, timeout: int = 900) -> tuple[bool, str]:
+    """Ставит CLI программы. Возвращает (получилось, текст для человека).
+
+    Повторный вызов, когда программа уже есть, ничего не делает: сначала
+    проверяем наличие тем же поиском, которым мост будет её искать.
+    """
+    spec_def = AUTO_INSTALL.get(server_id)
+    if spec_def is None:
+        return False, "Для этого моста автоустановка не описана."
+    if not auto_install_allowed():
+        return False, (f"Установка {spec_def['label']} запрещена переменной "
+                       f"{NO_INSTALL_ENV}: её выставили проверки.")
+
+    ready = {"claude": claude_ready, "cursor": cursor_ready}[server_id]
+    ok, note = ready()
+    if ok:
+        return False, f"{spec_def['label']} уже на месте, установка не нужна."
+
+    print(f"[автоустановка] ставлю {spec_def['label']}: {spec_def['shown']}",
+          file=sys.stderr, flush=True)
+    import subprocess as _sub  # локальный импорт: нужен только здесь
+
+    startupinfo = None
+    if os.name == "nt":
+        startupinfo = _sub.STARTUPINFO()
+        startupinfo.dwFlags |= _sub.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = _sub.SW_HIDE
+    try:
+        done = _sub.run(
+            spec_def["argv"],
+            capture_output=True, text=True, timeout=timeout,
+            encoding="utf-8", errors="replace",
+            startupinfo=startupinfo,
+        )
+    except subprocess.TimeoutExpired:
+        return False, (f"Установка {spec_def['label']} не закончилась за "
+                       f"{timeout} секунд.")
+    except OSError as exc:
+        return False, f"Установщик не запустился: {exc}"
+
+    tail = ((done.stdout or "") + (done.stderr or "")).strip()[-400:]
+    ok, note = ready()
+    if ok:
+        return True, f"{spec_def['label']} установлена. {note}"
+    detail = f": {tail}" if tail else ""
+    return False, (f"{spec_def['label']} не появилась после установки "
+                   f"(код {done.returncode}){detail}")
+
+
+def codex_login_state(exe: str) -> tuple[bool | None, str]:
+    """Есть ли вход в Codex. Только чтение: `login status` ничего не пишет.
+
+    Проверено 15.10.2026 обеими сторонами: с пустой папкой CODEX_HOME команда
+    отвечает `Not logged in` и кодом 1, со своей настоящей — `Logged in using
+    ChatGPT` и кодом 0. None в первом элементе — «спросить не вышло», и это
+    не то же самое, что «входа нет».
+    """
+    code, text = common.probe_command([exe, "login", "status"], timeout=20)
+    if code is None:
+        return None, "команда статуса не ответила"
+    if code == 0:
+        return True, (text.splitlines() or ["Logged in"])[-1].strip()
+    if "not logged in" in text.lower():
+        return False, (text.splitlines() or ["Not logged in"])[-1].strip()
+    return None, (text.splitlines() or [f"код {code}"])[-1].strip()[:200]
+
+
+def codex_gap(exe: str) -> str:
+    """Чего не хватает именно для ответа. Запись моста этим не блокируется."""
+    logged, text = codex_login_state(exe)
+    if logged is False:
+        return (
+            f"Команда {exe} есть, а входа нет: {text}. Войди сам — codex login. "
+            "Пароль программа не спрашивает и сайт не открывает. Мост включится, "
+            "но ответы Codex не придут, пока не войдёшь."
+        )
+    if logged is None:
+        return (
+            f"Команда {exe} есть, вход не подтвердился: {text}. "
+            "Проверь сам: codex login status."
+        )
+    return ""
+
+
+#: Предупреждение о безопасности — постоянное свойство, а не реакция на запрос.
+CLAUDE_SAFETY = (
+    "Файлы модель не правит инструментами, но абсолютной защиты от "
+    "изменений нет."
+)
+
+
+def claude_ready() -> tuple[bool, str]:
+    """Можно ли вписать мост Claude, и что человек должен сделать.
+
+    Пять состояний, а не два: CLI нет, CLI сломана, проверка входа упала,
+    входа нет и вход есть. Иначе человеку скажут «войди» там, где программа
+    просто не запускается. Отсутствие входа запись не блокирует: лаунчер
+    без входа стартует, а отказ приходит на первом запросе.
+    """
+    found = claude_find()
+    exe = found.path or None
+    if not exe:
+        if claude_app_installed():
+            return False, (
+                "Приложение Claude стоит, но Claude Code CLI не найдена. "
+                "Установка — на https://docs.claude.com/en/docs/claude-code/setup. "
+                f"Подробности: {found.reason}"
+            )
+        return False, (
+            "Claude Code CLI не найдена. Поставь Claude Code: "
+            "https://docs.claude.com/en/docs/claude-code/setup. "
+            "Сайт отсюда не открывается."
+        )
+    version = claude_version_of(exe)
+    if version is None:
+        return False, (
+            f"Найдена команда {exe}, но версию прочитать не удалось. "
+            "Мост не включаю: ограничения проверить нечем."
+        )
+    found_text = ".".join(str(x) for x in version)
+    need_text = ".".join(str(x) for x in CLAUDE_MIN_VERSION)
+    if not claude_compatible(version):
+        return False, (
+            f"Claude Code версии {found_text}, а нужно {need_text} или новее. "
+            "Обнови: без этого мост не может включить ограничения, "
+            f"о которых говорит. {CLAUDE_SAFETY}"
+        )
+    state, note = claude_auth_state(exe)
+    if state == "есть":
+        return True, f"Найдена команда {exe}, версия {found_text}. {note}. {CLAUDE_SAFETY}"
+    if state == "нет":
+        return True, (
+            f"Найдена команда {exe}, версия {found_text}. {note}. "
+            f"Мост включится, но ответы не придут, пока не войдёшь. {CLAUDE_SAFETY}"
+        )
+    return True, (
+        f"Найдена команда {exe}, версия {found_text}. {note}. "
+        f"Проверь сам: claude auth status. {CLAUDE_SAFETY}"
+    )
+
+
+def claude_gap(exe: str) -> str:
+    """Что мешает, если CLI уже есть, — одной строкой."""
+    if not exe:
+        return "Claude Code CLI не найдена."
+    state, note = claude_auth_state(exe)
+    return f"{note} {CLAUDE_SAFETY}".strip()
+
+
 def codex_ready() -> tuple[bool, str]:
+    """Можно ли вписать мост, и что человек должен сделать.
+
+    Отсутствие входа запись не блокирует: лаунчер без входа запускается, а
+    отказ приходит на первом запросе. Поэтому пишем мост и говорим, что
+    ответов не будет, пока не войдёшь.
+    """
     exe = common.resolve_exe("codex")
     if not exe:
         return False, (
@@ -435,13 +735,32 @@ def codex_ready() -> tuple[bool, str]:
             "Потом нужен свой вход: codex login. Пароль эта программа не спрашивает "
             "и сайт не открывает."
         )
-    return True, (
-        f"Найдена команда {exe}. Это только файл. Вход не проверялся. "
+    logged, text = codex_login_state(exe)
+    tail = (
         "По умолчанию песочница только на чтение. danger-full-access не передаётся."
+    )
+    if logged is True:
+        return True, f"Найдена команда {exe}. Вход есть: {text}. {tail}"
+    if logged is False:
+        return True, (
+            f"Найдена команда {exe}. Входа нет: {text}. Войди сам — codex login. "
+            f"Мост включится, но ответы не придут, пока не войдёшь. {tail}"
+        )
+    return True, (
+        f"Найдена команда {exe}. Вход не проверялся: {text}. "
+        f"Проверь сам: codex login status. {tail}"
     )
 
 
 def cursor_ready() -> tuple[bool, str]:
+    """Можно ли вписать мост, и что человек должен сделать.
+
+    Вход проверяется тем же, что и у Codex: `agent status` только читает
+    состояние. Команда и слова отказа взяты из документации Cursor CLI
+    (cursor.com/docs/cli/reference/authentication, 15.10.2026): вход — это
+    `agent login` с браузером или ключ CURSOR_API_KEY. Отсутствие входа
+    запись не блокирует: лаунчер без входа запускается.
+    """
     exe = common.resolve_exe("agent")
     if not exe:
         return False, (
@@ -449,8 +768,36 @@ def cursor_ready() -> tuple[bool, str]:
             "Установка описана на https://cursor.com/docs/cli/installation. "
             "Сайт отсюда не открывается."
         )
+    tail = "--force не ставится, пока явно не попросят правки."
+    code, text = common.probe_command([exe, "status"], timeout=20)
+    if code == 0:
+        who = (text.splitlines() or ["agent status ответил кодом 0"])[-1].strip()
+        return True, f"Найдена команда {exe}. Вход подтверждён: {who[:120]}. {tail}"
+    if code is None:
+        return True, (
+            f"Найдена команда {exe}. Вход не проверялся: команда status не ответила. "
+            f"Проверь сам: agent status. {tail}"
+        )
+    reason = (text.splitlines() or [f"код {code}"])[-1].strip()[:160]
     return True, (
-        f"Найдена команда {exe}. Если это не Cursor CLI, мост не заработает. "
-        "Ключ можно оставить пустым, если вход уже сделан. "
-        "--force не ставится, пока явно не попросят правки."
+        f"Найдена команда {exe}. Входа нет или ключ не принят: {reason}. "
+        f"Войди сам: agent login — он открывает браузер. Или запиши ключ "
+        f"в {CURSOR_NAME}. {tail}"
+    )
+
+
+def cursor_gap(exe: str) -> str:
+    """Чего не хватает именно для ответа. Запись моста этим не блокируется."""
+    code, text = common.probe_command([exe, "status"], timeout=20)
+    if code == 0:
+        return ""
+    if code is None:
+        return (
+            f"Команда {exe} есть, вход не подтвердился: команда status не ответила. "
+            "Проверь сам: agent status."
+        )
+    reason = (text.splitlines() or [f"код {code}"])[-1].strip()[:160]
+    return (
+        f"Команда {exe} есть, а входа нет: {reason}. Войди сам — agent login, "
+        f"он открывает браузер. Или запиши ключ в {CURSOR_NAME}."
     )

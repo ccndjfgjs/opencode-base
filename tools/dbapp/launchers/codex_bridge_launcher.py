@@ -25,27 +25,45 @@ PREFIX = "codex-bridge"
 TIMEOUT = 600
 
 
+#: Где может лежать CLI Codex. Источники перебираются по очереди, кандидат
+#: проверяется запуском `--version`, берётся первый рабочий — а не первый
+#: найденный. Пакетные файлы не берём: текст запроса пишет модель.
+CODEX_SPEC = common.ProgramSpec(
+    name="codex",
+    exe_names=("codex",),
+    extra_globs=(r"%LOCALAPPDATA%\OpenAI\Codex\bin\*\codex.exe",),
+    config_hint=".codex/config.toml:CODEX_CLI_PATH",
+    app_paths=(r"%LOCALAPPDATA%\OpenAI\Codex",),
+)
+
+
+def find_codex_detail() -> common.ProgramFound:
+    """Подробный итог поиска: путь, источник и что отвергли."""
+    return common.find_cli(CODEX_SPEC)
+
+
 def find_codex() -> str | None:
-    return common.resolve_exe("codex")
+    """Только путь. None — CLI нет (как и раньше у resolve_exe)."""
+    return common.find_cli_path(CODEX_SPEC)
 
 
 def run_codex(argv: list[str], folder: str | None) -> tuple[int, str, str]:
-    prepared = common.prepare_argv(argv)
-    try:
-        done = subprocess.run(
-            prepared,
-            cwd=folder,
-            capture_output=True,
-            text=True,
-            timeout=TIMEOUT,
-            encoding="utf-8",
-            errors="replace",
-        )
-    except subprocess.TimeoutExpired:
-        return 1, "", f"Codex не ответил за {TIMEOUT} секунд."
-    except OSError as exc:
-        return 1, "", f"Codex не запустился: {exc}"
-    return done.returncode, done.stdout or "", done.stderr or ""
+    """Запускает команду Codex и возвращает код, вывод и ошибки.
+
+    stdin у ребёнка закрыт намеренно. `codex exec` печатает «Reading
+    additional input from stdin...» и, получив открытый канал, читает его
+    до конца. Без закрытия он съедал поток протокола MCP: вызов висел до
+    таймаута, а сообщения opencode терялись. Проверено живьём 15.10.2026 —
+    с открытым каналом процесс жил и через 25 секунд.
+    """
+    code, stdout, stderr, status = common.run_capture(
+        argv, cwd=folder, timeout=TIMEOUT)
+    if status:
+        # Таймаут и неудачная остановка — разные статусы, а не одна строка:
+        # во втором случае какие-то процессы могли остаться работать.
+        note = common.stop_status_text(status, "Codex", TIMEOUT)
+        return code if code is not None else 1, "", note or stderr
+    return code, stdout, stderr
 
 
 def parse_exec(stdout: str) -> tuple[str, str]:
@@ -67,6 +85,24 @@ def parse_exec(stdout: str) -> tuple[str, str]:
                 messages.append(text)
     final = messages[-1] if messages else ""
     return thread_id, final
+
+
+#: Признаки отказа во входе в тексте самой программы. Не выдуманы: сняты
+#: с живого ответа codex 15.10.2026 после `codex login status`.
+AUTH_MARKS = (
+    "invalid_refresh_token",
+    "please log out and sign in again",
+    "failed to refresh token",
+    "could not parse your authentication token",
+)
+
+
+def login_hint(text: str) -> str:
+    """Человеческая строка, если текст пахнет отказом во входе."""
+    low = text.lower()
+    if any(mark in low for mark in AUTH_MARKS):
+        return "Вход в Codex не сработал. Войди сам: codex login."
+    return ""
 
 
 TOOLS = [
@@ -99,9 +135,11 @@ TOOLS = [
 
 
 def call_tool(name: str, args: dict) -> str:
-    exe = find_codex()
+    detail = find_codex_detail()
+    exe = detail.path or None
     if not exe:
-        return "Команда codex не найдена. Её ставит winget OpenAI.Codex, вход — codex login."
+        return ("Команда codex не найдена. Её ставит winget OpenAI.Codex, "
+                f"вход — codex login. Подробности: {detail.reason}")
     folder = agent_argv.workspace_dir(str(args.get("workspace") or ""))
     if str(args.get("workspace") or "").strip() and folder is None:
         return "Папка workspace не существует. Чужой путь не подставляю."
@@ -116,9 +154,12 @@ def call_tool(name: str, args: dict) -> str:
         )
         code, stdout, stderr = run_codex(argv, folder)
         thread_id, final = parse_exec(stdout)
+        hint = login_hint(f"{stdout}\n{stderr}")
         if not final:
             final = (stderr or stdout or "Codex не вернул текст.").strip()[:2000]
         head = f"thread_id: {thread_id or 'нет в ответе'}\nкод: {code}\n\n"
+        if hint:
+            head = hint + "\n\n" + head
         return head + final[:8000]
     if name == "codex_send":
         thread_id = str(args.get("thread_id") or "").strip()
@@ -137,12 +178,24 @@ def call_tool(name: str, args: dict) -> str:
 
 
 def main() -> int:
-    if not find_codex():
+    detail = find_codex_detail()
+    exe = detail.path or None
+    if not exe:
         common.say(PREFIX, "команда codex не найдена")
+        common.say(PREFIX, f"подробности: {detail.reason}")
         common.say(PREFIX, "winget id OpenAI.Codex, затем codex login. Пароль программа не спрашивает.")
         return 1
-    common.say(PREFIX, "codex найден. danger-full-access и --yolo не передаю")
-    common.say(PREFIX, "живой запрос при старте не делаю")
+    common.say(PREFIX, f"codex найден: {exe} (источник: {detail.from_source})")
+    common.say(PREFIX, "danger-full-access и --yolo не передаю")
+    # `login status` только читает состояние: ни входа, ни запроса к модели.
+    code, text = common.probe_command([exe, "login", "status"], timeout=20)
+    if code == 0:
+        common.say(PREFIX, f"вход есть: {(text.splitlines() or ['Logged in'])[-1].strip()}")
+    elif code is not None and "not logged in" in text.lower():
+        common.say(PREFIX, "входа нет. Ответы не придут, пока не войдёшь: codex login")
+    else:
+        common.say(PREFIX, "состояние входа команда не подтвердила")
+    common.say(PREFIX, "живой запрос к модели при старте не делаю")
     return mcp_stdio.serve("codex-cli", TOOLS, call_tool)
 
 

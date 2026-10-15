@@ -5032,7 +5032,8 @@ class CapsTab(ScrollPage):
     AUTO_SERVERS = ("android-studio", "obs", "android-emulator", "dbhub",
                     "browsers", "omniroute", "lmarena",
                     "unity", "unreal", "roblox-studio", "godot", "tiktok",
-                    "capcut", "spotify", "chatgpt", "codex", "cursor")
+                    "capcut", "spotify", "chatgpt", "codex", "cursor",
+                    "claude")
 
     def _reg_auto_possible(self, server: mcp_registry.Server | None) -> tuple[bool, str]:
         """Можно ли настроить автоматически и что этому мешает.
@@ -5130,6 +5131,11 @@ class CapsTab(ScrollPage):
                 "Проверить команду agent и записать ключ, если он нужен. "
                 "--yolo не передаёт."
             ),
+            "claude": (
+                "Проверить команду claude и её версию: ограничения моста "
+                "требуют 2.1.259 или новее. Вход делает человек сам, "
+                "мост запускает только проверку."
+            ),
         }
         if server is None:
             return "Сначала выберите строку."
@@ -5147,10 +5153,19 @@ class CapsTab(ScrollPage):
             can_write, note = engine_setup.unity_ready()
         elif server.id == "roblox-studio":
             can_write, note = engine_setup.roblox_ready()
+        elif server.id == "claude":
+            can_write, note = engine_setup.claude_ready()
         elif server.id == "codex":
             can_write, note = engine_setup.codex_ready()
         elif server.id == "cursor":
             can_write, note = engine_setup.cursor_ready()
+        # Подключение моста — единственное место, где CLI ставится сама.
+        # Проверки состояния выше только читают: поставить программу оттуда
+        # нельзя, иначе прогон самопроверки ставил бы её на машину.
+        if (not can_write and server.id in engine_setup.AUTO_INSTALL
+                and engine_setup.auto_install_allowed()):
+            installed, note = engine_setup.install_cli(server.id)
+            can_write = installed
         dialog = EngineSetupDialog(server.id, server.name, note, can_write, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return

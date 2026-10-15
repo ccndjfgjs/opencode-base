@@ -138,6 +138,19 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
+#: Ожидаемое число серверов. ЭТАЛОН, НЕ ВЫЧИСЛЯЕМЫЙ ИЗ РЕЕСТРА:
+#: если считать ожидание по самому реестру, проверка перестанет замечать
+#: пропавший сервер — ошибка станет невидимой ровно тогда, когда она опасна.
+#: Значение одно на каждую конфигурацию: мост плеера добавляет свой сервер.
+#: Сколько серверов умеет настроить кнопка «Настроить автоматически».
+#: Константа с именем, потому что голое число в проверке не читается.
+AUTO_SERVERS_EXPECTED = 18
+EXPECTED_SERVERS_NO_PLAYER = 23
+EXPECTED_SERVERS_WITH_PLAYER = 24
+#: Режим проверки задаётся явно, а не вычисляется из наличия записи.
+EXPECTED_SERVERS = EXPECTED_SERVERS_NO_PLAYER
+
+
 def main() -> int:
     echo("=" * 62)
     echo(" Проверка программы управления базой")
@@ -1165,6 +1178,56 @@ def main() -> int:
                   "версия программы положена рядом — взять, если захочется")
         finally:
             shutil.rmtree(_sync_base, ignore_errors=True)
+
+        # ---- 5ж. Мосты: программа пользователя и вход в неё.
+        # 15.10.2026 по просьбе человека: мост обязан работать через то, что
+        # реально стоит на машине, и различать три состояния — «не
+        # установлено», «установлено, но не вход», «работает». Проверки эти
+        # лежат в отдельных файлах: сеть и чужие CLI там не нужны, иначе
+        # прогон завис бы на чужой программе. Отдельными они были от
+        # рождения, и в общий прогон не входили: их запускали руками, и
+        # правило «проверяй на лету» без них забывалось.
+        echo("\n--- 5ж. Мосты: программа пользователя и вход ---")
+        # Имя с алиасом — не украшение: в этом теле уже есть `import
+        # subprocess` в других местах, и Python считает такое имя локальным
+        # для всей функции. Без алиаса раздел падал бы на UnboundLocalError,
+        # и падал бы в самом начале прогона, а не у себя.
+        import subprocess as _bs_sp  # noqa: PLC0415 — нужен здесь и только здесь
+        # 15.10.2026: добавлены проверки автопоиска программы, остановки
+        # дерева процессов и моста Claude. Они тоже идут отдельными
+        # процессами: последняя поднимает настоящие процессы и ждёт их
+        # смерти, в общем прогоне это мешало бы читать вывод.
+        for _bridge_test in ("test_engine_setup.py", "launchers/test_agent_bridges.py",
+                             "launchers/test_bridge_launchers.py",
+                             "launchers/test_program_find.py",
+                             "launchers/test_process_tree.py",
+                             "launchers/test_claude_bridge.py"):
+            _bt_path = HERE / _bridge_test
+            if not _bt_path.is_file():
+                check(False, f"отдельная проверка мостов на месте: {_bridge_test}")
+                continue
+            # Проверка дерева процессов по природе медленная: там ждут,
+            # пока процессы действительно исчезнут.
+            _bt_timeout = 1800 if "tree" in _bridge_test else 900
+            # Проверкам запрещено что-либо ставить: селфтест не имеет права
+            # менять машину, под которой сам же работает.
+            # Имя с алиасом — как у subprocess выше: этот модуль импортирует
+            # os локально и в других местах, и без алиаса имя стало бы
+            # локальным для всей функции.
+            import os as _os_env  # noqa: PLC0415 — нужен здесь и только здесь
+            _bt_env = dict(_os_env.environ)
+            _bt_env["OPENCODE_NO_AUTO_INSTALL"] = "1"
+            _bt = _bs_sp.run(
+                [sys.executable, str(_bt_path)],
+                capture_output=True, text=True, timeout=_bt_timeout,
+                encoding="utf-8", errors="replace", cwd=str(tempfile.gettempdir()),
+                env=_bt_env,
+            )
+            check(
+                _bt.returncode == 0 and "FAIL" not in _bt.stdout,
+                f"отдельная проверка проходит: {_bridge_test}"
+                f"{'' if _bt.returncode == 0 else ' — ' + (_bt.stdout or _bt.stderr).strip()[-140:]}",
+            )
 
         # ---- 5д. Реестр серверов MCP: команды, проверка, вкл/выкл.
         # Сделано 28.09 по просьбе пользователя: серверы из реестра должны быть
@@ -6545,8 +6608,13 @@ def main() -> int:
         # семь серверов целиком и десять мостов движков. Проверка, которая
         # требовала бы старого числа, просто мешала бы переносу.
         _auto_count = len(window.caps_tab.AUTO_SERVERS)
-        check(_auto_count == 17,
+        # Эталон живёт константой с именем, а не голым числом прямо
+        # здесь: добавление моста обязано двигать её в одном месте, и это
+        # видно в диффе.
+        check(_auto_count == AUTO_SERVERS_EXPECTED,
               f"в списке автонастройки {_auto_count} серверов")
+        check("claude" in window.caps_tab.AUTO_SERVERS,
+              "claude включён в список автонастройки")
         check("семь" in _lm_main and "десяти" in _lm_main,
               "и в подсказке сказано, сколько именно: семь целиком и десять мостов")
 
@@ -10896,7 +10964,8 @@ def main() -> int:
     # --- настоящий реестр
     _base = core.program_root()
     _servers = mcp_registry.load_servers(_base)
-    check(len(_servers) == 22, f"реестр читается, 22 сервера: {len(_servers)}")
+    check(len(_servers) == EXPECTED_SERVERS,
+          f"реестр читается, ожидалось {EXPECTED_SERVERS} серверов: {len(_servers)}")
     check(all(s.program_install is not None for s in _servers),
           "у всех 22 серверов есть блок program_install")
     _by_id = {s.id: s.program_install for s in _servers}
@@ -10989,7 +11058,8 @@ def main() -> int:
 
         # Все двадцать два на месте, и у каждого четыре ответа.
         _views = pmod.server_views(_base)
-        check(len(_views) == 22, f"движок прочитал все двадцать два сервера: {len(_views)}")
+        check(len(_views) == EXPECTED_SERVERS,
+          f"движок прочитал все {EXPECTED_SERVERS} серверов: {len(_views)}")
         _by = {v.id: v for v in _views}
         for _sid in ("windows-admin", "excel", "blender", "adobe-creativity",
                      "android-studio", "obs", "android-emulator", "ldplayer",
@@ -12163,8 +12233,14 @@ def main() -> int:
     # `ВЕРСИЯ` — по §22.2, читает selfupdate.py. `LICENSE` — по решению
     # от 07.10.2026: gem Licensee в `.github/` лицензию не признаёт, живой
     # запрос отдал 404, и человек выбрал стандартное место.
+    # `skills-index.json` — файл механизма: его читает core.py при сборе
+    # скиллов, без него указатель скиллов не строится. `STATE.md` — рабочий
+    # снимок состояния проекта, его читает человек, а не код; он отслеживается
+    # git (6567a35), то есть присутствует в корне намеренно, а не остался
+    # от чужой работы. Оба добавлены осознанно: проверка по-прежнему ловит
+    # случайные файлы, просто её список был неполным.
     _allowed = {".gitignore", ".gitmodules", "Управление-базой.cmd",
-                "ВЕРСИЯ", "LICENSE"}
+                "ВЕРСИЯ", "LICENSE", "skills-index.json", "STATE.md"}
     _extra = [n for n in _root_files if n not in _allowed]
     check(not _extra, f"в корне нет лишних файлов: {_extra or 'чисто'}")
     _ver_file = _repo_dir / "ВЕРСИЯ"

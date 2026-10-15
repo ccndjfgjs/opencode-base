@@ -1809,6 +1809,70 @@
       "ready_here_note": "07.10.2026 в песочнице проверено: окружение моста ставится по requirements.txt, мост поднимается (python -m src.main), GET /api/v1/health отвечает «degraded» (сервер жив, токена и моделей нет), GET /api/v1/models отдаёт пустой список, POST /api/v1/chat/completions на несуществующую модель отвечает понятным 404, наш MCP-лаунчер отвечает по протоколу 2025-06-18 тремя инструментами и честно отказывает без токена. Чего проверить не удалось: живой ответ модели — из песочницы нет доступа к арене, а токена у программы нет; панель моста; поведение на Windows.",
       "verdict": "Мост поднимается и отвечает, модели становятся провайдером opencode; живой ответ модели на этой машине не проверен — зелёной отметки нет.",
       "manual_setup": false
+    },
+    {
+      "id": "claude",
+      "name": "Claude",
+      "source": "https://docs.claude.com/en/docs/claude-code/cli-reference",
+      "install": "официальная установка Claude Code: https://docs.claude.com/en/docs/claude-code/setup, затем свой вход claude auth login",
+      "program_install": {
+        "program": "Claude Code CLI",
+        "method": "official",
+        "winget_id": "",
+        "catalog_version": "",
+        "expected_publisher": "",
+        "expected_signer": "",
+        "signer_checked": "",
+        "needs_admin": false,
+        "needs_admin_verified": false,
+        "official_url": "https://docs.claude.com/en/docs/claude-code/setup",
+        "hand_over": true,
+        "publisher_trusted": false,
+        "bridge": "",
+        "instructions": "У Claude Code нет проверяемого нами магазинного идентификатора: установка описана на официальной странице, и подставлять выдуманный winget_id мы не будем. Версия CLI на этой машине не измерялась: программы нет. Вход — claude auth login, он открывает браузер; сам мост команды входа не запускает никогда.",
+        "checked": "2026-10-15",
+        "installed_version": "",
+        "version_measured": "",
+        "bridge_checked": false,
+        "known_good": [],
+        "version_note": "Формы команды сверены с документацией Claude Code 15.10.2026: `claude -p`, `--output-format json`, `--permission-mode plan`, `--permission-prompts none` (нужна версия 2.1.259+), `--disallowedTools` отдельными именами. Живой запуск не делался: настоящей CLI на машине нет."
+      },
+      "connection": {
+        "kind": "local",
+        "command": [
+          "{DBAPP_PYTHON}",
+          "{PROGRAM}/tools/dbapp/launchers/claude_bridge_launcher.py"
+        ],
+        "warm_up": false,
+        "note": "Новый чат — claude -p с --output-format json. Продолжение — тот же вызов плюс --resume <session_id>. Ограничения собираются заново на каждый вызов: plan, --permission-prompts none и --disallowedTools Edit Write NotebookEdit MultiEdit пятью отдельными аргументами. При старте запрос к модели не делается."
+      },
+      "license": "свой код программы; Claude Code — условия Anthropic",
+      "why": "Создать новый чат Claude Code CLI или продолжить начатый. Файлы модель не правит инструментами, но абсолютной защиты от изменений нет. Сайт не открывается.",
+      "requires": [
+        {
+          "what": "команда claude",
+          "check": null,
+          "type": "manual",
+          "blocks": false,
+          "note": "официальная установка описана на docs.claude.com/en/docs/claude-code/setup. Лаунчер откажется, если команды нет, и скажет почему."
+        },
+        {
+          "what": "свой вход claude auth login",
+          "check": null,
+          "type": "manual",
+          "blocks": false,
+          "note": "открывает браузер. Мост запускает только проверку claude auth status и никогда — саму команду входа."
+        }
+      ],
+      "setup_steps": [
+        "Поставь Claude Code по официальной инструкции: https://docs.claude.com/en/docs/claude-code/setup.",
+        "Войди сам: claude auth login. Браузер откроет программа, не мост.",
+        "Выдели строку Claude и нажми «Настроить автоматически»: кнопка только проверит, что команда есть и версия подходит, и впишет мост.",
+        "Перезапусти opencode. Готовым мост не считается: живого ответа Claude Code на этой машине ещё не было."
+      ],
+      "ready_here": false,
+      "ready_here_note": "2026-10-15 настоящей Claude Code CLI на машине нет, живой ответ модели не получен.",
+      "verdict": "Порог средний: нужна своя Claude Code и свой вход с браузером. Инструменты правки запрещены, но абсолютной защиты файлов нет"
     }
   ],
   "excluded": [
