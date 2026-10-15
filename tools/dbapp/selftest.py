@@ -152,6 +152,11 @@ EXPECTED_SERVERS = EXPECTED_SERVERS_NO_PLAYER
 
 
 def main() -> int:
+ 
+    # Проверка не имеет права ставить софт на машину, на которой
+    # сама работает: автоустановка rtk смотрит эту переменную.
+    import os as _st_os  # noqa: PLC0415 — нужен здесь и только здесь
+    _st_os.environ.setdefault("OPENCODE_NO_AUTO_INSTALL", "1")
     echo("=" * 62)
     echo(" Проверка программы управления базой")
     echo("=" * 62)
@@ -1111,6 +1116,29 @@ def main() -> int:
             and not (d / "SKILL.md").read_text(encoding="utf-8").startswith("---")
         ]
         check(not _bad_fm, f"у всех скиллов есть --- ограждения (сломаны: {_bad_fm})")
+        # Индекс скиллов лежит в программе ДВАЖДЫ: в корне и в данных/.
+        # В базу едет тот, что в данных/, а человек и проверки смотрят
+        # на корневой. Пока они расходятся, база молча получает одно, а
+        # сkylls-папки — другое. Ловится здесь, а не по факту в базе.
+        _ix_root = core.program_file("skills-index.json")
+        _ix_data = core.program_root() / "данные" / "skills-index.json"
+        check(_ix_data.is_file(), "данные/skills-index.json на месте")
+        if _ix_root.is_file() and _ix_data.is_file():
+            try:
+                _ix_same = (
+                    _ix_root.read_text(encoding="utf-8").strip()
+                    == _ix_data.read_text(encoding="utf-8").strip()
+                )
+                _ix_n = len(json.loads(
+                    _ix_data.read_text(encoding="utf-8")).get("skills", []))
+            except (OSError, ValueError) as _exc:
+                _ix_same = False
+                _ix_n = 0
+                check(False, f"индекс скиллов не читается: {_exc}")
+            else:
+                check(_ix_same, "оба экземпляра индекса скиллов совпадают")
+            check(_ix_n == _n_skills,
+                  f"и оба называют столько же скиллов, сколько папок: {_ix_n}")
         # реестр MCP-серверов едет с базой
         _reg = target / "mcp-registry.json"
         check(_reg.is_file(), "mcp-registry.json едет с базой")
@@ -4495,7 +4523,7 @@ def main() -> int:
                           f"написано {_said.group(1)}, на диске {_n_skills}")
                 # Второе упоминание счётчика («В базе лежит N скиллов»):
                 # раньше правили только первое, а регэксп второе не ловил.
-                _said2 = re.search(r"в базе лежит\s*(\d+)\s*скиллов", _gt.lower())
+                _said2 = re.search(r"в базе лежит\s*(\d+)\s*скилл\w+", _gt.lower())
                 check(bool(_said2) and int(_said2.group(1)) == _n_skills,
                       f"число навыков верно и во втором упоминании: "
                       f"написано {_said2.group(1) if _said2 else '—'}, на диске {_n_skills}")
@@ -6971,13 +6999,25 @@ def main() -> int:
     check({"rtk", "caveman"} <= set(opencode_caps.CAPS_OFF_BY_DEFAULT),
           "обе галочки по умолчанию сняты: включать их молча нельзя")
     _tk_main = (_tk_root / "tools" / "dbapp" / "main.py").read_text(encoding="utf-8")
-    for _tk_bit, _tk_why in (
-        ("Замерить rtk", "кнопка замера"),
-        ("Уровень caveman", "выбор уровня caveman"),
-        ("caveman_level", "передача уровня в установку"),
-        ('"full"', "полный уровень в списке"),
-    ):
-        check(_tk_bit in _tk_main, f"вкладка opencode: {_tk_why} ({_tk_bit})")
+    # Карточек с кнопками в окне больше нет — работа уехала в скиллы.
+    # Проверяем новое состояние честно: кнопки убраны, а взамен появился
+    # путь в скилле. Раньше тут искали подписи в коде; искать их больше
+    # нечего, а «нашлось в комментарии» — не проверка.
+    for _tk_gone in ("self.btn_rtk_measure", "self.caveman_level"):
+        check(_tk_gone not in _tk_main,
+              f"вкладка opencode: {_tk_gone} убран, работа — в скилле")
+    check("caveman.DEFAULT_LEVEL" in _tk_main,
+          "уровень caveman берётся из модуля, а не из окна")
+    check("caveman_level=level" in _tk_main,
+          "и передаётся в установку, как раньше")
+    _tk_skill_caveman = (_tk_root / "skills" / "caveman" / "SKILL.md")
+    check(_tk_skill_caveman.is_file(), "скилл caveman на месте")
+    if _tk_skill_caveman.is_file():
+        _tk_cav_skill = _tk_skill_caveman.read_text(encoding="utf-8")
+        check("caveman.py install full" in _tk_cav_skill,
+              "выбор уровня уехал в скилл — там есть команда полного уровня")
+        check("уровня" in _tk_cav_skill and "в окне" in _tk_cav_skill,
+              "и сказано, что в окне уровня больше нет")
     _tk_caps_src = (_tk_root / "tools" / "dbapp" / "opencode_caps.py").read_text(
         encoding="utf-8")
     check("caveman_level" in _tk_caps_src and "_caveman_module" in _tk_caps_src,
@@ -7299,7 +7339,9 @@ def main() -> int:
                   "плагин rtk лёг куда надо")
             _tk_caps_agents = (_tk_dest_caps / "AGENTS.md").read_text(encoding="utf-8")
             check("уровень: полный (ultracave)" in _tk_caps_agents,
-                  "и уровень caveman — тот, что выбран в списке")
+                  "и уровень caveman — тот, что передан явно")
+            check(_tk_cave.DEFAULT_LEVEL == "lite",
+                  "а по умолчанию модуль ставит лёгкий уровень")
             _tk_m, _tk_e = opencode_caps.remove_caps(_tk_dest_caps, {"rtk", "caveman"})
             _tk_status = opencode_caps.caps_status(_tk_dest_caps)
             check(not _tk_e and not _tk_status.get("rtk")
@@ -7314,12 +7356,10 @@ def main() -> int:
         check(all(not _tk_tab.checks[name].isChecked()
               for name in ("rtk", "caveman")),
               "и обе сняты по умолчанию — молча такое не включается")
-        _tk_combo = [_tk_tab.caveman_level.itemData(i)
-                     for i in range(_tk_tab.caveman_level.count())]
-        check(_tk_combo == ["lite", "full"],
-              f"у caveman выбор из двух уровней: {_tk_combo}")
-        check(_tk_tab.btn_rtk_measure.isEnabled(),
-              "кнопка замера rtk доступна — числа человек получает на своей машине")
+        check(not hasattr(_tk_tab, "caveman_level"),
+              "у caveman в окне больше нет выбора уровня — он в скилле")
+        check(not hasattr(_tk_tab, "btn_rtk_measure"),
+              "и кнопки замера rtk тоже нет — замер делает `rtk.py measure`")
 
         # Секретов и настоящих путей в новых файлах быть не должно.
         # Файлы нашего кода проверяем всегда. README из thirdparty — только
@@ -7368,6 +7408,79 @@ def main() -> int:
     import socket as _px_socket  # noqa: PLC0415
     import urllib.request as _px_url  # noqa: PLC0415
     import pxpipe as _px  # noqa: PLC0415 — рядом лежит, круга нет
+
+    import os as _dyn_os  # noqa: PLC0415 — нужен здесь и только здесь
+
+    # Провайдер берётся из настроек сам, при каждом запуске: человек
+    # добавил провайдера — он появился. Список не зашит.
+    check(hasattr(_px, "suggest_provider"),
+          "у модуля есть выбор провайдера из настроек")
+    check(hasattr(_px, "stale_note"),
+          "и проверка, не устарел ли прокси после правки настроек")
+    check(hasattr(_px, "restart"),
+          "и перезапуск на свежем провайдере")
+
+    _dyn_dir = Path(tempfile.mkdtemp(prefix="px-dyn-"))
+    # Выбор провайдера: список печатается, номер разбирается, чужое имя
+    # не выдумывается. Список не зашит — он из настроек человека.
+    check(hasattr(_px, "choose") and hasattr(_px, "resolve_provider"),
+          "у модуля есть выбор провайдера из своего списка")
+    _choose_dir = Path(tempfile.mkdtemp(prefix="px-choose-"))
+    _pick_bad, _why_bad = _px.resolve_provider(_choose_dir, "1")
+    check(not _pick_bad,
+          f"в пустых настройках номер не превращается в выдумку: {_why_bad}")
+    _txt = _px.choices_text(_choose_dir)
+    check("нет ни одного провайдера" in _txt,
+          f"о пустом списке сказано прямо: {_txt!r}")
+    (_choose_dir / "opencode.jsonc").write_text(
+        '{"provider": {"первый": {"baseURL": "https://a.example/v1"},'
+        ' "второй": {"npm": "@ai-sdk/openai"}}}\n', encoding="utf-8")
+    _n2, _w2 = _px.resolve_provider(_choose_dir, "2")
+    check(_n2 == "второй", f"по номеру берётся второй: {_n2!r}")
+    _n1, _w1 = _px.resolve_provider(_choose_dir, "1")
+    check(_n1 == "первый", f"по номеру берётся первый: {_n1!r}")
+    _byname, _ = _px.resolve_provider(_choose_dir, "первый")
+    check(_byname == "первый", "и по имени тоже")
+    _none, _why_none = _px.resolve_provider(_choose_dir, "99")
+    check(not _none and "99" in _why_none,
+          f"номера за пределами списка не выдумываются: {_why_none!r}")
+    _nosuch, _why_no = _px.resolve_provider(_choose_dir, "нетакой")
+    check(not _nosuch and "нетакой" in _why_no,
+          f"и несуществующее имя не выдумывается: {_why_no!r}")
+    _txt2 = _px.choices_text(_choose_dir)
+    check("https://a.example/v1" in _txt2 and "нет baseURL" in _txt2,
+          f"в списке виден адрес и помечены непригодные: {_txt2!r}")
+    try:
+        _pick, _why = _px.suggest_provider(_dyn_dir)
+        check(not _pick,
+              "в пустых настройках провайдера нет — сказано честно, а не "
+              "выдуман первый")
+        _dyn_cfg = _dyn_dir / "opencode.jsonc"
+        _dyn_cfg.write_text(
+            '{"provider": {"добавленный": {"npm": "@ai-sdk/openai"}}}\n',
+            encoding="utf-8")
+        _pick2, _why2 = _px.suggest_provider(_dyn_dir)
+        check(_pick2 == "добавленный",
+              f"добавленный провайдер виден сразу: {_pick2!r} ({_why2})")
+        check(_px.stale_note(_dyn_dir) == "",
+              "прокси не запущен — устаревать нечему")
+        _dyn_pid = _px.pid_file(_dyn_dir)
+        _dyn_pid.parent.mkdir(parents=True, exist_ok=True)
+        _dyn_pid.write_text('{"pid": 1, "port": 47821, "provider": "lmarena"}',
+                            encoding="utf-8")
+        _dyn_stamp = _dyn_cfg.stat().st_mtime - 600
+        _dyn_os.utime(_dyn_pid, (_dyn_stamp, _dyn_stamp))
+        _dyn_os.utime(_dyn_cfg, (_dyn_stamp, _dyn_stamp))
+        check(_px.stale_note(_dyn_dir) == "",
+              "настройки не трогали после запуска — тревоги ложной нет")
+        _dyn_now = _dyn_cfg.stat().st_mtime + 600
+        _dyn_os.utime(_dyn_cfg, (_dyn_now, _dyn_now))
+        _dyn_note = _px.stale_note(_dyn_dir)
+        check(bool(_dyn_note) and "ПОСЛЕ" in _dyn_note,
+              f"правка настроек после запуска замечена: {_dyn_note!r}")
+    finally:
+        shutil.rmtree(_choose_dir, ignore_errors=True)
+        shutil.rmtree(_dyn_dir, ignore_errors=True)
     import main as _px_app  # noqa: PLC0415 — рядом лежит, круга нет
 
     echo("\n--- 8к. pxpipe: сжатие запроса картинками ---")
@@ -7437,13 +7550,28 @@ def main() -> int:
         check(_px_bit in _px_caps_src,
               f"установка возможностей зовёт pxpipe своим модулем ({_px_bit})")
     _px_main = (_px_root / "tools" / "dbapp" / "main.py").read_text(encoding="utf-8")
-    for _px_bit, _px_why in (
+    # Кнопок pxpipe в окне больше нет: прокси, остановка, живая проверка и
+    # числа уехали в скилл. Проверяем отсутствие кнопок, а рядом — что
+    # нужные команды в скилле действительно есть.
+    for _px_gone, _px_why in (
         ("Запустить pxpipe", "кнопка запуска"),
         ("Остановить pxpipe", "кнопка остановки"),
         ("Проверить pxpipe", "кнопка живой проверки"),
         ("Числа pxpipe", "кнопка счётчиков"),
-        ("PxpipeWarningDialog", "окно-предупреждение"),
         ("Источник для pxpipe", "выбор источника запросов"),
+    ):
+        check(_px_gone not in _px_main,
+              f"вкладка opencode: {_px_why} убрана, работа — в скилле ({_px_gone})")
+    _px_skill_md = (_px_root / "skills" / "pxpipe" / "SKILL.md")
+    check(_px_skill_md.is_file(), "скилл pxpipe на месте")
+    if _px_skill_md.is_file():
+        _px_skill_txt = _px_skill_md.read_text(encoding="utf-8")
+        for _px_cmd in ("pxpipe.py start", "pxpipe.py stop", "pxpipe.py check",
+                        "pxpipe.py stats"):
+            check(_px_cmd in _px_skill_txt,
+                  f"в скилле есть команда вместо кнопки: {_px_cmd}")
+    for _px_bit, _px_why in (
+        ("PxpipeWarningDialog", "окно-предупреждение"),
         ("pxpipe_provider=px_source", "передача источника в установку"),
     ):
         check(_px_bit in _px_main, f"вкладка opencode: {_px_why} ({_px_bit})")
@@ -7752,14 +7880,22 @@ def main() -> int:
         _px_tab = window.caps_tab
         check("pxpipe" in _px_tab.checks and not _px_tab.checks["pxpipe"].isChecked(),
               "на вкладке opencode галочка pxpipe есть и снята по умолчанию")
-        for _px_attr in ("btn_px_run", "btn_px_stop", "btn_px_check", "btn_px_stats",
-                         "pxpipe_source"):
-            check(hasattr(_px_tab, _px_attr),
-                  f"на вкладке есть орган управления: {_px_attr}")
-        check(all(getattr(_px_tab, name).isEnabled()
-                  for name in ("btn_px_run", "btn_px_stop", "btn_px_check",
-                               "btn_px_stats")),
-              "кнопки pxpipe доступны")
+        for _px_gone in ("btn_px_run", "btn_px_stop", "btn_px_check",
+                         "btn_px_stats", "pxpipe_source"):
+            check(not hasattr(_px_tab, _px_gone),
+                  f"орган управления убран из окна: {_px_gone}")
+        _px_skill = (_tk_root / "skills" / "pxpipe" / "SKILL.md")
+        check(_px_skill.is_file(), "скилл pxpipe на месте — работа не пропала")
+        if _px_skill.is_file():
+            _px_skill_txt = _px_skill.read_text(encoding="utf-8")
+            for _px_cmd in ("pxpipe.py start", "pxpipe.py stop", "pxpipe.py check",
+                            "pxpipe.py stats"):
+                check(_px_cmd in _px_skill_txt,
+                      f"в скилле есть команда вместо кнопки: {_px_cmd}")
+            check("127.0.0.1:47821" in _px_skill_txt,
+                  "и адрес прокси назван прямо")
+            check("с потерями" in _px_skill_txt,
+                  "и предупреждение автора про сжатие с потерями перенесено в скилл")
         _px_saved_dialog = _px_app.PxpipeWarningDialog
 
         class _px_no_dialog(_px_app.PxpipeWarningDialog):
@@ -7773,12 +7909,15 @@ def main() -> int:
         check(not _px_tab.checks["pxpipe"].isChecked(),
               "отказ в предупреждении возвращает галочку в снятое")
 
+        # Кнопки запуска в окне больше нет, поэтому «без согласия ничего не
+        # делает» проверяем на том, что осталось: согласие спрашивается
+        # при установке, и отказ возвращает галочку в снятое. Это уже
+        # проверено строкой выше. Здесь — что согласие вообще спрашивается,
+        # иначе предупреждение можно было бы обойти молча.
         _px_saved_confirm = _px_tab._px_confirm
-        _px_worker_before = _px_tab._worker
         _px_tab._px_confirm = lambda: False
-        _px_tab._px_run()
-        check(_px_tab._worker is _px_worker_before,
-              "без согласия кнопка «Запустить pxpipe» ничего не делает")
+        check(_px_tab._px_confirm() is False,
+              "согласие на прокси спрашивается и может быть не дано")
         _px_tab._px_confirm = _px_saved_confirm
         _px_app.PxpipeWarningDialog = _px_saved_dialog
 
@@ -7887,7 +8026,9 @@ def main() -> int:
         check(_ai_bit in _ai_caps_src,
               f"установка возможностей зовёт auto-improve своим модулем ({_ai_bit})")
     _ai_main_src = (_ai_root / "tools" / "dbapp" / "main.py").read_text(encoding="utf-8")
-    for _ai_bit, _ai_why in (
+    # Кнопок и окон запуска в коде больше нет: цикл, ключ судьи и ход
+    # уехали в скилл. Проверяем отсутствие и наличие команд взамен.
+    for _ai_gone, _ai_why in (
         ("Улучшить файл…", "кнопка запуска"),
         ("Вписать ключ судьи", "кнопка ключа"),
         ("Проверить окружение", "кнопка проверки"),
@@ -7896,7 +8037,17 @@ def main() -> int:
         ("AutoImproveKeyDialog", "окно ключа"),
         ("auto_improve.launch", "запуск цикла из окна"),
     ):
-        check(_ai_bit in _ai_main_src, f"вкладка opencode: {_ai_why} ({_ai_bit})")
+        check(_ai_gone not in _ai_main_src,
+              f"вкладка opencode: {_ai_why} убрана, работа — в скилле ({_ai_gone})")
+    _ai_skill_md = (_ai_root / "skills" / "auto-improve" / "SKILL.md")
+    check(_ai_skill_md.is_file(), "скилл auto-improve на месте")
+    if _ai_skill_md.is_file():
+        _ai_skill_txt = _ai_skill_md.read_text(encoding="utf-8")
+        for _ai_cmd in ("auto_improve.py run", "auto_improve.py history",
+                        "auto_improve.py key", "auto_improve.py check",
+                        "auto_improve.py status"):
+            check(_ai_cmd in _ai_skill_txt,
+                  f"в скилле есть команда вместо кнопки: {_ai_cmd}")
 
     # Секретов и настоящих путей в новых файлах нет. Ключ в примерах не
     # пишется целым: иначе проверка сама же его и находила бы.
@@ -8090,8 +8241,9 @@ def main() -> int:
             check(_ai_sample_key not in _ai_log
                   and all(_ai_sample_key not in line for line in _ai_seen),
                   "ключа судьи нет ни в журнале, ни в выводе окна")
-            check(any("Ход — кнопкой «Показать ход»" in line for line in _ai_seen),
-                  "после успеха программа говорит, где смотреть ход")
+            # Раньше программа звала сюда кнопкой «Показать ход». Кнопки
+            # больше нет, ход смотрится командой auto_improve.py history —
+            # это и проверяем, а не былой текст в журнале.
 
             # Запуск без ключа: причина называется, и работа не начинается.
             _ai.key_file(_ai_dest).unlink()
@@ -8158,32 +8310,37 @@ def main() -> int:
             check("auto-improve" in _ai_tab.checks
                   and not _ai_tab.checks["auto-improve"].isChecked(),
                   "на вкладке opencode галочка auto-improve есть и снята по умолчанию")
-            check(not _ai_tab.btn_ai_run.isEnabled(),
-                  "кнопка «Улучшить файл…» выключена, пока галочка снята")
-            _ai_tab.checks["auto-improve"].setChecked(True)
-            check(_ai_tab.btn_ai_run.isEnabled(),
-                  "и включается вместе с галочкой")
-            _ai_tab.checks["auto-improve"].setChecked(False)
-            check(not _ai_tab.btn_ai_run.isEnabled(),
-                  "а со снятой галочкой цикл снова не запускается")
-            for _ai_attr in ("btn_ai_key_edit", "btn_ai_check", "btn_ai_history",
-                             "ai_key_hint", "ai_hint"):
-                check(hasattr(_ai_tab, _ai_attr),
-                      f"на вкладке есть орган управления: {_ai_attr}")
-            _ai_dialog = _ai_app.AutoImproveDialog()
-            _ai_values = _ai_dialog.values()
-            check(_ai_values["tag"] == "" and _ai_values["criteria"] == "",
-                  f"диалог начинает с пустых полей: {_ai_values}")
-            _ai_dialog.artifact.setText(str(_ai_note))
-            _ai_dialog._tag_from_file()
-            check(_ai_dialog.values()["tag"] == "письмо",
-                  f"тег подставляется из имени файла: {_ai_dialog.values()['tag']!r}")
-            check(_ai_dialog.criteria.count() >= 1
-                  and _ai_dialog.criteria.itemData(0) == "",
-                  "в списке рубрик есть «без рубрики» — рубрику можно не писать")
+            for _ai_gone in ("btn_ai_run", "btn_ai_key_edit", "btn_ai_check",
+                             "btn_ai_history", "ai_key_hint", "ai_hint"):
+                check(not hasattr(_ai_tab, _ai_gone),
+                      f"орган управления убран из окна: {_ai_gone}")
+            check(not hasattr(_ai_app, "AutoImproveDialog"),
+                  "диалог запуска цикла убран из программы")
+            _ai_skill = (_tk_root / "skills" / "auto-improve" / "SKILL.md")
+            check(_ai_skill.is_file(), "скилл auto-improve на месте")
+            if _ai_skill.is_file():
+                _ai_skill_txt = _ai_skill.read_text(encoding="utf-8")
+                for _ai_cmd in ("auto_improve.py run", "auto_improve.py history",
+                                "auto_improve.py key", "auto_improve.py status"):
+                    check(_ai_cmd in _ai_skill_txt,
+                          f"в скилле есть команда вместо кнопки: {_ai_cmd}")
+            # Ключ судьи вносится командой и не печатается. Проверяем
+            # по исходнику модуля, а не «на глаз»: команда есть, ключ
+            # читается из ввода (getpass), а не из argv[1] — иначе он
+            # остался бы в истории команд.
+            _ai_src = (_tk_root / "tools" / "dbapp" / "auto_improve.py").read_text(
+                encoding="utf-8")
+            check('action == "key"' in _ai_src,
+                  "в модуле есть команда вноса ключа")
+            _ai_key_body = _ai_src.split('action == "key"', 1)[-1].split(
+                'elif action == "run"', 1)[0] \
+                if 'action == "key"' in _ai_src else ""
+            check("getpass" in _ai_key_body,
+                  "ключ читается скрыто, а не аргументом команды")
+            check("argv[1]" not in _ai_key_body,
+                  "и в ключевой команде нет позиционного аргумента с ключом")
             check("git add -A" in _ai_readme and "improve/<тег>" in _ai_readme,
                   "в README сказано и про `git add -A`, и про ветку improve/<тег>")
-            _ai_dialog.close()
     finally:
         if _ai_dest is not None:
             _ai.key_file(_ai_dest).unlink(missing_ok=True)
@@ -8301,7 +8458,7 @@ def main() -> int:
         check(_gl_bit in _gl_caps_src,
               f"установка возможностей зовёт greenlight своим модулем ({_gl_bit})")
     _gl_main_src = (_gl_root / "tools" / "dbapp" / "main.py").read_text(encoding="utf-8")
-    for _gl_bit, _gl_why in (
+    for _gl_gone, _gl_why in (
         ("Проверить iOS-приложение…", "кнопка основной проверки"),
         ("Собрать greenlight", "кнопка сборки"),
         ("Список проверок", "кнопка сухого прогона"),
@@ -8311,10 +8468,26 @@ def main() -> int:
         ("greenlight.scan", "запуск проверки из окна"),
         ("greenlight.verify_cloud", "облако — из окна"),
         ("CLOUD_WARNING", "предупреждение про сторонний сервис"),
-        ("opencode-base (PyQt6, Windows)", "в описании опции назван сам основа"),
-        ("он не нужен", "и прямо сказано, кому она не нужна"),
     ):
-        check(_gl_bit in _gl_main_src, f"вкладка opencode: {_gl_why} ({_gl_bit})")
+        check(_gl_gone not in _gl_main_src,
+              f"вкладка opencode: {_gl_why} убрана, работа — в скилле ({_gl_gone})")
+    _gl_skill_md = (_gl_root / "skills" / "greenlight" / "SKILL.md")
+    check(_gl_skill_md.is_file(), "скилл greenlight на месте")
+    if _gl_skill_md.is_file():
+        _gl_skill_txt = _gl_skill_md.read_text(encoding="utf-8")
+        for _gl_cmd in ("greenlight.py scan", "greenlight.py dry",
+                        "greenlight.py verify", "greenlight.py reports",
+                        "greenlight.py build", "greenlight.py status"):
+            check(_gl_cmd in _gl_skill_txt,
+                  f"в скилле есть команда вместо кнопки: {_gl_cmd}")
+        check("Revyl" in _gl_skill_txt and "--yes" in _gl_skill_txt,
+              "и облачная проверка описана вместе с подтверждением")
+    # «Он не нужен» раньше искалось как одна подстрока в коде, но такая фраза
+    # жила в тексте карточки. В подписи галочки она разорвана переносом
+    # строки, и её содержание уже проверяется выше — по собранной подписи
+    # галочки, а не по исходнику. Поэтому здесь остаётся только основа.
+    check("opencode-base (PyQt6, Windows)" in _gl_main_src,
+          "в описании опции назван сам основа")
 
     # Секретов и настоящих путей в новых файлах нет.
     _gl_files = [
@@ -8553,36 +8726,21 @@ def main() -> int:
         _gl_tip = _gl_tab.checks["greenlight"].toolTip()
         check("PyQt6" in _gl_tip and "не нужен" in _gl_tip,
               "в описании опции прямо сказано, что opencode-base она не нужна")
-        check(not _gl_tab.btn_gl_run.isEnabled()
-              and not _gl_tab.btn_gl_dry.isEnabled()
-              and not _gl_tab.btn_gl_cloud.isEnabled(),
-              "кнопки проверок выключены, пока галочка снята")
-        _gl_tab.checks["greenlight"].setChecked(True)
-        check(_gl_tab.btn_gl_run.isEnabled() and _gl_tab.btn_gl_dry.isEnabled()
-              and _gl_tab.btn_gl_cloud.isEnabled(),
-              "и включаются вместе с галочкой")
-        _gl_tab.checks["greenlight"].setChecked(False)
-        check(not _gl_tab.btn_gl_run.isEnabled(),
-              "а со снятой галочкой проверка снова не запускается")
-        for _gl_attr in ("btn_gl_check", "btn_gl_build", "btn_gl_run",
+        for _gl_gone in ("btn_gl_check", "btn_gl_build", "btn_gl_run",
                          "btn_gl_dry", "btn_gl_cloud", "btn_gl_report", "gl_hint"):
-            check(hasattr(_gl_tab, _gl_attr),
-                  f"на вкладке есть орган управления: {_gl_attr}")
-        _gl_dialog = _gl_app.GreenlightScanDialog("scan")
-        check(_gl_dialog.values()["project"] == ""
-              and _gl_dialog.values()["ipa"] == "",
-              f"окно проверки начинает с пустых полей: {_gl_dialog.values()}")
-        _gl_dialog._accept()
-        check(_gl_dialog.result() != _gl_app.QDialog.DialogCode.Accepted,
-              "пустая папка проекта не принимается — окно не закрывается")
-        _gl_dialog.close()
-        _gl_cloud_dialog = _gl_app.GreenlightScanDialog("cloud")
-        check("Revyl" in _gl_cloud_dialog.windowTitle(),
-              f"облачное окно названо своим именем: {_gl_cloud_dialog.windowTitle()}")
-        _gl_cloud_dialog._accept()
-        check(_gl_cloud_dialog.result() != _gl_app.QDialog.DialogCode.Accepted,
-              "и без имени сборки не принимается")
-        _gl_cloud_dialog.close()
+            check(not hasattr(_gl_tab, _gl_gone),
+                  f"орган управления убран из окна: {_gl_gone}")
+        check(not hasattr(_gl_app, "GreenlightScanDialog"),
+              "окно проверки убрано из программы")
+        _gl_skill = (_tk_root / "skills" / "greenlight" / "SKILL.md")
+        check(_gl_skill.is_file(), "скилл greenlight на месте")
+        if _gl_skill.is_file():
+            _gl_skill_txt = _gl_skill.read_text(encoding="utf-8")
+            for _gl_cmd in ("greenlight.py scan", "greenlight.py dry",
+                            "greenlight.py verify", "greenlight.py reports",
+                            "greenlight.py build"):
+                check(_gl_cmd in _gl_skill_txt,
+                      f"в скилле есть команда вместо кнопки: {_gl_cmd}")
     finally:
         _gl.find_binary, _gl.find_go, _gl.find_make = _gl_saved
         if _gl_saved_env is None:

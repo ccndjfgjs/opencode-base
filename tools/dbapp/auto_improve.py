@@ -187,6 +187,44 @@ def log_file(dest: Path) -> Path:
     return data_dir(dest) / "auto-improve.log"
 
 
+#: Знаки, которых в настоящем ключе Gemini быть не может. Заглушки вида
+#: «???????-????-???-????????» из тестов попадали в файл ключа, и проверка
+#: готовности радостно отвечала «Готово к запуску». Найдено 15.10.2026.
+FAKE_KEY_MARKS = ("?", "*", "x", "X")
+
+
+def key_looks_fake(text: str) -> bool:
+    """Похоже ли содержимое файла на заглушку, а не на ключ.
+
+    Настоящий ключ — одна длинная строка без пробелов. Если внутри есть
+    пробелы или подозрительные знаки, перед нами не ключ. Сам ключ при этом
+    нигде не печатается: проверка работает только с его длиной и знаками.
+    """
+    if not text:
+        return False
+    if not text.isascii():
+        return True
+    if any(char.isspace() for char in text):
+        return True
+    if any(mark in text for mark in FAKE_KEY_MARKS):
+        return True
+    return len(text) < 20
+
+
+def fake_key_note(dest: Path) -> str:
+    """Есть ли файл ключа, но он заглушка. Пустая строка — всё в порядке."""
+    path = key_file(dest)
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        return ""
+    if not text or not key_looks_fake(text):
+        return ""
+    return (f"файл {KEY_NAME} есть, но в нём заглушка, а не ключ "
+            f"({len(text)} знаков) — впишите настоящий командой "
+            f"auto_improve.py key")
+
+
 def key_file(dest: Path) -> Path:
     """Файл ключа судьи рядом с настройками."""
     return Path(dest) / KEY_NAME
@@ -251,7 +289,7 @@ def read_key(dest: Path) -> tuple[str, str]:
         text = key_file(dest).read_text(encoding="utf-8").strip()
     except (OSError, UnicodeDecodeError):
         text = ""
-    if text:
+    if text and not key_looks_fake(text):
         return text, "файл"
     for name in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
         value = (os.environ.get(name) or "").strip()
@@ -320,7 +358,9 @@ def check(dest: Path) -> dict:
     if not git:
         missing.append("в PATH нет git — без него скрипт не делает ни ветки, ни коммитов")
     if not key_where:
-        missing.append("не вписан ключ судьи Gemini (кнопка «Вписать ключ судьи»)")
+        note = fake_key_note(dest)
+        missing.append(note or "не вписан ключ судьи Gemini "
+                               "(команда auto_improve.py key)")
     return {
         "script": script,
         "script_ok": script_ok,
@@ -378,6 +418,80 @@ def _write_manifest(dest: Path, data: dict) -> str:
         return f"Манифест не записался: {exc}"
 
 
+#: Проверкам ставить софт нельзя: та же переменная, что у rtk и greenlight.
+NO_INSTALL_ENV = "OPENCODE_NO_AUTO_INSTALL"
+#: Пакет git в каталоге winget. Установщик качает winget и сверяет сам.
+GIT_PACKET = "Git.Git"
+
+
+def _winget_install(packet: str, timeout: int = 1800) -> tuple[bool, str]:
+    """Ставит пакет через winget. Успех — не код, а наличие результата."""
+    command = ["winget", "install", "--id", packet, "--exact", "--silent",
+               "--accept-package-agreements", "--accept-source-agreements"]
+    try:
+        done = subprocess.run(
+            command, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=timeout,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"winget не отработал: {exc}"
+    lines = [line.strip() for line in (done.stdout or "").splitlines() if line.strip()]
+    return done.returncode == 0, " / ".join(lines[-2:])[:200]
+
+
+def ensure_tools(dest: Path, progress=None) -> tuple[list[str], list[str]]:
+    """Доставляет то, что можно доставить: git и requests.
+
+    Ключ сюда не входит: ключ не скачивается, его даёт человек — про это
+    отдельно говорит скилл. Проверкам ставить запрещено.
+    """
+    messages: list[str] = []
+    errors: list[str] = []
+
+    def say(text: str) -> None:
+        messages.append(text)
+        if progress:
+            progress(text)
+
+    if os.environ.get(NO_INSTALL_ENV, ""):
+        return messages, [f"доставка инструментов запрещена переменной "
+                          f"{NO_INSTALL_ENV}: её выставили проверки."]
+
+    if not find_git():
+        if shutil.which("winget"):
+            say(f"git не найден — ставлю сам через winget (пакет {GIT_PACKET}). "
+                "Установщик около 60 МБ, система может запросить разрешение.")
+            _fine, note = _winget_install(GIT_PACKET)
+        else:
+            note = "winget не найден"
+        if not find_git():
+            errors.append(
+                f"git поставить не удалось ({note}). Нужен git в PATH: "
+                f"winget install {GIT_PACKET}.")
+    else:
+        say("git найден.")
+
+    python = find_python()
+    ok, requests_note = requests_available(python)
+    if not ok:
+        say(f"requests не хватает — ставлю: {python} -m pip install requests")
+        try:
+            done = subprocess.run(
+                [python, "-m", "pip", "install", "requests"],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=1800,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            errors.append(f"requests поставить не удалось: {exc}")
+        else:
+            ok, requests_note = requests_available(python)
+            if not ok:
+                errors.append(f"requests не появился: {requests_note}")
+    if ok and not errors:
+        say(f"requests есть ({requests_note}).")
+    return messages, errors
+
+
 def install(dest: Path, progress=None) -> tuple[list[str], list[str]]:
     """Включает auto-improve: проверяет окружение и пишет отметку в манифест.
 
@@ -395,8 +509,12 @@ def install(dest: Path, progress=None) -> tuple[list[str], list[str]]:
             progress(text)
 
     dest = Path(dest)
+    # Сначала доставляем то, что можно доставить само: git и requests.
+    tool_messages, tool_errors = ensure_tools(dest, progress=say)
+    messages += tool_messages
     data = check(dest)
     if not data["ready"]:
+        errors += tool_errors
         for line in data["missing"]:
             errors.append(line)
         errors.append("В настройки opencode ничего не вписано.")
@@ -419,7 +537,7 @@ def install(dest: Path, progress=None) -> tuple[list[str], list[str]]:
         return messages, [bad]
     say("auto-improve включён: отметка в манифесте. Сам файл ключа и данные — рядом с настройками.")
     say(
-        "Запускай цикл кнопкой «Улучшить файл…»: только она открывает "
+        "Запускай цикл командой auto_improve.py run <файл>: она открывает "
         "репозиторий файла, а не настройки opencode."
     )
     return messages, errors
@@ -651,7 +769,7 @@ def launch(
         log.write(f"===== конец: код {code} =====\n")
 
     if code == 0:
-        say(f"Цикл завершён. Ход — кнопкой «Показать ход» (тег {tag}).")
+        say(f"Цикл завершён. Ход — командой auto_improve.py history {tag}.")
         return messages, errors
     errors.append(f"Цикл прервался, код {code}. Последние строки:")
     errors += [f"  {line}" for line in tail[-6:]]
@@ -711,11 +829,12 @@ def _say(text: str) -> None:
 
 
 def _main(argv: list[str]) -> int:
-    """Командная строка auto-improve: то же, что галочка и кнопки окна."""
+    """Командная строка auto-improve: то же, что делали галочка и кнопки."""
     action = (argv[0] if argv else "status").lower()
     dest = find_settings_dir()
     if action in ("-h", "--help", "help"):
-        _say("auto_improve.py status | check | install | remove | tags | history <тег>")
+        _say("auto_improve.py status | check | install | remove | key | tags "
+             "| history <тег> | run")
         _say("auto_improve.py run <файл> [тег] [рубрика] [цель]")
         _say("Переключатель — на вкладке opencode; здесь то же самое словами.")
         return 0
@@ -740,6 +859,31 @@ def _main(argv: list[str]) -> int:
             _say("Нужен тег: auto_improve.py history <тег>")
             return 2
         messages, errors = history(dest, argv[1])
+    elif action == "key":
+        # Ключ судьи. Берём из ввода, а не из аргумента: аргумент команды
+        # виден в истории команд и в журнале запуска, ключ туда попадать не
+        # должен.
+        #
+        # Два случая, и это выяснено живой проверкой, а не догадкой:
+        # на Windows getpass читает прямо с клавиатуры и ПРОПУСКАЕТ
+        # перенаправленный ввод. Поэтому, когда ввод перенаправлен
+        # (агент, конвейер, скрипт), читаем обычным read — иначе команда
+        # молча зависала бы навсегда. На экране ключ не печатается.
+        import sys as _sys  # noqa: PLC0415 — нужен только здесь
+        if _sys.stdin.isatty():
+            import getpass as _gp  # noqa: PLC0415 — только для живой клавиатуры
+            try:
+                _typed = _gp.getpass("Ключ судьи (не печатается): ")
+            except (EOFError, KeyboardInterrupt):
+                _say("Ключ не введён.")
+                return 2
+        else:
+            _typed = _sys.stdin.readline()
+            if not _typed.strip():
+                _say("Ключ не получен: ввод пуст. Перенаправь ключ на ввод "
+                     "команды или введи его с клавиатуры.")
+                return 2
+        messages, errors = save_key(dest, _typed.strip())
     elif action == "run":
         if len(argv) < 2:
             _say("Нужен файл: auto_improve.py run <файл> [тег] [рубрика] [цель]")
@@ -751,7 +895,8 @@ def _main(argv: list[str]) -> int:
         messages, errors = launch(dest, artifact, tag, criteria=criteria, goal=goal)
     else:
         _say(f"Не знаю такой команды: {action}")
-        _say("auto_improve.py status | check | install | remove | tags | history | run")
+        _say("auto_improve.py status | check | install | remove | key | tags "
+             "| history | run")
         return 2
     for line in messages:
         _say(line)
