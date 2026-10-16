@@ -77,6 +77,12 @@ CATEGORY_BY_ID = {
     "tiktok": "javascript",
     "spotify": "javascript",
     # На Python: uvx тянет сервер Unity и godot-ai.
+    # ghidra-mcp тоже Python: мост поднимается через uv из папки
+    # репозитория. Правило раздела — «по тому, чем он поднят», а не по
+    # тому, к какой программе подключается. Без этой строки сервер молча
+    # уезжал в раздел «Прочее», а панель врала о подключённом: полный
+    # прогон самопроверки поймал это 16.10.2026.
+    "ghidra-mcp": "python",
     "blender": "python",
     "android-emulator": "python",
     "ldplayer": "python",

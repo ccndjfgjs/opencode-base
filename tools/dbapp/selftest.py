@@ -142,11 +142,14 @@ def _free_port() -> int:
 #: если считать ожидание по самому реестру, проверка перестанет замечать
 #: пропавший сервер — ошибка станет невидимой ровно тогда, когда она опасна.
 #: Значение одно на каждую конфигурацию: мост плеера добавляет свой сервер.
+#: База 23 → 24 16.10.2026: в реестр добавлен ghidra-mcp (мост к Гидре).
+#: Это не «мост игрока» на время проверки, а постоянная запись реестра,
+#: поэтому смещается именно база, а число с игроком идёт следом.
 #: Сколько серверов умеет настроить кнопка «Настроить автоматически».
 #: Константа с именем, потому что голое число в проверке не читается.
 AUTO_SERVERS_EXPECTED = 18
-EXPECTED_SERVERS_NO_PLAYER = 23
-EXPECTED_SERVERS_WITH_PLAYER = 24
+EXPECTED_SERVERS_NO_PLAYER = 24
+EXPECTED_SERVERS_WITH_PLAYER = 25
 #: Режим проверки задаётся явно, а не вычисляется из наличия записи.
 EXPECTED_SERVERS = EXPECTED_SERVERS_NO_PLAYER
 
@@ -11167,7 +11170,7 @@ def main() -> int:
     check(len(_servers) == EXPECTED_SERVERS,
           f"реестр читается, ожидалось {EXPECTED_SERVERS} серверов: {len(_servers)}")
     check(all(s.program_install is not None for s in _servers),
-          "у всех 22 серверов есть блок program_install")
+          f"у всех {len(_servers)} серверов есть блок program_install")
     _by_id = {s.id: s.program_install for s in _servers}
     if all(_by_id.values()):
         check(_by_id["blender"].winget_id == "BlenderFoundation.Blender"
