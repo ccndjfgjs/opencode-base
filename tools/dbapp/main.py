@@ -1224,45 +1224,22 @@ class ImportTab(ScrollPage):
         outer.addWidget(box_target)
 
         # --- шаг 3: какие навыки (скиллы) взять в работу
-        self.box_skills = QGroupBox("3. Какие навыки подключить")
-        skills_layout = QVBoxLayout(self.box_skills)
-        skills_layout.addWidget(
-            ui.label(
-                "Навык — это умение, которое ассистент подхватывает "
-                "автоматически. Отметьте нужные. Неотмеченные уберутся "
-                "из программы, но сохранятся в _previous-version — "
-                "выбор всегда можно переиграть.",
-                kind="dim",
-                wrap=True,
-            )
-        )
-        self.skills_list = QListWidget()
-        # Переносы, как и у списка навыков для opencode, вставляет
-        # core.skill_item_text, а не Qt: со сворачиванием длинного описания
-        # высота строки заранее неизвестна.
-        self.skills_list.setWordWrap(False)
-        self.skills_list.setUniformItemSizes(False)
-        self.skills_list.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        # Запас на случай пустого списка: fit_skills_height выставит свою
-        # высоту по фактическому числу навыков.
-        self.skills_list.setMinimumHeight(300)
-        self.skills_list.setMaximumHeight(600)
-        skills_layout.addWidget(self.skills_list)
-
-        row_skills = QHBoxLayout()
-        self.btn_skills_all = QPushButton("Отметить все")
-        self.btn_skills_all.clicked.connect(lambda: self._set_all_skills(True))
-        self.btn_skills_none = QPushButton("Снять все")
-        self.btn_skills_none.clicked.connect(lambda: self._set_all_skills(False))
-        row_skills.addWidget(self.btn_skills_all)
-        row_skills.addWidget(self.btn_skills_none)
-        row_skills.addStretch(1)
-        skills_layout.addLayout(row_skills)
-
+        # Навыки — не здесь. Список навыков один, и он на вкладке opencode
+        # (шаг «Навыки — какие поставить в opencode»): два одинаковых списка
+        # в двух местах — это дублирование, в котором легко запутаться.
+        # Подключение переносит все навыки базы, а отбор делается там.
+        self.box_skills_hint = QGroupBox("3. Навыки")
+        hint_layout = QVBoxLayout(self.box_skills_hint)
+        hint_layout.addWidget(ui.label(
+            "Навыки подключаются во вкладке opencode — там список с выбором, "
+            "как здесь выбираются остальные возможности. Подключение базы "
+            "переносит все её навыки целиком, а какие из них нужны, отмечается "
+            "на вкладке opencode.",
+            kind="dim", wrap=True,
+        ))
         self.skills_hint = ui.label("", kind="dim", wrap=True)
-        skills_layout.addWidget(self.skills_hint)
-        outer.addWidget(self.box_skills)
+        hint_layout.addWidget(self.skills_hint)
+        outer.addWidget(self.box_skills_hint)
 
         buttons = QHBoxLayout()
         self.btn_run = QPushButton("Подключить")
@@ -1294,9 +1271,6 @@ class ImportTab(ScrollPage):
         self.btn_forget_mine.clicked.connect(self._forget_mine)
         self._fill_mine()
 
-        # список навыков: отметки меняют подсказку и доступность кнопки
-        self.skills_list.itemChanged.connect(self._skills_changed)
-        self._fill_skills()
 
         # фиксируем настоящую высоту страницы, чтобы Qt её не сжимал
         outer.activate()
@@ -1597,128 +1571,12 @@ class ImportTab(ScrollPage):
             f"Размер: {core.human_size(int(info['size']))}.{created}{main_note}\n"
             f"Файлы: {files}"
         )
-        # сменилась база — перечитываем её навыки в шаге 3
-        if hasattr(self, "skills_list"):
-            self._fill_skills()
         self._refresh_run()
 
     def _подсказка_где_база(self, folder: Path) -> str:
         return подсказка_где_база(folder)
 
     # ---- шаг 3: навыки
-
-    def _fill_skills(self) -> None:
-        """Наполняет список навыками из выбранной базы.
-
-        Все отмечены по умолчанию: обычный случай — перенести весь набор.
-        Снимать нужно только то, что не нужно.
-
-        Выбор помнится, но только внутри одной базы: при смене базы
-        набор навыков другой, и переносить прежние галочки было бы
-        неверно. Поэтому запоминаем не «галочки», а путь базы, для
-        которой они поставлены.
-        """
-        from PyQt6.QtGui import QColor
-
-        raw = self.source_edit.text().strip()
-        folder = Path(raw) if raw else None
-
-        # Для новой базы — всё отмечено заново; для той же самой
-        # сохраняем то, что пользователь уже расставил.
-        same_base = (
-            getattr(self, "_skills_base", None) is not None
-            and folder is not None
-            and str(folder) == self._skills_base
-        )
-        chosen_before = set(self._chosen_skills()) if same_base else None
-
-        self.skills_list.blockSignals(True)
-        self.skills_list.clear()
-        self._skills_data = []
-        self._skills_base = str(folder) if folder else None
-
-        entries = core.list_skills(folder) if folder and folder.is_dir() else []
-
-        for skill in entries:
-            title = skill["title"]
-            desc = skill["description"]
-            text = core.skill_item_text(skill)
-            row = QListWidgetItem(text)
-            row.setData(1000, skill["name"])
-            row.setToolTip(desc or title)
-            row.setFlags(row.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            # тот же набор, что был, — возвращаем прежние отметки;
-            # новая база — отмечаем всё
-            keep = True if chosen_before is None else (skill["name"] in chosen_before)
-            row.setCheckState(
-                Qt.CheckState.Checked if keep else Qt.CheckState.Unchecked
-            )
-            if not desc:
-                row.setForeground(QColor(ui.TEXT_DIM))
-            self.skills_list.addItem(row)
-            self._skills_data.append(skill)
-
-        self.skills_list.blockSignals(False)
-        self._skills_changed()
-        fit_skills_height(self.skills_list)
-
-    def _chosen_skills(self) -> list[str]:
-        names: list[str] = []
-        if not hasattr(self, "skills_list"):
-            return names
-        for index in range(self.skills_list.count()):
-            row = self.skills_list.item(index)
-            if row.checkState() == Qt.CheckState.Checked:
-                names.append(str(row.data(1000)))
-        return names
-
-    def _set_all_skills(self, on: bool) -> None:
-        state = Qt.CheckState.Checked if on else Qt.CheckState.Unchecked
-        self.skills_list.blockSignals(True)
-        for index in range(self.skills_list.count()):
-            self.skills_list.item(index).setCheckState(state)
-        self.skills_list.blockSignals(False)
-        self._skills_changed()
-
-    def _skills_changed(self) -> None:
-        """Обновляет подсказку под списком навыков и доступность кнопки."""
-        total = self.skills_list.count()
-        chosen = len(self._chosen_skills())
-
-        if total == 0:
-            raw = self.source_edit.text().strip()
-            folder = Path(raw) if raw else None
-            if not raw:
-                self.skills_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
-                self.skills_hint.setText(
-                    "Сначала выберите базу в шаге 1 — здесь появятся "
-                    "её навыки."
-                )
-            elif folder and (folder / "skills").is_dir():
-                self.skills_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
-                self.skills_hint.setText(
-                    "В этой базе навыков нет — наполните папку skills, "
-                    "и они появятся здесь."
-                )
-            else:
-                self.skills_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
-                self.skills_hint.setText("Навыков не найдено.")
-        elif chosen == total:
-            self.skills_hint.setStyleSheet(f"color: {ui.OK};")
-            self.skills_hint.setText(f"Отмечены все {total} — перенесутся все.")
-        elif chosen == 0:
-            self.skills_hint.setStyleSheet(f"color: {ui.WARN};")
-            self.skills_hint.setText(
-                f"Не отмечено ни одного из {total}. Ничего не перенесётся, "
-                "а прежние навыки уйдут в _previous-version."
-            )
-        else:
-            self.skills_hint.setStyleSheet(f"color: {ui.OK};")
-            self.skills_hint.setText(
-                f"Отмечено {chosen} из {total}. Остальные уберутся "
-                "из программы."
-            )
-        self._refresh_run()
 
     def _target_changed(self) -> None:
         item = self.target_list.currentItem()
@@ -1742,6 +1600,7 @@ class ImportTab(ScrollPage):
         text = f"Куда: {program.config_dir()}. {program.ability_note()}"
         if program.supports_skills:
             self.target_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
+            text += " Навыки перенесутся все, отбор — на вкладке opencode."
         else:
             self.target_hint.setStyleSheet(f"color: {ui.WARN};")
             text += " Навыки не переносятся: программа их не читает."
@@ -1786,24 +1645,10 @@ class ImportTab(ScrollPage):
         if program is None or not base.is_dir():
             return
 
-        chosen = self._chosen_skills()
-
-        # Если навыков нет вовсе, а в базе они есть — предупреждаем,
-        # что подключение уберёт прежние. Спрашиваем один раз.
-        if program.supports_skills and self.skills_list.count() and not chosen:
-            answer = QMessageBox.question(
-                self,
-                "Ни одного навыка",
-                "Не отмечен ни один навык.\n\n"
-                "Ничего не перенесётся, а прежние навыки уйдут "
-                "в _previous-version (восстановить можно).\n\n"
-                "Продолжить подключение?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if answer != QMessageBox.StandardButton.Yes:
-                return
-
+        # Навыки при подключении переносятся все, что есть в базе: отбор
+        # делается на вкладке opencode, где список один. Раньше здесь был
+        # второй такой же список — два одинаковых места путали.
+        chosen: list[str] | None = None
         self.log.clear_log()
         self.btn_run.setEnabled(False)
 
@@ -3614,11 +3459,94 @@ class CapsTab(ScrollPage):
         )
 
         # --- шаг 1: что поставить
+        self.checks: dict[str, QCheckBox] = {}
+        # Кто из возможностей — агенты: у них отдельный блок со списком
+        # ниже. Определяем до блока и до цикла: и то, и другое их читает.
+        agent_names = [n for n, _t in opencode_caps.CAPS_CHOICES
+                       if n.startswith(opencode_caps.AGENT_PREFIX)]
+        # Агенты — тот же список, что навыки ниже: QListWidget с
+        # отмечаемыми строками «имя — короткое описание», кнопки «Отметить
+        # все» и «Снять все», подсказка со счётом. Раньше здесь стояли
+        # тринадцать отдельных галочек: список выглядел и работал не как
+        # навыки, и блок уезжал за край окна. Найдено 15.10.2026 глазами на
+        # живом экране.
+        box_agents = QGroupBox("1. Агенты — какие поставить в opencode")
+        agents_layout = QVBoxLayout(box_agents)
+        agents_layout.addWidget(ui.label(
+            "Агент — отдельная «голова» со своей ролью, вызывается как @имя. "
+            "Отметьте нужных: отмеченные скопируются в папку agents рядом с "
+            "настройками, неотмеченные — нет. Сняли отметку у того, кто уже "
+            "стоит: файл уберётся, если его не правили руками.",
+            kind="dim", wrap=True,
+        ))
+        self.caps_agents_list = QListWidget()
+        # Настройки — как у списка навыков: перенос строки делает core,
+        # а не Qt, поэтому высота строки известна заранее.
+        self.caps_agents_list.setWordWrap(False)
+        self.caps_agents_list.setUniformItemSizes(False)
+        self.caps_agents_list.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Высота ограничена: тринадцать строк по две строки каждая — это
+        # около 570 пикселей, и такой блок не помещался в окно целиком,
+        # верх вкладки уезжал вниз. Список прокручивается внутри себя,
+        # как список навыков.
+        self.caps_agents_list.setMinimumHeight(170)
+        self.caps_agents_list.setMaximumHeight(230)
+        agents_layout.addWidget(self.caps_agents_list)
+        for cap_name, cap_title in opencode_caps.CAPS_CHOICES:
+            if not cap_name.startswith(opencode_caps.AGENT_PREFIX):
+                continue
+            short = cap_title.split(" — ", 1)
+            title = short[0]
+            desc = short[1] if len(short) > 1 else ""
+            row = QListWidgetItem(core.skill_item_text(
+                {"title": title, "description": desc}, width=88))
+            row.setData(1000, cap_name)
+            row.setToolTip(f"{title} (@{title})\n\n{desc}\n\n"
+                           "Файл агента: tools/agents/… По снятию отметки "
+                           "файл убирается, если его не правили руками.")
+            row.setFlags(row.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            row.setCheckState(Qt.CheckState.Checked)
+            self.caps_agents_list.addItem(row)
+
+        row_ag = QHBoxLayout()
+        btn_ag_all = QPushButton("Отметить все")
+        btn_ag_all.clicked.connect(lambda: self._set_all_caps_agents(True))
+        btn_ag_none = QPushButton("Снять все")
+        btn_ag_none.clicked.connect(lambda: self._set_all_caps_agents(False))
+        row_ag.addWidget(btn_ag_all)
+        row_ag.addWidget(btn_ag_none)
+        row_ag.addStretch(1)
+        btn_ag_put = QPushButton("Поставить отмеченных")
+        btn_ag_put.setToolTip(
+            "Ставит только агентов: копирует отмеченные файлы в папку agents "
+            "рядом с настройками opencode. Навыки и остальное не трогает"
+        )
+        btn_ag_put.clicked.connect(self._install)
+        btn_ag_drop = QPushButton("Убрать отмеченных")
+        btn_ag_drop.setToolTip(
+            "Убирает файлы отмеченных агентов. Те, что правили руками, "
+            "останутся — о них будет сказано в списке"
+        )
+        btn_ag_drop.clicked.connect(self._remove)
+        row_ag.addWidget(btn_ag_put)
+        row_ag.addWidget(btn_ag_drop)
+        agents_layout.addLayout(row_ag)
+        self.caps_agents_hint = ui.label("", kind="dim", wrap=True)
+        agents_layout.addWidget(self.caps_agents_hint)
+        self._caps_agents_changed()
+        outer.addWidget(box_agents)
+
         box_what = QGroupBox("1. Что поставить в opencode")
         what_layout = QVBoxLayout(box_what)
-        self.checks: dict[str, QCheckBox] = {}
         for name, _title in opencode_caps.CAPS_CHOICES:
-            box = QCheckBox(self.TITLES.get(name, name))
+            # Агенты живут в своём списке рядом, как навыки: в общем списке
+            # галочек их нет.
+            if name in agent_names:
+                continue
+            # Подпись б��рётся из TITLES, а если её там нет — из списка
+            # возможностей, так что служебных имён не остаётся.
+            box = QCheckBox(self._cap_title(name))
             # rtk и caveman по умолчанию выключены: у rtk нужен бинарник в
             # PATH, caveman меняет стиль ответов. Молча включать такое нельзя.
             box.setChecked(name not in opencode_caps.CAPS_OFF_BY_DEFAULT)
@@ -3684,6 +3612,7 @@ class CapsTab(ScrollPage):
                 box.toggled.connect(self._qw_toggled)
             what_layout.addWidget(box)
             self.checks[name] = box
+
         # --- qwen-review: второй ревьюер. Настройка выбором провайдера и
         # развёртывание отдана скиллу qwen-review-setup; в окне остались
         # статус, проверка доступности и запуск проверки изменений.
@@ -3812,14 +3741,6 @@ class CapsTab(ScrollPage):
         qw_layout.addLayout(row_qw_debate)
         qw_layout.addLayout(row_qw_debate2)
         what_layout.addWidget(box_qw)
-        try:
-            nagents = len(list((core.app_root() / "tools" / "agents").glob("*.md")))
-            if nagents:
-                self.checks["agents"].setText(
-                    f"{nagents} агентов — поиск, план, код, проверка и другие"
-                )
-        except OSError:
-            pass
         outer.addWidget(box_what)
 
         # --- шаг 2: куда
@@ -5561,6 +5482,7 @@ class CapsTab(ScrollPage):
         # и они подставляются всегда. Иначе можно было бы снять память,
         # не понимая, что происходит.
         picked = {name for name, box in self.checks.items() if box.isChecked()}
+        picked |= set(self._chosen_caps_agents())
         return picked | set(opencode_caps.CAPS_ALWAYS)
 
     def _pselection(self) -> set[str]:
@@ -5870,7 +5792,11 @@ class CapsTab(ScrollPage):
             self.state_hint.setStyleSheet(f"color: {ui.ERROR};")
             self.state_hint.setText(f"Не прочиталось: {exc}")
             return
-        inside = [self.TITLES[n] for n in status if status[n]]
+        # Подпись берём по цепочке: TITLES → список возможностей → само имя.
+        # Раньше здесь стояло TITLES[n] прямой подстановкой, и новая
+        # возможность, которой в TITLES нет, роняла окно: исключение из слота
+        # PyQt проглатывает и закрывает программу. Найдено 15.10.2026.
+        inside = [self._cap_title(n) for n in status if status[n]]
         inside += [title for name, (title, _k, _b) in opencode_caps.PROVIDER_PRESETS.items()
                    if pstatus.get(name)]
         if inside:
@@ -5985,6 +5911,52 @@ class CapsTab(ScrollPage):
         self.state_hint.setText(self.state_hint.text() + "\n" + "\n".join(notes))
 
     # ---- выбор папки
+
+    def _cap_title(self, name: str) -> str:
+        """Подпись возможности: TITLES, иначе список, иначе само имя.
+
+        Агенты приходят с именами вида `agent:имя`, их в TITLES нет — значит,
+        подпись берётся из списка возможностей, где она уже собрана из
+        реестра агентов.
+        """
+        title = self.TITLES.get(name)
+        if title:
+            return title
+        for cap_name, cap_title in opencode_caps.CAPS_CHOICES:
+            if cap_name == name:
+                return cap_title
+        return name
+
+    def _chosen_caps_agents(self) -> list[str]:
+        """Отмеченные агенты в виде возможностей `agent:имя`."""
+        names: list[str] = []
+        for index in range(self.caps_agents_list.count()):
+            row = self.caps_agents_list.item(index)
+            if row.checkState() == Qt.CheckState.Checked:
+                names.append(str(row.data(1000)))
+        return names
+
+    def _set_all_caps_agents(self, on: bool) -> None:
+        """Отметить всех или снять всех — как у списка навыков."""
+        state = Qt.CheckState.Checked if on else Qt.CheckState.Unchecked
+        self.caps_agents_list.blockSignals(True)
+        for index in range(self.caps_agents_list.count()):
+            self.caps_agents_list.item(index).setCheckState(state)
+        self.caps_agents_list.blockSignals(False)
+        self._caps_agents_changed()
+
+    def _caps_agents_changed(self) -> None:
+        """Подпись под списком: сколько отмечено и что будет поставлено."""
+        total = self.caps_agents_list.count()
+        chosen = len(self._chosen_caps_agents())
+        if total == 0:
+            self.caps_agents_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
+            self.caps_agents_hint.setText("Агентов нет — нечего ставить.")
+            return
+        self.caps_agents_hint.setStyleSheet("")
+        self.caps_agents_hint.setText(
+            f"Отмечено {chosen} из {total}. Файлы кладутся в папку agents "
+            "рядом с настройками opencode.")
 
     def _pick_dest(self) -> None:
         start = self.dest_edit.text().strip() or str(Path.home())

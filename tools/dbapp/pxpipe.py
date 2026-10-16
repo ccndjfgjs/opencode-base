@@ -748,8 +748,11 @@ def ensure_proxy(dest: Path, provider: str = "",
         ]
 
     if os.environ.get(NO_INSTALL_ENV, ""):
-        return messages, [f"запуск прокси запрещён переменной {NO_INSTALL_ENV}: "
-                          "её выставили проверки."]
+        # Как и остальные отказы: «pxpipe не включён» и про то, что в настройки
+        # ничего не попало (эту строку дописывает install). Найдено 16.10.2026
+        # полным прогоном самопроверки.
+        return messages, [f"pxpipe не включён: запуск прокси запрещён "
+                          f"переменной {NO_INSTALL_ENV} — её выставили проверки."]
 
     name = (provider or "").strip() or suggest_provider(dest)[0]
     if not name:

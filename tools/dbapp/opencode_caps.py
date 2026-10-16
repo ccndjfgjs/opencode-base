@@ -32,11 +32,80 @@ BASE = HERE.parent.parent  # tools/dbapp -> tools -> база
 #: Мосты ncp/pc не управляются окном: они живут внутри базы и подключаются
 #: кнопкой «Подключить базу» (attach_base). Галочек у них нет и не должно
 #: быть — иначе можно случайно снять мост и остаться без памяти.
+#: Реестр агентов — такой же список, как skills-index.json, только для
+#: агентов. Читается из данных/agents-index.json; если файла нет, описание
+#: берётся из заголовка самого агента. Смысл: у человека есть список с
+#: описаниями, как у навыков, и он выбирает нужных, а не всех сразу.
+AGENTS_INDEX_REL = ("данные", "agents-index.json")
+AGENTS_DIR_REL = ("tools", "agents")
+#: Префикс возможности агента: одна галочка на агента, как у навыков.
+AGENT_PREFIX = "agent:"
+
+
+def _agent_files() -> list[Path]:
+    """Файлы агентов в конструкторе, по алфавиту."""
+    import core  # noqa: PLC0415 — рядом лежит, круга нет
+
+    try:
+        return sorted(core.program_root().joinpath(*AGENTS_DIR_REL).glob("*.md"))
+    except (OSError, AttributeError):
+        return []
+
+
+def _agent_description(path: Path) -> str:
+    """Описание агента из его заголовка — первые строки файла."""
+    try:
+        head = path.read_text(encoding="utf-8").split("---", 2)
+    except (OSError, UnicodeDecodeError):
+        return ""
+    for line in head[1].splitlines() if len(head) > 2 else []:
+        if line.strip().lower().startswith("description"):
+            return line.split(":", 1)[1].strip()
+    return ""
+
+
+def agents_registry() -> tuple[tuple[str, str], ...]:
+    """Агенты с описаниями: (имя, описание). Реестр — источник, файлы — дубль.
+
+    Порядок берётся из реестра, чтобы список в окне был стабильным; агент,
+    которого в реестре забыли, всё равно попадёт в конец — молча пропасть
+    не должна.
+    """
+    import core  # noqa: PLC0415 — рядом лежит, круга нет
+    import json  # noqa: PLC0415 — только здесь
+
+    described: dict[str, str] = {}
+    try:
+        raw = core.program_root().joinpath(*AGENTS_INDEX_REL).read_text(encoding="utf-8")
+        for item in json.loads(raw).get("agents", []):
+            name = str(item.get("name") or "").strip()
+            if name:
+                described[name] = str(item.get("description") or "").strip()
+    except (OSError, ValueError, KeyError, AttributeError):
+        described = {}
+
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for name in list(described) + [p.stem for p in _agent_files()]:
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append((name, described.get(name, "")))
+    return tuple(out)
+
+
+#: Возможности агентов: одна на агента, имя с префиксом. Считается один раз
+#: при загрузке модуля — список стабилен, окно и установка видят одно и то же.
+AGENT_CAPS = tuple(
+    (f"{AGENT_PREFIX}{name}", f"{name} — {desc}" if desc else name)
+    for name, desc in agents_registry()
+)
+
 CAPS = (
     ("voice", "Команда /голос"),
     ("pc", "Мост ПК"),
     ("ncp", "Мост NCP (авто)"),
-    ("agents", "13 агентов"),
+    *AGENT_CAPS,
     ("antiblock", "Обход блокировок"),
     ("rtk", "rtk — вывод команд короче"),
     ("caveman", "caveman — ответы короче"),
@@ -57,7 +126,7 @@ CAPS = (
 #: в реестр mcp-registry.json не попадает.
 CAPS_CHOICES = (
     ("voice", "Команда /голос"),
-    ("agents", "13 агентов"),
+    *AGENT_CAPS,
     ("antiblock", "Обход блокировок"),
     ("rtk", "rtk — вывод команд короче"),
     ("caveman", "caveman — ответы короче"),
@@ -928,6 +997,25 @@ def providers_status(dest: Path) -> dict[str, bool]:
 # ------------------------------------------------------------------ установка
 
 
+def _file_digest(path: Path) -> str:
+    """Хэш файла: им же помечаем, что ставили мы."""
+    import hashlib  # noqa: PLC0415 — только здесь
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _agents_were_placed(dest: Path, manifest: dict) -> bool:
+    """Ставили ли мы агентов этой базе.
+
+    Нужно, чтобы снятие отметки сработало и тогда, когда не отмечен ни один
+    агент: иначе «снять всех» ничего бы не убрало.
+    """
+    files = manifest.get("files")
+    return isinstance(files, dict) and any(
+        str(name).startswith("agents/") for name in files
+    )
+
+
 def install_caps(
     base: Path,
     dest: Path,
@@ -1019,19 +1107,47 @@ def install_caps(
             if place_file(target, body, manifest, say, errors, "Команда /голос"):
                 say("Команда /голос поставлена (папка command)")
 
-    # --- агенты
-    if "agents" in selection:
+    # --- агенты: ставим тех, кого человек отметил. Снятые не ставятся, а
+    # уже стоящие убираются — но только если их никто не правил руками.
+    # Найдено 15.10.2026: раньше была одна галочка «13 агентов» и копировались
+    # сразу все, выбрать было нельзя.
+    chosen_agents = {cap.split(AGENT_PREFIX, 1)[1] for cap in selection
+                     if cap.startswith(AGENT_PREFIX)}
+    if chosen_agents or _agents_were_placed(dest, manifest):
         agents_dir = dest / "agents"
-        agents_dir.mkdir(exist_ok=True)
-        put, skipped = 0, 0
-        for src in sorted((core.program_root() / "tools" / "agents").glob("*.md")):
+        agents_dir.mkdir(parents=True, exist_ok=True)
+        put = skipped = removed = kept = 0
+        for src in _agent_files():
             target = agents_dir / src.name
-            if place_file(target, src.read_text(encoding="utf-8"), manifest, say, errors,
-                           f"Агент {src.stem}", quiet=True):
-                put += 1
-            else:
-                skipped += 1
-        say(f"Агентов поставлено: {put}, пропущено (чужие): {skipped}")
+            if src.stem in chosen_agents:
+                if place_file(target, src.read_text(encoding="utf-8"), manifest, say,
+                              errors, f"Агент {src.stem}", quiet=True):
+                    put += 1
+                else:
+                    skipped += 1
+            elif target.is_file():
+                # Отметку сняли. Свою копию убираем, чужую не трогаем:
+                # правил человек руками — значит, это его файл.
+                files_map = manifest.get("files")
+                shipped = files_map.get(f"agents/{src.name}") \
+                    if isinstance(files_map, dict) else None
+                if shipped and _file_digest(target) != shipped:
+                    kept += 1
+                    say(f"Агент {src.stem} не убран: файл правили руками.")
+                else:
+                    try:
+                        target.unlink()
+                        removed += 1
+                    except OSError as exc:
+                        errors.append(f"Агент {src.stem} не убран: {exc}")
+        parts = [f"агентов поставлено: {put}"]
+        if skipped:
+            parts.append(f"пропущено (чужие): {skipped}")
+        if removed:
+            parts.append(f"снято отметкой: {removed}")
+        if kept:
+            parts.append(f"оставлено (правки руками): {kept}")
+        say("; ".join(parts) + ".")
 
     write_manifest(dest, manifest)
 
@@ -1228,8 +1344,13 @@ def remove_caps(
     paths: list[Path] = []
     if "voice" in selection:
         paths.append(dest / "command" / "voice.md")
+    agent_picks = {cap.split(AGENT_PREFIX, 1)[1] for cap in selection
+                   if cap.startswith(AGENT_PREFIX)}
     if "agents" in selection:
-        paths += [dest / "agents" / src.name for src in (core.program_root() / "tools" / "agents").glob("*.md")] if (core.program_root() / "tools" / "agents").is_dir() else []
+        # Старое имя возможности («одна галочка на всех») — значит убрать всех.
+        # Пустой выбор здесь НЕ значит «всех»: пустой выбор — это ничего.
+        agent_picks = {src.stem for src in _agent_files()}
+    paths += [dest / "agents" / f"{name}.md" for name in sorted(agent_picks)] if (core.program_root() / "tools" / "agents").is_dir() else []
     for target in paths:
         record = manifest.get("files", {}).get(str(target))
         if not target.is_file():
@@ -1326,9 +1447,10 @@ def caps_status(dest: Path) -> dict[str, bool]:
         pass
     if (dest / "command" / "voice.md").is_file():
         status["voice"] = True
-    agents = list((dest / "agents").glob("*.md")) if (dest / "agents").is_dir() else []
-    if agents:
-        status["agents"] = True
+    # Агенты — по одному на каждого: галочка снята, значит агента в базе нет.
+    # Пустая папка agents — это тоже «ничего не стоит», а не «все стоят».
+    for cap, _title in AGENT_CAPS:
+        status[cap] = (dest / "agents" / f"{cap.split(AGENT_PREFIX, 1)[1]}.md").is_file()
     try:
         antiblock_path = core.program_root() / "tools" / "antiblock"
         if str(antiblock_path) not in sys.path:

@@ -2592,26 +2592,32 @@ def main() -> int:
                   and len(folded[0]["description"]) > 100,
                   "многострочное описание собрано в одну строку")
 
-        # окно: список навыков заполнен и все отмечены при первом показе
-        check(itab.skills_list.count() == len(found),
-              f"в окне навыков: {itab.skills_list.count()} из {len(found)}")
-        check(len(itab._chosen_skills()) == len(found),
-              "при первом показе отмечены все навыки")
-
-        # снять все — подсказка предупреждает, выбор пустой
-        itab._set_all_skills(False)
-        check(len(itab._chosen_skills()) == 0, "кнопка «Снять все» очистила выбор")
-        check("Не отмечено" in itab.skills_hint.text(),
-              "при пустом выборе показано предупреждение")
-        # кнопка подключения остаётся доступной — это допустимый выбор
+        # Список навыков один — на вкладке opencode. На вкладке «Подключить»
+        # второго такого же списка больше нет: два одинаковых места путали, и
+        # человек искал навыки в двух местах сразу. Найдено 15.10.2026.
+        check(not hasattr(itab, "skills_list"),
+              "на вкладке «Подключить» списка навыков больше нет")
+        check(not hasattr(itab, "_chosen_skills"),
+              "и выбора навыков там больше нет")
+        _hint_text = " ".join(
+            w.text() for w in itab.box_skills_hint.findChildren(type(itab.target_hint))
+        ).lower()
+        check("opencode" in _hint_text,
+              "навыки отправляют на вкладку opencode, а не молчат")
+        # Слово в подсказке — «переносит все её навыки». Проверяем смысл, а не
+        # написание: «перенос» — корень, который переживет переформулировку.
+        check("перенос" in _hint_text and "все" in _hint_text,
+              "сказано прямо: подключение переносит все навыки базы")
         check(itab.btn_run.isEnabled(),
-              "пустой выбор навыков не блокирует подключение")
+              "кнопка подключения доступна: выбора навыков тут больше нет")
 
-        # отметить все обратно
-        itab._set_all_skills(True)
-        check(len(itab._chosen_skills()) == len(found), "кнопка «Отметить все» вернула выбор")
-        check("все" in itab.skills_hint.text().lower(),
-              "при полном выборе сказано, что перенесутся все")
+        # Отбор остался на вкладке opencode: список навыков на месте и полон.
+        _ctab = window.caps_tab
+        check(_ctab.caps_skills_list.count() == len(found),
+              f"список навыков на вкладке opencode: "
+              f"{_ctab.caps_skills_list.count()} из {len(found)}")
+        check(len(_ctab._chosen_caps_skills()) == len(found),
+              "при первом показе отмечены все навыки")
 
         # подключение с выбором подмножества: остальные уходят в _previous-version
         echo("\n     подключение с выбором части навыков:")
@@ -3395,7 +3401,11 @@ def main() -> int:
         "}\n",
         encoding="utf-8",
     )
-    sel = {"voice", "pc", "ncp", "agents"}
+    # Агенты выбираются по одному (возможности вида agent:имя), а не одной
+    # галочкой на всех. Проверка от этого не меняет смысла: отмечаем всех и
+    # ждём те же тринадцать файлов.
+    _sel_agents = {cap for cap, _t in opencode_caps.AGENT_CAPS}
+    sel = {"voice", "pc", "ncp"} | _sel_agents
     base = core.app_root()
     messages, errors = opencode_caps.install_caps(base, fake, sel)
     check(not errors, f"установка возможностей без ошибок: {errors or 'чисто'}")
@@ -3868,7 +3878,11 @@ def main() -> int:
     # возможностей — голос, агенты, обход блокировок и новые rtk с caveman.
     # Число берётся из общего списка, чтобы следующая возможность не
     # ломала проверку ещё раз.
-    _caps_want = len(opencode_caps.CAPS_CHOICES)
+    # Галочки — только те возможности, что не агенты. Агенты живут в своём
+    # списке строк (см. проверку ниже), и в ctab.checks их нет: раньше тут была
+    # одна галочка «13 агентов», а потом тринадцать отдельных.
+    _caps_want = len([n for n, _t in opencode_caps.CAPS_CHOICES
+                      if not n.startswith(opencode_caps.AGENT_PREFIX)])
     check(len(ctab.checks) == _caps_want,
           f"галочек {_caps_want}: {sorted(ctab.checks)}")
     check("antiblock" in ctab.checks, "галочка обхода на месте")
@@ -3995,8 +4009,36 @@ def main() -> int:
         check(_create_sl.minimumHeight() == _want_c,
               f"и высота второго списка тоже по навыкам: {_want_c} px")
     nagents = len(list((core.program_root() / 'tools' / 'agents').glob('*.md')))
-    check(str(nagents) in ctab.checks['agents'].text(),
-          f"агентов названо честно: {ctab.checks['agents'].text()[:40]}")
+    # Агент — строка в списке, ровно как навык: с описанием, с галочкой и
+    # кнопками «Отметить все»/«Снять все». Раньше тут была одна галочка
+    # «13 агентов», потом тринадцать отдельных галочек — и то и другое
+    # выглядело не как навыки и уезжало за край окна. Найдено 15.10.2026 глазами
+    # на живом экране, полным прогоном — 16.10.2026.
+    _ag_rows = ctab.caps_agents_list
+    _ag_names = [str(_ag_rows.item(i).data(1000)) for i in range(_ag_rows.count())]
+    check(_ag_rows.count() == nagents,
+          f"агентов отдельными строками списка: {_ag_rows.count()} (файлов {nagents})")
+    check(len(set(_ag_names)) == len(_ag_names), "строки агентов не повторяются")
+    check(all(n.startswith(opencode_caps.AGENT_PREFIX) for n in _ag_names),
+          "у каждой строки агента служебное имя")
+    check(set(_ag_names) == {n for n, _t in opencode_caps.AGENT_CAPS},
+          "список в окне совпадает с реестром агентов")
+    check(len(ctab._chosen_caps_agents()) == nagents,
+          "при первом показе отмечены все агенты")
+    check("agents" not in ctab.checks,
+          "старой одной галочки «13 агентов» больше нет")
+    check(all(opencode_caps.AGENT_PREFIX not in _ag_rows.item(i).text()
+              for i in range(_ag_rows.count())),
+          "в тексте строк агентов нет служебного префикса")
+    # «Снять все» и «Отметить все» — как у списка навыков, и состояние после
+    # них возвращается к исходному, чтобы не ломать следующие проверки.
+    ctab._set_all_caps_agents(False)
+    check(not ctab._chosen_caps_agents(), "кнопка «Снять все» снимает всех")
+    check(f"Отмечено 0 из {nagents}" in ctab.caps_agents_hint.text(),
+          f"подсказка считает отмеченных: {ctab.caps_agents_hint.text()[:40]}")
+    ctab._set_all_caps_agents(True)
+    check(len(ctab._chosen_caps_agents()) == nagents,
+          "кнопка «Отметить все» возвращает всех")
 
     # Мост: выбор программы и кнопка оверлея.
     check(btab.radio_open.isChecked(), "по умолчанию мост для opencode")
