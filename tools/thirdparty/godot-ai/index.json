@@ -1,0 +1,23 @@
+{
+  "family": "godot-ai",
+  "name": "Godot AI",
+  "kind": "archive",
+  "server": "godot-ai==4.3.0",
+  "checked": "2026-10-17",
+  "note": "В релизе лежат ДВА zip, и они не взаимозаменяемы: godot-ai-v4-plugin.zip — канонический плагин для Godot 4, а godot-ai-plugin.zip — капсула для перехода с v3, её распаковывать нельзя. Asset Library у проекта протух: там v3.2.1 под Godot 4.5. Внутри архива пути уже с addons/godot_ai/, поэтому распаковка идёт в корень проекта. Глобальной папки аддонов у Godot нет, плагин живёт только в проекте.",
+  "builds": [
+    {
+      "since": "4.7",
+      "until": "*",
+      "version": "4.3.0",
+      "file": "godot-ai-v4-plugin.zip",
+      "url": "https://github.com/hi-godot/godot-ai/releases/download/v4.3.0/godot-ai-v4-plugin.zip",
+      "sha256": "dbc3d16e1aa7a5f3ae8038a150bf4191162112f4329c79611aa6f656e3ca4e58",
+      "size": 2296226,
+      "bundled": true,
+      "folder": "addons/godot_ai",
+      "strip": 0,
+      "dest": "."
+    }
+  ]
+}

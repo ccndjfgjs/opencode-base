@@ -2452,11 +2452,41 @@ class EngineSetupDialog(QDialog):
                 "журнал не попадёт.",
                 wrap=True,
             ))
+            box.addWidget(ui.label(
+                "Папка проекта нужна для аддона: программа сама распакует "
+                "godot-ai в корень проекта (встроенный файл, без интернета). "
+                "Включить аддон потом придётся вручную: Project → Project "
+                "Settings → Plugins → Godot AI.",
+                wrap=True,
+            ))
+            row_g = QHBoxLayout()
+            self.project.setPlaceholderText("папка проекта с файлом project.godot")
+            row_g.addWidget(self.project, 1)
+            browse_g = QPushButton("Папка:")
+            browse_g.clicked.connect(self._browse_project)
+            row_g.addWidget(browse_g)
+            box.addLayout(row_g)
             self.command.setPlaceholderText(
                 '{ "command": ["uvx", "godot-ai", "attach"] }'
             )
             self.command.setMinimumHeight(120)
             box.addWidget(self.command)
+        elif server_id == "unity":
+            box.addWidget(ui.label(
+                "Папка проекта нужна для пакета MCP for Unity: программа "
+                "впишет его в Packages/manifest.json (с копией файла и "
+                "откатом), а скачает и применит редактор при открытии "
+                "проекта. Редактор при этом должен быть закрыт: открытый "
+                "перезапишет файл при выходе.",
+                wrap=True,
+            ))
+            row_u = QHBoxLayout()
+            self.project.setPlaceholderText("папка проекта с папкой Assets")
+            row_u.addWidget(self.project, 1)
+            browse_u = QPushButton("Папка:")
+            browse_u.clicked.connect(self._browse_project)
+            row_u.addWidget(browse_u)
+            box.addLayout(row_u)
         elif server_id == "tiktok":
             box.addWidget(ui.label(
                 "Access token и App ID из своего кабинета TikTok Business. "
@@ -4473,8 +4503,21 @@ class CapsTab(ScrollPage):
                 dest, dialog.project_path(), dialog.plugin_path()
             )
             mirror = engine_setup.UNREAL_NAME
+        elif server.id == "unity":
+            ok, note = engine_setup.save_project(
+                dest, engine_setup.UNITY_NAME, dialog.project_path()
+            )
         elif server.id == "godot":
+            # Папка проекта нужна аддону, команда attach — серверу. Обе
+            # части нужны, поэтому спрашиваются обе, а пишутся отдельно.
+            ok_project, note_project = engine_setup.save_project(
+                dest, engine_setup.GODOT_PROJECT_NAME, dialog.project_path()
+            )
             ok, note = engine_setup.save_godot(dest, dialog.command_text())
+            if ok and not ok_project:
+                ok, note = False, note_project
+            elif ok:
+                note = note + " " + note_project
             mirror = engine_setup.GODOT_NAME
         elif server.id == "tiktok":
             ok, note = engine_setup.save_tiktok(
@@ -4509,6 +4552,37 @@ class CapsTab(ScrollPage):
             if extra:
                 note = note + " " + extra
         self.log.add(note, "ok")
+        # Плагин ставится отдельно и в фоне: это распаковка архива и правка
+        # файлов чужой программы, а модальное окно на это время замерзает.
+        if server.id in editor_plugins.HANDLERS:
+            self._start_plugin_setup(server)
+
+    def _start_plugin_setup(self, server: mcp_registry.Server) -> None:
+        """Поставить плагин моста в фоне и сказать результат.
+
+        Отдельный поток нужен по двум причинам: распаковка архива и запись в
+        чужую папку занимают секунды, а модальное окно на это время не
+        отвечает. Второе — результат может быть отказом, и отказ должен
+        попасть в журнал текстом, а не уронить окно.
+        """
+        worker = Worker(
+            lambda progress: editor_plugins.auto_setup(server.id, progress=progress),
+            self,
+        )
+        worker.line.connect(lambda text, kind: self.log.add(text, kind))
+        worker.finished.connect(lambda w=worker: self._plugin_setup_done(w))
+        self._worker = worker
+        worker.start()
+
+    def _plugin_setup_done(self, worker) -> None:
+        """Что вышло после установки плагина. Правды больше, чем кажется."""
+        result = getattr(worker, "result", None)
+        if isinstance(result, tuple) and len(result) == 2:
+            ok, note = result
+            self.log.add(str(note), "ok" if ok else "warn")
+            return
+        self.log.add("Установка плагина закончилась, подробности в журнале.",
+                     "ok")
 
     def _reg_state_text(self, server: mcp_registry.Server) -> str:
         """Состояние для колонки. Короткое - иначе таблица разъезжается.
@@ -5382,6 +5456,10 @@ class CapsTab(ScrollPage):
                 return omniroute.auto_setup(dest, server, progress=progress)
             if server.id == "lmarena":
                 return lmarena.auto_setup(dest, server, progress=progress)
+            if server.id in editor_plugins.HANDLERS:
+                # Мост с плагином (Ghidra и подобные): окно настроек у него
+                # своего нет, ставить плагин умеет модуль редакторов.
+                return editor_plugins.auto_setup(server.id, progress=progress), []
             return bridges.auto_setup_emulator(dest, server, progress=progress)
 
         self._start(job, "registry")
@@ -6849,10 +6927,11 @@ class ProgramsTab(ScrollPage):
         поэтому человек должен знать до нажатия три вещи: что именно
         скачается, сколько это весит и куда попадёт. Все три — в вопросе.
         """
-        path = bridges.obs_installed()
-        if path is None:
+        fetcher = getattr(card, "plugin_fetch", None)
+        if fetcher is None:
             self._set_result(card.key,
-                             "OBS не установлена — докачивать некуда.")
+                             "программа не умеет ставить этот плагин — "
+                             "спроси разработчика или поставь руками по подсказке.")
             return
         if self._worker is not None and self._worker.isRunning():
             self._set_result(card.key, "Уже идёт работа — дождись её.")
@@ -6863,7 +6942,7 @@ class ProgramsTab(ScrollPage):
         self._set_busy(card.key, True)
         self._set_result(card.key, "Запускаю…")
         worker = Worker(
-            lambda progress: bridges.ensure_plugin(Path(path), progress=progress),
+            lambda progress: fetcher(progress=progress),
             self,
         )
         worker.line.connect(

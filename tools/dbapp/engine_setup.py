@@ -144,6 +144,41 @@ def save_tiktok(dest: Path, token: str, app_id: str) -> tuple[bool, str]:
     )
 
 
+UNITY_NAME = "mcp-unity-project.txt"
+GODOT_PROJECT_NAME = "mcp-godot-project.txt"
+
+
+def save_project(dest: Path, name: str, project: str) -> tuple[bool, str]:
+    """Записать папку проекта в свой файл рядом с настройками.
+
+    Общий шаг для трёх мостов: Unity, Unreal и Godot. Плагин у всех трёх
+    лежит внутри проекта, а не в программе, поэтому без папки проекта
+    ставить нечего — и файл этот пишет сама программа, а не человек в
+    блокноте. Путь проверяется по маркеру проекта: если это не папка
+    проекта, файл не пишется, иначе плагин осел бы не туда.
+    """
+    marker = {"mcp-unity-project.txt": "Assets",
+              "mcp-godot-project.txt": "project.godot",
+              }.get(name)
+    text = str(project or "").strip().strip('"')
+    if not text:
+        return False, "Папка проекта не указана."
+    path = Path(text)
+    if path.suffix.lower() in (".uproject", ".unity", ".godot"):
+        path = path.parent
+    if not path.is_dir():
+        return False, f"Папки нет: {path}"
+    if marker and not (path / marker).exists():
+        return False, (f"{path} не похожа на проект: нет файла или папки {marker}. "
+                       f"Укажи папку проекта, а не его родителя.")
+    target = Path(dest) / name
+    written = _write(target, text + "\n")
+    if written:
+        return False, written
+    return True, (f"Проект записан в {target.name}: {path}. По нему программа "
+                  f"потом найдёт плагин и поставит его сама.")
+
+
 def unity_ready() -> tuple[bool, str]:
     """uvx есть или нет. Пакет в редакторе отсюда не виден."""
     if not common.resolve_exe("uvx"):

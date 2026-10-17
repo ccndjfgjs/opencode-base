@@ -551,6 +551,31 @@ def _looks_like_bridge(folder: Path) -> bool:
                 and (folder / "python").is_dir())
 
 
+def _localapp_bin_dirs() -> list[Path]:
+    """Папки `*\\bin` прямо под %LOCALAPPDATA%, где программы держат uv.
+
+    Перечисление имён не годится: на этой машине uv лежит внутри папки
+    сторонней программы, на чужой — внутри другой, а имя той папки знать
+    не нужно. Смотрим все сразу и берём ту, где лежит настоящий uv.
+    """
+    root = os.environ.get("LOCALAPPDATA", "")
+    if not root:
+        return []
+    found: list[Path] = []
+    try:
+        for child in Path(root).iterdir():
+            bin_dir = child / "bin"
+            if not bin_dir.is_dir():
+                continue
+            for name in ("uv.exe", "uv", "uvx.exe", "uvx"):
+                if (bin_dir / name).is_file():
+                    found.append(bin_dir)
+                    break
+    except OSError:
+        return []
+    return found
+
+
 def resolve_placeholder(token: str) -> str:
     """Значение `{ИМЯ}` для команды запуска.
 
@@ -560,10 +585,15 @@ def resolve_placeholder(token: str) -> str:
     """
     name = token.strip("{}").strip()
     if name == "UV":
+        # Пути uv: он ставится и в PATH, и в свою папку, и внутри папок
+        # других программ, которые его приносят. Имя такой папки — личное
+        # обстоятельство человека, поэтому вместо перечисления имён
+        # просматривается %LOCALAPPDATA%: на чужом компьютере сработает
+        # любая из них, и ничего моего в коде не останется.
         return find_tool(["uv", "uv.exe"],
                          [Path.home() / ".local" / "bin",
-                          Path.home() / "AppData" / "Local" / "hermes" / "bin",
-                          Path.home() / ".cargo" / "bin"])
+                          Path.home() / ".cargo" / "bin",
+                          *_localapp_bin_dirs()])
     if name == "GHIDRA":
         folder = find_ghidra()
         return str(folder) if folder else ""

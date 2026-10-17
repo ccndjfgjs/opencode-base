@@ -11223,15 +11223,20 @@ def main() -> int:
         for _a in _p.alternatives:
             if isinstance(_a, dict) and _a.get("winget_id"):
                 _winget_ids.add(str(_a["winget_id"]))
-    # Шесть новых идентификаторов сверены живым `winget show` 14.10.2026:
-    # Epic Games Launcher 1.3.210.0, Godot 4.7.2, Roblox Studio 1.6.3.172,
-    # CapCut 9.4.0.4015, Spotify 1.3.4.258, Codex CLI 0.161.0.
+    # Шесть новых идентификаторов сверены живым `winget show` 14.10.2026,
+    # а пять идентификаторов Unity — живым `winget show` 17.10.2026:
+    # Unity Hub 3.22.3.65535 (издатель Unity Technologies Inc.), редакторы
+    # 6000.6.6f1, 2023.2.22f1, 2022.3.62f3 и 2021.3.45f2 (Unity Technologies
+    # ApS). Это строгий набор: лишний идентификатор в реестре и пропавший —
+    # оба провала, иначе проверка перестаёт что-то значить.
     _want_ids = {"Adobe.CreativeCloud", "BlueStack.BlueStacks",
                  "BlenderFoundation.Blender", "EpicGames.EpicGamesLauncher",
                  "GodotEngine.GodotEngine", "Google.AndroidStudio",
                  "OBSProject.OBSStudio", "OpenJS.NodeJS.LTS",
                  "Roblox.RobloxStudio", "ByteDance.CapCut",
-                 "Spotify.Spotify", "OpenAI.Codex"}
+                 "Spotify.Spotify", "OpenAI.Codex",
+                 "Unity.UnityHub", "Unity.Unity.6000", "Unity.Unity.2023",
+                 "Unity.Unity.2022", "Unity.Unity.2021"}
     check(_winget_ids == _want_ids,
           f"идентификаторы в реестре — те самые, включая варианты: {sorted(_winget_ids)}")
     # ---- 8м. Движок вкладки «Программы»
@@ -13202,6 +13207,188 @@ def main() -> int:
               f"{_tab.btn_apply.toolTip()[:40]}")
         _tab._worker = None
         _tab.refresh()
+
+    # ---- 8с. Плагины мостов: указатели, выбор по версии, кнопки ----
+    echo("\n--- 8с. Плагины мостов: указатели и кнопки докачки ---")
+    try:
+        import editor_plugins
+        import plugin_index as _pi
+    except ImportError:
+        editor_plugins = None
+        _pi = None
+        check(False, "модули editor_plugins и plugin_index импортируются")
+    if editor_plugins is not None and _pi is not None:
+        check(True, "модули editor_plugins и plugin_index импортируются")
+
+        # Указатель читается, и в каждой полосе есть чем плагин взять.
+        for family in ("unity-mcp", "enginewire", "godot-ai", "ghidra-mcp"):
+            _idx, _why = _pi.load(family)
+            check(isinstance(_idx, dict) and bool(_idx.get("builds")),
+                  f"указатель {family} читается и полон полос")
+            for _b in ((_idx or {}).get("builds") or []):
+                _have = bool(_b.get("url")) or str(_b.get("kind")) == "package"
+                check(_have, f"{family}: у полосы {str(_b.get('version'))} есть файл")
+            _server = str((_idx or {}).get("server") or "")
+            check(bool(_server), f"{family}: версия сервера закреплена в указателе")
+            check("latest" not in _server and "@beta" not in _server,
+                  f"{family}: версия сервера не плавающая ({_server})")
+
+        # Плавающая метка в Unity означала бы, что проект может сломаться в
+        # любой день из-за чужого изменения ветки.
+        _unity_plugin, _w = _pi.pick_for("unity-mcp", "6000.0.35f1")
+        check(_unity_plugin is not None and "#v10.3.0" in _unity_plugin.url,
+              "пакет Unity закреплён меткой релиза, а не веткой")
+
+        # Границы честные: ниже и выше полосы плагина нет.
+        for family, version, expected in (("enginewire", "4.27", False),
+                                          ("enginewire", "5.7", True),
+                                          ("enginewire", "5.9", False),
+                                          ("godot-ai", "4.6", False),
+                                          ("godot-ai", "4.7", True),
+                                          ("ghidra-mcp", "12.1.2", False),
+                                          ("ghidra-mcp", "12.1.4", True),
+                                          ("unity-mcp", "2020.3", False)):
+            _got, _why2 = _pi.pick_for(family, version)
+            check((_got is not None) == expected,
+                  f"{family} на {version}: {'плагин есть' if expected else 'плагина нет'}")
+
+        # У Ghidra официального хеша нет — и об этом сказано, а не выдумано.
+        _gh, _w3 = _pi.pick_for("ghidra-mcp", "12.1.4")
+        check(_gh is not None and _gh.sha256 == "",
+              "у расширения Ghidra честно нет официального хеша")
+
+        # Встроенные плагины: файл лежит в папке программы и проходит сверку.
+        # Без этой проверки «работает без интернета» было бы обещанием.
+        for family in ("enginewire", "godot-ai", "ghidra-mcp"):
+            _p, _w4 = _pi.pick_for(family, "0")
+            _p = _p or None
+            _idx2, _w5 = _pi.load(family)
+            _build = ((_idx2 or {}).get("builds") or [{}])[0]
+            check(bool(_build.get("bundled")),
+                  f"{family}: в указателе сказано, что файл встроенный")
+            _local = _pi.bundled_path(
+                pi_plugin := _pi.Plugin(family=family,
+                                        file=str(_build.get("file") or ""),
+                                        sha256=str(_build.get("sha256") or ""),
+                                        local_sha256=str(_build.get("local_sha256") or ""),
+                                        local_sha256_when=str(_build.get("local_sha256_when") or ""),
+                                        bundled=True))
+            check(_local is not None and _local.is_file(),
+                  f"{family}: архив лежит в папке программы: "
+                  f"{_local.name if _local else 'нет'}")
+            if _local is not None and pi_plugin is not None:
+                _st, _nt = _pi.verify(pi_plugin, _local)
+                check(_st in (_pi.MATCH, _pi.UNCHECKED),
+                      f"{family}: встроенный архив проходит сверку ({_st}) — {_nt}")
+        _status, _note = _pi.verify(_gh, _gh and Path("нет-такого-файла.zip") or Path("x"))
+        check(_status in (_pi.MISMATCH, _pi.UNCHECKED),
+              f"и сверка честно отказывает: {_status}")
+
+        # Обработчики плагинов: по одному на каждый мост с плагином.
+        for finder in ("unity", "unreal", "godot", "ghidra-mcp"):
+            _h = editor_plugins.HANDLERS.get(finder)
+            check(bool(_h) and callable(_h[0]) and callable(_h[1]),
+                  f"у обработчика {finder} есть и проверка, и установка")
+
+        # Проверки требований в реестре знают все пять имён плагинов.
+        for name in ("unity-mcp-package", "enginewire-plugin", "godot-ai-addon",
+                     "ghidra-mcp-extension", "roblox-studio-server"):
+            check(name in _mcp_registry._PLUGIN_CHECKS,
+                  f"реестр умеет проверять плагин «{name}»")
+
+        # В реестре: у четырёх мостов блок плагина есть и заполнен, у Roblox —
+        # нет (плагина не существует, а кнопка «поставить» была бы враньём).
+        _raw = _mcp_registry.load_registry(_base)
+        _by_id = {s["id"]: s for s in _raw.get("servers", [])}
+        for sid in ("unity", "unreal", "godot", "ghidra-mcp"):
+            _pl = ((_by_id.get(sid) or {}).get("program_install") or {}).get("plugin") or {}
+            check(bool(_pl.get("finder")) and bool(_pl.get("button"))
+                  and bool(_pl.get("hint")) and bool(_pl.get("unavailable")),
+                  f"у {sid} блок плагина заполнен: {bool(_pl)}")
+            check(str(_pl.get("finder")) in editor_plugins.HANDLERS,
+                  f"и обработчик для {sid} в коде есть: {_pl.get('finder')}")
+        _rx = (_by_id.get("roblox-studio") or {}).get("program_install") or {}
+        check(not _rx.get("plugin"),
+              "у Roblox блока плагина нет — ставить нечего, кнопка была бы враньём")
+        _rx_req = [r for r in ((_by_id.get("roblox-studio") or {}).get("requires") or [])
+                   if str(r.get("type")) == "plugin"]
+        check(bool(_rx_req) and str(_rx_req[0].get("check")) == "roblox-studio-server",
+              "а требование проверяется живо по файлу mcp.bat")
+
+        # Unity теперь ставится кнопкой: метод winget и живой идентификатор.
+        _up = (_by_id.get("unity") or {}).get("program_install") or {}
+        check(str(_up.get("method")) == "winget"
+              and str(_up.get("winget_id")) == "Unity.UnityHub",
+              f"Unity ставится через winget: {_up.get('winget_id')}")
+        check(len(_up.get("alternatives") or []) >= 1,
+              f"и варианты редактора перечислены: "
+              f"{len(_up.get('alternatives') or [])}")
+
+        # Непроверяемое число инструментов в реестре — беда этого круга.
+        _gh_name = str((_by_id.get("ghidra-mcp") or {}).get("name") or "")
+        check("209" not in _gh_name,
+              f"неподтверждённое число инструментов из названия убрано: {_gh_name}")
+        _gh_count = str((_by_id.get("ghidra-mcp") or {}).get("tools_count") or "")
+        check("67" in _gh_count and "измерен" in _gh_count.lower(),
+              "и вместо него написано то, что измерено на этой машине")
+
+        # Кнопка докачки больше не зашита на OBS: её получает карточка.
+        _main_src = (core.program_root() / "tools" / "dbapp" / "main.py")
+        _fetch_txt = ""
+        if _main_src.is_file():
+            _text = _main_src.read_text(encoding="utf-8", errors="replace")
+            _grab = _text.split("def _fetch_card", 1)
+            _fetch_txt = _grab[1].split("def ", 1)[0] if len(_grab) > 1 else ""
+        check("plugin_fetch" in _fetch_txt and "ensure_plugin" not in _fetch_txt,
+              "кнопка докачки берёт исполнителя с карточки, а не только OBS")
+
+    # ---- 8т. Цепочка «Настроить автоматически» ----
+    echo("\n--- 8т. Настроить автоматически: проект, плагин, маршрут ---")
+    import engine_setup as _es
+    import tempfile as _tf
+    _tmp = Path(_tf.gettempdir()) / "opencode" / "проверка-цепочки"
+    if _tmp.exists():
+        __import__("shutil").rmtree(_tmp, ignore_errors=True)
+    _tmp.mkdir(parents=True, exist_ok=True)
+    _proj_u = _tmp / "юнити"
+    (_proj_u / "Assets").mkdir(parents=True, exist_ok=True)
+    _proj_g = _tmp / "годот"
+    _proj_g.mkdir(parents=True, exist_ok=True)
+    (_proj_g / "project.godot").write_text("[application]\n", encoding="utf-8")
+
+    ok_u, note_u = _es.save_project(_tmp, _es.UNITY_NAME, str(_proj_u))
+    check(ok_u and (_tmp / _es.UNITY_NAME).is_file(),
+          f"папка проекта Unity записывается сама: {note_u[:50]}")
+    bad_u, note_bad = _es.save_project(_tmp, _es.UNITY_NAME, str(_proj_g))
+    check(not bad_u and "Assets" in note_bad,
+          f"чужая папка Unity отвергнута: {note_bad[:50]}")
+    check(not (_tmp / _es.UNITY_NAME).read_text(encoding="utf-8").strip().endswith("годот"),
+          "и файл не перезаписан неверным путём")
+    ok_g, note_g = _es.save_project(_tmp, _es.GODOT_PROJECT_NAME, str(_proj_g))
+    check(ok_g and (_tmp / _es.GODOT_PROJECT_NAME).is_file(),
+          f"папка проекта Godot записывается сама: {note_g[:50]}")
+    check(not _es.save_project(_tmp, _es.UNITY_NAME, "")[0],
+          "пустая папка не принимается молча")
+
+    if editor_plugins is not None:
+        ok_r, note_r = editor_plugins.auto_setup("roblox-studio")
+        check(not ok_r and "плагина нет" in note_r,
+              f"мост без плагина честно отказывает: {note_r[:50]}")
+        ok_x, note_x = editor_plugins.auto_setup("такого-моста")
+        check(not ok_x and bool(note_x), "неизвестный мост отказывает словами")
+
+        _job_txt = ""
+        _main_file = core.program_root() / "tools" / "dbapp" / "main.py"
+        if _main_file.is_file():
+            _all = _main_file.read_text(encoding="utf-8", errors="replace")
+            # Откат в эмулятор был последней строкой в job(). Значит своя
+            # ветка обязана стоять непосредственно перед ним — иначе она
+            # недостижима, и никакой другой кусок файла это не покажет.
+            _fall = _all.find("auto_setup_emulator(dest, server")
+            _job_txt = _all[max(0, _fall - 1500):_fall] if _fall > 0 else ""
+        check("editor_plugins.auto_setup" in _job_txt,
+              "кнопка «Настроить автоматически» ведёт мост с плагином в свой "
+              "маршрут, а не в эмуляторный")
 
     # ---- итог
     failed = [text for good, text in results if not good]

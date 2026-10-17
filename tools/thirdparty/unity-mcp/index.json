@@ -1,0 +1,21 @@
+{
+  "family": "unity-mcp",
+  "name": "MCP for Unity",
+  "kind": "package",
+  "server": "mcpforunityserver==10.3.0",
+  "checked": "2026-10-17",
+  "note": "Плагин Unity не скачивается файлом: это пакет Unity Package Manager, и он прописывается строкой в Packages/manifest.json проекта, а скачивает и применяет его сам редактор при открытии проекта. Метка релиза закреплена намеренно (#v10.3.0), чтобы чужое изменение ветки не сломало проект в любой день. Проект — Unity 2021.3 LTS и новее, включая ветку 6.x.",
+  "builds": [
+    {
+      "since": "2021.3",
+      "until": "*",
+      "version": "10.3.0",
+      "manifest_entry": "com.coplaydev.unity-mcp",
+      "url": "https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity#v10.3.0",
+      "extra": {
+        "package": "com.coplaydev.unity-mcp",
+        "probe": "Packages/packages-lock.json"
+      }
+    }
+  ]
+}

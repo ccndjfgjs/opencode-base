@@ -43,7 +43,7 @@
         "official_url": "https://docs.astral.sh/uv/",
         "hand_over": false,
         "publisher_trusted": true,
-        "instructions": "Требуют blender, unity и godot. Blender запускается командой uvx mcp-for-blender, Unity — uvx --from mcpforunityserver, Godot AI сам пишет команду attach через uvx. Ставится одной кнопкой, бесплатно. На этой машине uv лежит в нестандартном месте — внутри папки hermes, то есть приехал с чужой инструментарией, а не поставлен нормально, и потому его может не быть ни на одной другой машине. Отдельно ставить uvx не нужно: он входит в тот же пакет.",
+        "instructions": "Требуют blender, unity и godot. Blender запускается командой uvx mcp-for-blender, Unity — uvx --from mcpforunityserver, Godot AI сам пишет команду attach через uvx. Ставится одной кнопкой, бесплатно. На этой машине uv лежит в нестандартном месте — внутри папки папка сторонней программы, то есть приехал с чужой инструментарией, а не поставлен нормально, и потому его может не быть ни на одной другой машине. Отдельно ставить uvx не нужно: он входит в тот же пакет.",
         "checked": "2026-10-03",
         "required_by": [
           "blender",
@@ -157,7 +157,7 @@
     },
     {
       "id": "ghidra-mcp",
-      "name": "Ghidra (мост bethington/ghidra-mcp, 209 инструментов)",
+      "name": "Ghidra (мост bethington/ghidra-mcp)",
       "source": "https://github.com/bethington/ghidra-mcp",
       "install": "Репозиторий склонирован на машину; программа находит папку сама (реестр хранит только имя, путь подставляется при включении). Плагин и headless-сервер собираются из него же и ставятся в Гидру командой `python -m tools.setup deploy`. Зависимости Python моста ставит uv сам в .venv репозитория. Пользователю ничего дописывать не нужно: JAVA_HOME и подсказку Гидре, где искать Java, программа прописывает сама при включении сервера",
       "program_install": {
@@ -182,7 +182,15 @@
         "known_good": [
           "12.1.4"
         ],
-        "version_note": "Мост 7.0.0 собран под Гидру 12.1.4 (совпадение версий проверяет сборка: verifyVersion). Мост Python — 1.30.0, из репозитория bethington/ghidra-mcp на коммите cf8b12d (14.10.2026)"
+        "version_note": "Мост 7.0.0 собран под Гидру 12.1.4 (совпадение версий проверяет сборка: verifyVersion). Мост Python — 1.30.0, из репозитория bethington/ghidra-mcp на коммите cf8b12d (14.10.2026)",
+        "plugin": {
+          "finder": "ghidra-mcp",
+          "name": "GhidraMCP",
+          "button": "Докачать расширение GhidraMCP",
+          "hint": "выберет релиз под твою версию Гидры, скачает архив в Extensions/Ghidra и включит плагин в Front-End правкой файла настроек с копией. Гидра при этом должна быть закрыта, а при её выходе — сохранить настройки, иначе она перепишет файл и выключит плагин",
+          "unavailable": "Гидра не найдена или её версии нет в указателе: под другую версию расширение не загрузится",
+          "fallback": ""
+        }
       },
       "connection": {
         "kind": "local",
@@ -229,7 +237,7 @@
           "args": [
             "--version"
           ],
-          "note": "мост запускается через uv; программа ищет его сама, включая нестандартные папки вроде AppData\\Local\\hermes\\bin"
+          "note": "мост запускается через uv; программа ищет его сама, включая нестандартные папки вроде %LOCALAPPDATA%\\<папка, куда установился uv>\\bin"
         },
         {
           "what": "папка с репозиторием ghidra-mcp",
@@ -247,10 +255,10 @@
         },
         {
           "what": "плагин GhidraMCP установлен и включён в Гидре",
-          "check": null,
-          "type": "manual",
+          "check": "ghidra-mcp-extension",
+          "type": "plugin",
           "blocks": false,
-          "note": "ставится командой автора python -m tools.setup deploy. Проверяется живым запросом /check_connection, а не наличием папки"
+          "note": "программа сверяет версию расширения с версией Гидры: расширение с чужой меткой Гидра не грузит. Официального sha256 у архивов нет, поэтому сверка помечается как «нечем сверять», а не как «совпало»"
         },
         {
           "what": "Гидра запущена с плагином",
@@ -271,7 +279,7 @@
       "ready_here_note": "Проверено 16.10.2026 на этой машине: плагин в Гидре 12.1.4 стоит и отвечает {\"status\":\"ok\",\"server_kind\":\"gui\"}, headless-сборка собрана и отвечает на 8090, мост через MCP отдал 67 инструментов и на вызов list_open_programs ответил {\"programs\":[],\"count\":0}",
       "verdict": "Готов. Мост, плагин и headless проверены живыми запросами",
       "only_while_running": "GUI и headless нельзя держать одновременно: мост при двух экземплярах Гидры не подключается сам (так у автора в коде) и остаётся с пустым списком инструментов. Нужен либо открытый Front End с плагином на 8089, либо отдельно поднятый headless на 8090",
-      "tools_count": "209 в каталоге; при подключении мост по умолчанию грузит 67–75 (группы listing, function, program), остальные подгружаются через search_tools/load_tool_group",
+      "tools_count": "На этой машине 17.10.2026 мост отдал 67 инструментов (измерение живым запросом 16.10.2026). Размер каталога сверху по нашему тегу не подтверждён: в теге rc.3 файл расширения пишет 205, README тега v6.0.0 — 272. Поэтому число каталога здесь не названо, а написано то, что измерено. Мост по умолчанию грузит 67–75 (группы listing, function, program), остальные подгружаются через search_tools/load_tool_group",
       "safety": "Мост умеет писать в базу Гидры: переименование, комментарии, типы, структуры. Запуск скриптов выключен по умолчанию (GHIDRA_MCP_ALLOW_SCRIPTS=1). Слушает только 127.0.0.1"
     },
     {
@@ -817,25 +825,51 @@
       "install": "uvx --from mcpforunityserver==10.3.0 mcp-for-unity --transport stdio, плюс пакет в редакторе",
       "program_install": {
         "program": "Unity",
-        "method": "manual",
-        "winget_id": "",
-        "catalog_version": "",
-        "expected_publisher": "",
+        "method": "winget",
+        "winget_id": "Unity.UnityHub",
+        "catalog_version": "3.22.3.65535",
+        "expected_publisher": "Unity Technologies Inc.",
         "expected_signer": "",
         "signer_checked": "",
         "needs_admin": false,
         "needs_admin_verified": false,
-        "official_url": "https://unity.com/download",
+        "official_url": "https://unity.com/unity-hub",
         "hand_over": true,
         "publisher_trusted": true,
         "bridge": "",
-        "instructions": "Свежую Unity ставят через Unity Hub, и там нужен вход. В winget на 2026-10-03 была только Unity 2020 — мосту она не нужна, он просит 2021.3 LTS или новее, до 6.x. Кнопки «поставить 2020» нет нарочно. Пакет в редактор: Window → Package Manager → Add package from git URL, адрес из README CoplayDev/unity-mcp.",
+        "instructions": "Ставится хаб через winget (Unity.UnityHub), редактор — отдельным пакетом Unity.Unity.6000 (6000.6.6f1) или Unity.Unity.2022 / .2023 / .2021. Редактор можно поставить и без хаба, но бесплатную лицензию Unity Personal активирует только хаб: без него редактор запустится и сразу попросит вход. Пакет MCP for Unity программа прописывает сама в Packages/manifest.json проекта; скачает и применит его редактор при открытии проекта.",
         "checked": "2026-10-14",
         "installed_version": "",
         "version_measured": "",
         "bridge_checked": false,
         "known_good": [],
-        "version_note": "Живой редактор на этой машине не искался. Версия сервера 10.3.0 снята с PyPI 2026-10-14, не из догадки."
+        "version_note": "Живой редактор на этой машине не искался. Версия сервера 10.3.0 снята с PyPI 2026-10-14, не из догадки.",
+        "alternatives": [
+          {
+            "label": "Редактор Unity 6000.6.6f1",
+            "winget_id": "Unity.Unity.6000"
+          },
+          {
+            "label": "Редактор Unity 2023.2.22f1",
+            "winget_id": "Unity.Unity.2023"
+          },
+          {
+            "label": "Редактор Unity 2022.3.62f3",
+            "winget_id": "Unity.Unity.2022"
+          },
+          {
+            "label": "Редактор Unity 2021.3.45f2",
+            "winget_id": "Unity.Unity.2021"
+          }
+        ],
+        "plugin": {
+          "finder": "unity",
+          "name": "MCP for Unity",
+          "button": "Прописать пакет MCP for Unity",
+          "hint": "добавит строку com.coplaydev.unity-mcp в Packages/manifest.json проекта (с копией файла и откатом). Пакет скачает и применит сам редактор при следующем открытии проекта. Редактор при этом должен быть закрыт — открытый перезапишет файл при выходе",
+          "unavailable": "не указан проект Unity: создай рядом с настройками файл mcp-unity-project.txt с папкой проекта",
+          "fallback": ""
+        }
       },
       "connection": {
         "kind": "local",
@@ -860,10 +894,10 @@
         },
         {
           "what": "Unity 2021.3+ с пакетом MCP for Unity",
-          "check": null,
-          "type": "manual",
+          "check": "unity-mcp-package",
+          "type": "plugin",
           "blocks": false,
-          "note": "путь редактора на этой машине не измерен, поэтому галочку ставит человек. Пакет: git URL из README CoplayDev/unity-mcp, ветка main или метка релиза"
+          "note": "программа сама находит редактор, снимает его версию и смотрит пакет в Packages/manifest.json проекта. Проект указывается файлом mcp-unity-project.txt"
         },
         {
           "what": "редактор Unity открыт",
@@ -909,7 +943,15 @@
         "version_measured": "",
         "bridge_checked": false,
         "known_good": [],
-        "version_note": "Каталог лаунчера сверен живым winget show 2026-10-14: 1.3.210.0, издатель Epic Games, Inc. Живой Unreal на этой машине не измерялся."
+        "version_note": "Каталог лаунчера сверен живым winget show 2026-10-14: 1.3.210.0, издатель Epic Games, Inc. Живой Unreal на этой машине не измерялся.",
+        "plugin": {
+          "finder": "unreal",
+          "name": "EngineWire",
+          "button": "Докачать плагин EngineWire",
+          "hint": "выберет релиз плагина под твою версию движка (по указателю tools/thirdparty/enginewire), скачает архив, сверит sha256 и разложит в Plugins/EngineWire проекта. В релизе только исходники: сборку плагина делает редактор при первом открытии проекта, и для проекта без папки Source он не загрузится",
+          "unavailable": "не указан проект Unreal (файл mcp-unreal.txt) или не найден движок: без версии движка релиз плагина выбрать нельзя",
+          "fallback": ""
+        }
       },
       "connection": {
         "kind": "local",
@@ -951,10 +993,10 @@
         },
         {
           "what": "плагин EngineWire в проекте",
-          "check": null,
-          "type": "manual",
+          "check": "enginewire-plugin",
+          "type": "plugin",
           "blocks": false,
-          "note": "Plugins/EngineWire из релиза ChiR24/Unreal_mcp ветки 0.6. Старый McpAutomationBridge лаунчер не примет"
+          "note": "программа смотрит Plugins/EngineWire в проекте и сверяет его с версией движка, снятой из Engine/Build/Build.version"
         }
       ],
       "setup_steps": [
@@ -1016,10 +1058,10 @@
         },
         {
           "what": "в студии включён Enable Studio as MCP server",
-          "check": null,
-          "type": "manual",
+          "check": "roblox-studio-server",
+          "type": "plugin",
           "blocks": false,
-          "note": "Assistant → … → Manage MCP Servers. Пока галочки нет, файла mcp.bat нет, и лаунчер отказывает"
+          "note": "проверяется наличие файла mcp.bat, который создаёт сама студия. Кнопки нет и быть не может: плагина у Roblox нет, сервер встроенный, а включается он только в окне студии (Assistant → … → Manage MCP Servers)"
         }
       ],
       "setup_steps": [
@@ -1057,7 +1099,15 @@
         "version_measured": "",
         "bridge_checked": false,
         "known_good": [],
-        "version_note": "Каталог сверен живым winget show 2026-10-14: 4.7.2, издатель Godot Engine. Пакет godot-ai 4.3.0 есть на PyPI, проверено 2026-10-14."
+        "version_note": "Каталог сверен живым winget show 2026-10-14: 4.7.2, издатель Godot Engine. Пакет godot-ai 4.3.0 есть на PyPI, проверено 2026-10-14.",
+        "plugin": {
+          "finder": "godot",
+          "name": "Godot AI",
+          "button": "Докачать аддон Godot AI",
+          "hint": "выберет релиз под версию редактора, скачает godot-ai-v4-plugin.zip, сверит sha256 и распакует аддон в корень проекта. Глобальной папки аддонов у Godot нет: плагин живёт только в проекте. После распаковки включи его в Project → Project Settings → Plugins",
+          "unavailable": "не указан проект Godot (файл mcp-godot-project.txt) или редактор ниже 4.7 — под него плагина нет",
+          "fallback": ""
+        }
       },
       "connection": {
         "kind": "local",
@@ -1082,10 +1132,10 @@
         },
         {
           "what": "Godot 4.7+ и включённый плагин Godot AI",
-          "check": null,
-          "type": "manual",
+          "check": "godot-ai-addon",
+          "type": "plugin",
           "blocks": false,
-          "note": "проверка реестра не умеет отличить 4.2 от 4.7, поэтому версию подтверждает человек. Плагин: addons/godot_ai/plugin.cfg"
+          "note": "программа снимает версию редактора и смотрит аддон addons/godot_ai в проекте. Godot AI v4 требует редактор 4.7 или новее: на 4.5 и 4.6 плагин не работает"
         },
         {
           "what": "файл mcp-godot-attach.json с командой attach",

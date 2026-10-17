@@ -621,11 +621,37 @@ def _check_blender_addon(name: str) -> tuple[bool, str]:
     return present, note
 
 
+def _check_editor_plugin(name: str) -> tuple[bool, str]:
+    """Живая проверка плагина редактора: unity, unreal, godot, ghidra.
+
+    Импорт внутри функции: `editor_plugins` тянет за собой указатели и сеть,
+    а читать реестр программа должна уметь и без них.
+    """
+    import editor_plugins  # noqa: PLC0415 — тяжёлый модуль, нужен здесь
+
+    handler = {
+        "unity-mcp-package": editor_plugins.unity_state,
+        "enginewire-plugin": editor_plugins.unreal_state,
+        "godot-ai-addon": editor_plugins.godot_state,
+        "ghidra-mcp-extension": editor_plugins.ghidra_state,
+        "roblox-studio-server": editor_plugins.roblox_state,
+    }.get(name.strip().lower())
+    if handler is None:
+        return False, f"плагин «{name}» программа не умеет проверять"
+    present, _can_write, note = handler()
+    return present, note
+
+
 #: Чем проверяется требование типа `plugin`. Ключ — то, что написано в
 #: реестре в поле `check`. Это не список программ вкладки: программу
 #: называет реестр, и без записи о плагине требования не будет.
 _PLUGIN_CHECKS = {"obs-websocket": _check_obs_websocket,
-                   "blender-mcp-addon": _check_blender_addon}
+                   "blender-mcp-addon": _check_blender_addon,
+                   "unity-mcp-package": _check_editor_plugin,
+                   "enginewire-plugin": _check_editor_plugin,
+                   "godot-ai-addon": _check_editor_plugin,
+                   "ghidra-mcp-extension": _check_editor_plugin,
+                   "roblox-studio-server": _check_editor_plugin}
 
 
 def check_requirement(spec: dict) -> Requirement:
