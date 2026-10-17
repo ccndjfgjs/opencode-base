@@ -355,7 +355,7 @@ def _main(argv: list[str]) -> int:
     dest = find_settings_dir()
     if action in ("-h", "--help", "help"):
         _say("caveman.py status | install [lite|full] | remove")
-        _say("Переключатель и уровень — на вкладке opencode.")
+        _say("Галочка на вкладке opencode ставит лёгкий уровень; другой уровень — этой командой.")
         return 0
     if action == "status":
         _say(status_text(dest))

@@ -11,6 +11,15 @@
 показывается рядом и помечен как устаревший. Иначе программа будет
 врать пользователю про свою же готовность.
 
+Про окружение. Мосту мало бывает программы: ghidra-mcp, например,
+работает, только если Гидра видит Java, а Гира ищет Java по-своему, через
+JAVA_HOME_OVERRIDE в своём launch.properties, и переменная окружения тут
+ни при чём. Поэтому перед вписыванием блока вызывается env_setup: программа
+проверяет нужные переменные и настройки и чинит их сама. Включение моста
+должно заканчиваться рабочим состоянием, а не инструкцией «пропишите
+JAVA_HOME вручную». Что именно нужно мосту, лежит в реестре, в блоке
+`env_setup`, а не в коде.
+
 Программа ничего не устанавливает из интернета и не покупает подписки.
 Она только проверяет, вписывает блок в настройки и честно говорит, чего
 не хватает.
@@ -33,8 +42,14 @@ from pathlib import Path
 # в sys.path, при запуске как пакет нужен относительный.
 try:
     import versions  # type: ignore[import-not-found]
+    import env_setup  # type: ignore[import-not-found]
 except ImportError:  # pragma: no cover - запуск как пакет
     from . import versions  # type: ignore[no-redef]
+    from . import env_setup  # type: ignore[no-redef]
+
+#: Плейсхолдер в команде запуска: {PROGRAM}, {UV}, {GHIDRA} и прочие.
+#: В реестре лежат только имена, пути подставляются на машине человека.
+_PLACEHOLDER = re.compile(r"\{([A-Z_]+)\}")
 
 #: Имя файла реестра. Лежит в корне базы и едет с ней.
 REGISTRY_NAME = "mcp-registry.json"
@@ -606,11 +621,37 @@ def _check_blender_addon(name: str) -> tuple[bool, str]:
     return present, note
 
 
+def _check_editor_plugin(name: str) -> tuple[bool, str]:
+    """Живая проверка плагина редактора: unity, unreal, godot, ghidra.
+
+    Импорт внутри функции: `editor_plugins` тянет за собой указатели и сеть,
+    а читать реестр программа должна уметь и без них.
+    """
+    import editor_plugins  # noqa: PLC0415 — тяжёлый модуль, нужен здесь
+
+    handler = {
+        "unity-mcp-package": editor_plugins.unity_state,
+        "enginewire-plugin": editor_plugins.unreal_state,
+        "godot-ai-addon": editor_plugins.godot_state,
+        "ghidra-mcp-extension": editor_plugins.ghidra_state,
+        "roblox-studio-server": editor_plugins.roblox_state,
+    }.get(name.strip().lower())
+    if handler is None:
+        return False, f"плагин «{name}» программа не умеет проверять"
+    present, _can_write, note = handler()
+    return present, note
+
+
 #: Чем проверяется требование типа `plugin`. Ключ — то, что написано в
 #: реестре в поле `check`. Это не список программ вкладки: программу
 #: называет реестр, и без записи о плагине требования не будет.
 _PLUGIN_CHECKS = {"obs-websocket": _check_obs_websocket,
-                   "blender-mcp-addon": _check_blender_addon}
+                   "blender-mcp-addon": _check_blender_addon,
+                   "unity-mcp-package": _check_editor_plugin,
+                   "enginewire-plugin": _check_editor_plugin,
+                   "godot-ai-addon": _check_editor_plugin,
+                   "ghidra-mcp-extension": _check_editor_plugin,
+                   "roblox-studio-server": _check_editor_plugin}
 
 
 def check_requirement(spec: dict) -> Requirement:
@@ -887,8 +928,7 @@ def resolve_command(command: list[str]) -> list[str]:
         {PROGRAM}      — папка программы, где лежат мосты и thirdparty
         {DBAPP_PYTHON} — Python, на котором работает сама программа
     """
-    if not any("{PROGRAM}" in part or "{DBAPP_PYTHON}" in part
-               for part in command):
+    if not any(_PLACEHOLDER.search(part) for part in command):
         return list(command)
     from core import find_python, program_root
 
@@ -897,6 +937,14 @@ def resolve_command(command: list[str]) -> list[str]:
     out: list[str] = []
     for part in command:
         part = part.replace("{PROGRAM}", root).replace("{DBAPP_PYTHON}", python)
+        # Остальные плейсхолдеры ({UV}, {GHIDRA}, {NODE}...) ищет
+        # env_setup: это пути, которые у каждого свои. Неразкрытый
+        # плейсхолдер оставляем как есть — enable() его поймает и скажет
+        # словами, чего не хватило, вместо того чтобы подсунуть в команду
+        # мусор, который упадёт позже и непонятно.
+        part = _PLACEHOLDER.sub(
+            lambda m: env_setup.resolve_placeholder(m.group(1)) or m.group(0),
+            part)
         # Разделители в разных частях команды разные: путь программы на
         # Windows приходит с обратными слэшами, а остальное написано с
         # прямыми. В настройках это выглядит неровно, поэтому приводим к
@@ -969,6 +1017,15 @@ def build_block(server: Server, manual: dict | None = None) -> str:
             return ""
         body = {"type": "local", "command": quiet_command(command),
                 "enabled": True}
+        # Некоторым мостам нужны свои переменные окружения (GHIDRA_MCP_URL
+        # у ghidra-mcp). Значения — на этой машине, поэтому плейсхолдеры
+        # в них раскрываются так же, как в команде.
+        env_map = conn.get("environment")
+        if isinstance(env_map, dict) and env_map:
+            body["environment"] = {
+                str(key): env_setup.expand(str(value))
+                for key, value in env_map.items()
+            }
     inner = json.dumps(body, ensure_ascii=False, indent=2).splitlines()
     # Первая строка — «{», последняя — «}». Их не берём: свои скобки мы
     # ставим сами, вместе с именем сервера. Если взять и их, в настройках
@@ -1214,6 +1271,19 @@ def enable(dest: Path, server: Server, progress=None) -> tuple[list[str], list[s
     errors: list[str] = []
     if not server.has_connection:
         return ([], ["В реестре нет команды подключения - включать нечем."])
+    # Сначала доводим окружение, потом проверяем требования. Обратный
+    # порядок бессмыслен: требование «нужен Java 21» не выполнится, пока
+    # программа сама не напишет JAVA_HOME, а проверка шла бы перед этим.
+    env_spec = server.raw.get("env_setup")
+    if isinstance(env_spec, dict) and env_spec:
+        report = env_setup.prepare(env_spec, progress=progress)
+        messages += [f"{server.name}: {line}" for line in report.lines()]
+        if report.failed:
+            return (messages, [
+                f"{server.name}: окружение не довёл до рабочего — "
+                + "; ".join(report.failed)
+            ])
+
     missing = server.missing
     if missing:
         return ([], [f"Не хватает: {', '.join(r.what for r in missing)}"])
@@ -1227,16 +1297,39 @@ def enable(dest: Path, server: Server, progress=None) -> tuple[list[str], list[s
     if is_manual:
         manual = load_manual_config(dest, server.id)
         if not manual:
-            return ([], [
-                "Для этого сервера нужна конфигурация из его программы. "
-                "Включи сервер у себя, скопируй конфигурацию кнопкой "
-                "Copy Config и вставь её здесь через «Включить»."
-            ])
+            # Отказ должен говорить правду о том, где берётся конфигурация.
+            # Общее «скопируй кнопкой Copy Config» верно для студий и оболочек,
+            # но неверно там, где конфигурацию пишет окно программы: у CapCut
+            # кнопки Copy Config нет, адрес вписывает «Настроить автоматически».
+            # Поэтому реестр может подсказать свой текст — и подсказывает.
+            _hint = _conn.get("manual_hint")
+            if not isinstance(_hint, str) or not _hint.strip():
+                _hint = (
+                    "Для этого сервера нужна конфигурация из его программы. "
+                    "Включи сервер у себя, скопируй конфигурацию кнопкой "
+                    "Copy Config и вставь её здесь через «Включить»."
+                )
+            return ([], [_hint])
     elif server.blocking_manual:
         return ([], [
             "Сервер без этого работать не будет: "
             + ", ".join(r.what for r in server.blocking_manual)
         ])
+
+    # Плейсхолдер, который не нашлось чем заменить, обязан остановить
+    # включение словами. Иначе в настройки попадёт команда с фигурными
+    # скобками, opencode её запустит, и человек увидит отказ без причины.
+    _conn_cmd = server.raw.get("connection") or {}
+    if isinstance(_conn_cmd, dict) and not str(_conn_cmd.get("url") or "").strip():
+        _resolved = resolve_command([str(p) for p in (_conn_cmd.get("command") or [])])
+        _left = sorted({m for part in _resolved
+                        for m in _PLACEHOLDER.findall(part)})
+        _left = [f"{{{name}}}" for name in _left]
+        if _left:
+            return (messages, [
+                "на этой машине не нашлось, чем подставить: "
+                + ", ".join(_left)
+            ])
 
     block = build_block(server, manual=manual)
     if not block:

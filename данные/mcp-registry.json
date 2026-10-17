@@ -16,7 +16,7 @@
         "official_url": "https://nodejs.org/",
         "hand_over": false,
         "publisher_trusted": true,
-        "instructions": "Требуют шестеро серверов из одиннадцати: windows-admin, excel, obs, dbhub, browsers и omniroute — их мосты запускаются через Node.js. Самому dbhub нужен Node.js 22.5 или новее, omniroute просит 22.22.2 в своём package.json, browsers и остальным хватает 18. Ставится одной кнопкой, бесплатно, без аккаунта. Берётся LTS, а не текущая ветка: в каталоге рядом лежит OpenJS.NodeJS версии 26.7.0, то есть скачок через два мажора, а мостам нужен рантайм. На этой машине стоит v24.18.0 в C:\\Program Files\\nodejs, каталог предлагает 24.19.0 — обычное обновление вперёд. Внимание на Windows: npx лежит как npx.ps1, а PowerShell может блокировать запуск .ps1 политикой выполнения; код это обходит, пробуя npx.cmd.",
+        "instructions": "Требуют девять серверов из двадцати двух: windows-admin, excel, obs, dbhub, browsers, omniroute, unreal, tiktok и spotify — их мосты запускаются через Node.js. Первые три моста написаны на JavaScript и лежат в программе или ставятся через npx. Unreal, TikTok и Spotify тоже запускаются через npx, но пакеты в базу не копируются: Unreal просит Node 20.19+, TikTok — 22.12+, Spotify — 20+ (это engines их пакетов на 2026-10-14). Самому dbhub нужен Node.js 22.5 или новее, omniroute просит 22.22.2 в своём package.json, browsers и остальным хватает 18. Ставится одной кнопкой, бесплатно, без аккаунта. Берётся LTS, а не текущая ветка: в каталоге рядом лежит OpenJS.NodeJS версии 26.7.0, то есть скачок через два мажора, а мостам нужен рантайм. На этой машине стоит v24.18.0 в C:\\Program Files\\nodejs, каталог предлагает 24.19.0 — обычное обновление вперёд. Внимание на Windows: npx лежит как npx.ps1, а PowerShell может блокировать запуск .ps1 политикой выполнения; код это обходит, пробуя npx.cmd.",
         "checked": "2026-10-03",
         "required_by": [
           "windows-admin",
@@ -24,7 +24,10 @@
           "obs",
           "dbhub",
           "browsers",
-          "omniroute"
+          "omniroute",
+          "unreal",
+          "tiktok",
+          "spotify"
         ]
       },
       {
@@ -40,10 +43,12 @@
         "official_url": "https://docs.astral.sh/uv/",
         "hand_over": false,
         "publisher_trusted": true,
-        "instructions": "Требует сервер blender: мост запускается командой uvx mcp-for-blender. Ставится одной кнопкой, бесплатно. На этой машине uv лежит в нестандартном месте — внутри папки hermes, то есть приехал с чужой инструментарией, а не поставлен нормально, и потому его может не быть ни на одной другой машине. Отдельно ставить uvx не нужно: он входит в тот же пакет.",
+        "instructions": "Требуют blender, unity и godot. Blender запускается командой uvx mcp-for-blender, Unity — uvx --from mcpforunityserver, Godot AI сам пишет команду attach через uvx. Ставится одной кнопкой, бесплатно. На этой машине uv лежит в нестандартном месте — внутри папки папка сторонней программы, то есть приехал с чужой инструментарией, а не поставлен нормально, и потому его может не быть ни на одной другой машине. Отдельно ставить uvx не нужно: он входит в тот же пакет.",
         "checked": "2026-10-03",
         "required_by": [
-          "blender"
+          "blender",
+          "unity",
+          "godot"
         ]
       }
     ]
@@ -149,6 +154,133 @@
       "safety": "Перед разрушительным действием показывается превью и требуется подтверждение confirm_action с кодом, таймаут 5 минут. Критические процессы (lsass, csrss, svchost, winlogon, smss, services, wininit, TrustedInstaller) заблокированы даже с подтверждением. Массовые операции ограничены 20 за вызов. Ведётся аудит-лог в JSONL.",
       "ready_here": true,
       "verdict": "Порог низкий: нужен только Node и права админа, оба обычно есть"
+    },
+    {
+      "id": "ghidra-mcp",
+      "name": "Ghidra (мост bethington/ghidra-mcp)",
+      "source": "https://github.com/bethington/ghidra-mcp",
+      "install": "Репозиторий склонирован на машину; программа находит папку сама (реестр хранит только имя, путь подставляется при включении). Плагин и headless-сервер собираются из него же и ставятся в Гидру командой `python -m tools.setup deploy`. Зависимости Python моста ставит uv сам в .venv репозитория. Пользователю ничего дописывать не нужно: JAVA_HOME и подсказку Гидре, где искать Java, программа прописывает сама при включении сервера",
+      "program_install": {
+        "program": "Ghidra",
+        "method": "manual",
+        "winget_id": "",
+        "catalog_version": "",
+        "expected_publisher": "",
+        "expected_signer": "",
+        "signer_checked": "",
+        "needs_admin": false,
+        "needs_admin_verified": false,
+        "official_url": "https://ghidra-sre.org/",
+        "hand_over": false,
+        "publisher_trusted": true,
+        "bridge": "bundled",
+        "instructions": "Гидру ставит человек, кнопки у программы нет: официальный архив, никакого winget-пакета. Программа умеет только дописать то, что нужно мосту: переменную JAVA_HOME и JAVA_HOME_OVERRIDE в launch.properties самой Гидры. Плагин GhidraMCP ставится командой автора: python -m tools.setup deploy --ghidra-path <папка>",
+        "checked": "2026-10-16",
+        "installed_version": "12.1.4 PUBLIC",
+        "version_measured": "2026-10-16",
+        "bridge_checked": true,
+        "known_good": [
+          "12.1.4"
+        ],
+        "version_note": "Мост 7.0.0 собран под Гидру 12.1.4 (совпадение версий проверяет сборка: verifyVersion). Мост Python — 1.30.0, из репозитория bethington/ghidra-mcp на коммите cf8b12d (14.10.2026)",
+        "plugin": {
+          "finder": "ghidra-mcp",
+          "name": "GhidraMCP",
+          "button": "Докачать расширение GhidraMCP",
+          "hint": "выберет релиз под твою версию Гидры, скачает архив в Extensions/Ghidra и включит плагин в Front-End правкой файла настроек с копией. Гидра при этом должна быть закрыта, а при её выходе — сохранить настройки, иначе она перепишет файл и выключит плагин",
+          "unavailable": "Гидра не найдена или её версии нет в указателе: под другую версию расширение не загрузится",
+          "fallback": ""
+        }
+      },
+      "connection": {
+        "kind": "local",
+        "command": [
+          "{UV}",
+          "run",
+          "--directory",
+          "{GHIDRA_MCP}",
+          "bridge-mcp-ghidra",
+          "--transport",
+          "stdio"
+        ],
+        "environment": {
+          "GHIDRA_MCP_URL": "http://127.0.0.1:8089"
+        },
+        "warm_up": false,
+        "note": "Команда идёт через uv из папки репозитория: uv сам доустанавливает зависимости и не требует, чтобы мост был в PATH. Путь к uv — абсолютный и находится на этой машине сам: сервер, запущенный из меню «Пуск», не видит PATH пользователя и упал бы с spawn uv ENOENT (см. issue #441 у автора). GHIDRA_MCP_URL — адрес плагина в Гидре; для headless-сборки он другой (8090)"
+      },
+      "env_setup": {
+        "vars": [
+          {
+            "name": "JAVA_HOME",
+            "kind": "jdk",
+            "min_major": 21,
+            "why": "Гидра 12 работает на Java 21"
+          }
+        ],
+        "settings": [
+          {
+            "file": "{GHIDRA}/support/launch.properties",
+            "key": "JAVA_HOME_OVERRIDE",
+            "value_from": "JAVA_HOME",
+            "why": "Гидра ищет Java сама, через этот ключ; переменная окружения ей не обязательна"
+          }
+        ]
+      },
+      "license": "MIT",
+      "why": "Прямой доступ к функциям Гидры по MCP: дизассемблирование, переименование функций, декомпиляция, скрипты, эмуляция P-code, отладчик. Без ручных кликов в интерфейсе Гидры",
+      "requires": [
+        {
+          "what": "uv",
+          "check": "uv",
+          "type": "command",
+          "args": [
+            "--version"
+          ],
+          "note": "мост запускается через uv; программа ищет его сама, включая нестандартные папки вроде %LOCALAPPDATA%\\<папка, куда установился uv>\\bin"
+        },
+        {
+          "what": "папка с репозиторием ghidra-mcp",
+          "check": null,
+          "type": "manual",
+          "blocks": false,
+          "note": "программа ищет папку сама: сначала в кэше путей, потом в tools/thirdparty, потом в «Загрузках» и домашней папке. Проверка подлинности — по pyproject.toml и src/, а не по имени папки. Клонируется командой из install"
+        },
+        {
+          "what": "Ghidra 12.1.4",
+          "check": null,
+          "type": "manual",
+          "blocks": false,
+          "note": "программа ищет установку по ghidraRun.bat и кладёт путь в кэш. Без Гидры включение остановится словами, а не поведёт в никуда"
+        },
+        {
+          "what": "плагин GhidraMCP установлен и включён в Гидре",
+          "check": "ghidra-mcp-extension",
+          "type": "plugin",
+          "blocks": false,
+          "note": "программа сверяет версию расширения с версией Гидры: расширение с чужой меткой Гидра не грузит. Официального sha256 у архивов нет, поэтому сверка помечается как «нечем сверять», а не как «совпало»"
+        },
+        {
+          "what": "Гидра запущена с плагином",
+          "check": null,
+          "type": "manual",
+          "blocks": false,
+          "note": "без неё мост поднимается, но инструменты Гидры не регистрируются: список остаётся пустым"
+        }
+      ],
+      "setup_steps": [
+        "Поставить Гидру 12.1.4 (официальный архив) и один раз открыть её.",
+        "Склонировать репозиторий: git clone https://github.com/bethington/ghidra-mcp.git",
+        "В папке репозитория выполнить: python -m tools.setup deploy --ghidra-path \"<папка Гидры>\"",
+        "Перезапустить Гидру: плагин подхватывается только при перезагрузке.",
+        "Остальное программа делает сама: JAVA_HOME и JAVA_HOME_OVERRIDE."
+      ],
+      "ready_here": true,
+      "ready_here_note": "Проверено 16.10.2026 на этой машине: плагин в Гидре 12.1.4 стоит и отвечает {\"status\":\"ok\",\"server_kind\":\"gui\"}, headless-сборка собрана и отвечает на 8090, мост через MCP отдал 67 инструментов и на вызов list_open_programs ответил {\"programs\":[],\"count\":0}",
+      "verdict": "Готов. Мост, плагин и headless проверены живыми запросами",
+      "only_while_running": "GUI и headless нельзя держать одновременно: мост при двух экземплярах Гидры не подключается сам (так у автора в коде) и остаётся с пустым списком инструментов. Нужен либо открытый Front End с плагином на 8089, либо отдельно поднятый headless на 8090",
+      "tools_count": "На этой машине 17.10.2026 мост отдал 67 инструментов (измерение живым запросом 16.10.2026). Размер каталога сверху по нашему тегу не подтверждён: в теге rc.3 файл расширения пишет 205, README тега v6.0.0 — 272. Поэтому число каталога здесь не названо, а написано то, что измерено. Мост по умолчанию грузит 67–75 (группы listing, function, program), остальные подгружаются через search_tools/load_tool_group",
+      "safety": "Мост умеет писать в базу Гидры: переименование, комментарии, типы, структуры. Запуск скриптов выключен по умолчанию (GHIDRA_MCP_ALLOW_SCRIPTS=1). Слушает только 127.0.0.1"
     },
     {
       "id": "excel",
@@ -687,6 +819,753 @@
       "verdict": "Порог низкий: LDPlayer стоит и работает. Мост общий для эмуляторов, но с чужими приложениями внутри он даёт и инструмент выполнять любые adb-команды в эмуляторе"
     },
     {
+      "id": "unity",
+      "name": "Unity",
+      "source": "https://github.com/CoplayDev/unity-mcp",
+      "install": "uvx --from mcpforunityserver==10.3.0 mcp-for-unity --transport stdio, плюс пакет в редакторе",
+      "program_install": {
+        "program": "Unity",
+        "method": "winget",
+        "winget_id": "Unity.UnityHub",
+        "catalog_version": "3.22.3.65535",
+        "expected_publisher": "Unity Technologies Inc.",
+        "expected_signer": "",
+        "signer_checked": "",
+        "needs_admin": false,
+        "needs_admin_verified": false,
+        "official_url": "https://unity.com/unity-hub",
+        "hand_over": true,
+        "publisher_trusted": true,
+        "bridge": "",
+        "instructions": "Ставится хаб через winget (Unity.UnityHub), редактор — отдельным пакетом Unity.Unity.6000 (6000.6.6f1) или Unity.Unity.2022 / .2023 / .2021. Редактор можно поставить и без хаба, но бесплатную лицензию Unity Personal активирует только хаб: без него редактор запустится и сразу попросит вход. Пакет MCP for Unity программа прописывает сама в Packages/manifest.json проекта; скачает и применит его редактор при открытии проекта.",
+        "checked": "2026-10-14",
+        "installed_version": "",
+        "version_measured": "",
+        "bridge_checked": false,
+        "known_good": [],
+        "version_note": "Живой редактор на этой машине не искался. Версия сервера 10.3.0 снята с PyPI 2026-10-14, не из догадки.",
+        "alternatives": [
+          {
+            "label": "Редактор Unity 6000.6.6f1",
+            "winget_id": "Unity.Unity.6000"
+          },
+          {
+            "label": "Редактор Unity 2023.2.22f1",
+            "winget_id": "Unity.Unity.2023"
+          },
+          {
+            "label": "Редактор Unity 2022.3.62f3",
+            "winget_id": "Unity.Unity.2022"
+          },
+          {
+            "label": "Редактор Unity 2021.3.45f2",
+            "winget_id": "Unity.Unity.2021"
+          }
+        ],
+        "plugin": {
+          "finder": "unity",
+          "name": "MCP for Unity",
+          "button": "Прописать пакет MCP for Unity",
+          "hint": "добавит строку com.coplaydev.unity-mcp в Packages/manifest.json проекта (с копией файла и откатом). Пакет скачает и применит сам редактор при следующем открытии проекта. Редактор при этом должен быть закрыт — открытый перезапишет файл при выходе",
+          "unavailable": "не указан проект Unity: создай рядом с настройками файл mcp-unity-project.txt с папкой проекта",
+          "fallback": ""
+        }
+      },
+      "connection": {
+        "kind": "local",
+        "command": [
+          "{DBAPP_PYTHON}",
+          "{PROGRAM}/tools/dbapp/launchers/unity_bridge_launcher.py"
+        ],
+        "warm_up": true,
+        "note": "Команда из описания пакета mcpforunityserver 10.3.0 на PyPI. Версия закреплена в лаунчере. Плагин в редактор программа не ставит: без открытого Unity с пакетом MCP for Unity сервер не над чем работать. Телеметрия пакета выключается DISABLE_TELEMETRY=1."
+      },
+      "license": "MIT",
+      "why": "Сцена, объекты, скрипты C#, ассеты и тесты в открытом редакторе Unity. Не аффилировано с Unity Technologies.",
+      "requires": [
+        {
+          "what": "uv / uvx",
+          "check": "uvx",
+          "type": "command",
+          "args": [
+            "--version"
+          ],
+          "note": "сервер запускается через uvx, как Blender"
+        },
+        {
+          "what": "Unity 2021.3+ с пакетом MCP for Unity",
+          "check": "unity-mcp-package",
+          "type": "plugin",
+          "blocks": false,
+          "note": "программа сама находит редактор, снимает его версию и смотрит пакет в Packages/manifest.json проекта. Проект указывается файлом mcp-unity-project.txt"
+        },
+        {
+          "what": "редактор Unity открыт",
+          "check": null,
+          "type": "manual",
+          "blocks": false,
+          "note": "сервер отвечает редактору, только пока проект открыт"
+        }
+      ],
+      "setup_steps": [
+        "Нужны Unity 2021.3+ через Hub и uvx. Вход в Hub программа не делает. Unity 2020 из winget не подходит.",
+        "В редакторе: Window → Package Manager → Add package from git URL, адрес https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity#main",
+        "Открой проект. Пакет в редактор программа не ставит.",
+        "Выдели строку Unity и нажми «Настроить автоматически». Программа проверит uvx и впишет команду. Живой ответ редактора она не обещает.",
+        "Перезапусти opencode. Пока проект с пакетом не открыт, мосту не над чем работать."
+      ],
+      "ready_here": false,
+      "ready_here_note": "2026-10-14 мост не проверялся живым запросом к редактору. Готовым его считать нельзя.",
+      "verdict": "Порог средний: нужен Hub со входом и пакет в проекте. Сервер качается uvx, в базу не копируется"
+    },
+    {
+      "id": "unreal",
+      "name": "Unreal Engine",
+      "source": "https://github.com/ChiR24/Unreal_mcp",
+      "install": "npx -y unreal-engine-mcp-server@0.6.0-beta-e и плагин EngineWire в проекте",
+      "program_install": {
+        "program": "Epic Games Launcher",
+        "method": "winget",
+        "winget_id": "EpicGames.EpicGamesLauncher",
+        "catalog_version": "1.3.210.0",
+        "expected_publisher": "Epic Games, Inc.",
+        "expected_signer": "",
+        "signer_checked": "",
+        "needs_admin": false,
+        "needs_admin_verified": false,
+        "official_url": "https://www.unrealengine.com/download",
+        "hand_over": true,
+        "publisher_trusted": true,
+        "bridge": "",
+        "instructions": "Лаунчер Epic ставится через winget, идентификатор и версия каталога сверены живым winget show 2026-10-14: 1.3.210.0, издатель Epic Games, Inc. Сам Unreal после лаунчера требует вход. Плагин EngineWire кладётся в Plugins проекта и собирается редактором. Это не официальный плагин Epic.",
+        "checked": "2026-10-03",
+        "installed_version": "",
+        "version_measured": "",
+        "bridge_checked": false,
+        "known_good": [],
+        "version_note": "Каталог лаунчера сверен живым winget show 2026-10-14: 1.3.210.0, издатель Epic Games, Inc. Живой Unreal на этой машине не измерялся.",
+        "plugin": {
+          "finder": "unreal",
+          "name": "EngineWire",
+          "button": "Докачать плагин EngineWire",
+          "hint": "выберет релиз плагина под твою версию движка (по указателю tools/thirdparty/enginewire), скачает архив, сверит sha256 и разложит в Plugins/EngineWire проекта. В релизе только исходники: сборку плагина делает редактор при первом открытии проекта, и для проекта без папки Source он не загрузится",
+          "unavailable": "не указан проект Unreal (файл mcp-unreal.txt) или не найден движок: без версии движка релиз плагина выбрать нельзя",
+          "fallback": ""
+        }
+      },
+      "connection": {
+        "kind": "local",
+        "command": [
+          "{DBAPP_PYTHON}",
+          "{PROGRAM}/tools/dbapp/launchers/unreal_bridge_launcher.py"
+        ],
+        "warm_up": true,
+        "note": "Путь проекта лежит в mcp-unreal.txt рядом с настройками, не в реестре. Лаунчер передаёт его как UE_PROJECT_PATH. Пакет закреплён на 0.6.0-beta-e: без метки npm ставит 0.5.30, а README говорит, что она не совпадает с плагином 0.6. Токен capability сервер читает из проекта сам, в конфиг opencode он не пишется."
+      },
+      "license": "MIT",
+      "why": "Уровни, Blueprint, материалы и Play-In-Editor в открытом проекте Unreal 5.0–5.8 через плагин EngineWire. Проекты без лицензии в базу не брались.",
+      "requires": [
+        {
+          "what": "Node.js 20.19+",
+          "check": "node",
+          "type": "command",
+          "args": [
+            "--version"
+          ],
+          "min_version": 20,
+          "note": "engines пакета 0.6.0-beta-e требует >=20.19.0. Реестр проверяет только мажор 20; точную границу держит лаунчер"
+        },
+        {
+          "what": "npx",
+          "check": "npx",
+          "type": "command",
+          "args": [
+            "--version"
+          ],
+          "note": "сервер запускается через npx и в базу не копируется"
+        },
+        {
+          "what": "файл mcp-unreal.txt с путём проекта",
+          "check": null,
+          "type": "manual",
+          "blocks": false,
+          "note": "рядом с настройками opencode. Одна строка — папка проекта или .uproject. Без файла лаунчер отказывает и не делает вид, что редактор подключён"
+        },
+        {
+          "what": "плагин EngineWire в проекте",
+          "check": "enginewire-plugin",
+          "type": "plugin",
+          "blocks": false,
+          "note": "программа смотрит Plugins/EngineWire в проекте и сверяет его с версией движка, снятой из Engine/Build/Build.version"
+        }
+      ],
+      "setup_steps": [
+        "Нужны Epic Games Launcher и сам Unreal. Движок ставится после входа, программа его не ставит.",
+        "Положи плагин EngineWire в Plugins/EngineWire проекта и открой проект, чтобы он собрался. Старый McpAutomationBridge не подходит.",
+        "Выдели строку Unreal Engine и нажми «Настроить автоматически». Укажи папку проекта. Путь ляжет в mcp-unreal.txt рядом с настройками, не в репозиторий.",
+        "Если плагина нет, программа путь не запишет и сервер не включит.",
+        "Перезапусти opencode. Редактор должен быть открыт. Зелёной галочки нет, пока он сам не ответил."
+      ],
+      "ready_here": false,
+      "ready_here_note": "2026-10-14 живого редактора не было, handshake не делался.",
+      "verdict": "Порог высокий: лаунчер Epic ставится, сам движок — после входа, плагин собирается в проекте"
+    },
+    {
+      "id": "roblox-studio",
+      "name": "Roblox Studio",
+      "source": "https://create.roblox.com/docs/studio/mcp",
+      "install": "встроенный сервер Studio, команда cmd.exe /c %LOCALAPPDATA%\\Roblox\\mcp.bat",
+      "program_install": {
+        "program": "Roblox Studio",
+        "method": "winget",
+        "winget_id": "Roblox.RobloxStudio",
+        "catalog_version": "1.6.3.172",
+        "expected_publisher": "Roblox Corporation",
+        "expected_signer": "",
+        "signer_checked": "",
+        "needs_admin": false,
+        "needs_admin_verified": false,
+        "official_url": "https://create.roblox.com/docs/studio/setup",
+        "hand_over": false,
+        "publisher_trusted": true,
+        "bridge": "",
+        "instructions": "Studio ставится через winget, идентификатор и версия сверены живым winget show 2026-10-14: 1.6.3.172, издатель Roblox Corporation. Мост — не отдельный пакет: его включает сама студия, Assistant → Manage MCP Servers → Enable Studio as MCP server. После этого появляется mcp.bat. Старый Roblox/studio-rust-mcp-server авторы пометили неразвиваемым. Исполнители кода сюда не подключаются.",
+        "checked": "2026-10-03",
+        "installed_version": "",
+        "version_measured": "",
+        "bridge_checked": false,
+        "known_good": [],
+        "version_note": "Версия каталога сверена живым winget show 2026-10-14: 1.6.3.172. Страница MCP Roblox обновлена 2026-10-13 и просит актуальную Studio; хватает ли 1.6.3.172, не проверялось."
+      },
+      "connection": {
+        "kind": "local",
+        "command": [
+          "{DBAPP_PYTHON}",
+          "{PROGRAM}/tools/dbapp/launchers/roblox_bridge_launcher.py"
+        ],
+        "warm_up": false,
+        "note": "Команда из официальной документации Roblox для Windows: cmd.exe /c %LOCALAPPDATA%\\Roblox\\mcp.bat. Лаунчер не выдумывает путь: файла нет — отказ и шаги в студии. Это stdio встроенного сервера, не executor."
+      },
+      "license": "встроен в Roblox Studio",
+      "why": "Читать место, править скрипты Luau, запускать playtest в открытой Studio. Клиент видит и меняет открытое место — подключать только доверенный opencode.",
+      "requires": [
+        {
+          "what": "Roblox Studio",
+          "check": null,
+          "type": "manual",
+          "blocks": false,
+          "note": "шаблон пути на этой машине не измерен, поэтому реестр не делает вид, что студия найдена. Лаунчер смотрит только mcp.bat"
+        },
+        {
+          "what": "в студии включён Enable Studio as MCP server",
+          "check": "roblox-studio-server",
+          "type": "plugin",
+          "blocks": false,
+          "note": "проверяется наличие файла mcp.bat, который создаёт сама студия. Кнопки нет и быть не может: плагина у Roblox нет, сервер встроенный, а включается он только в окне студии (Assistant → … → Manage MCP Servers)"
+        }
+      ],
+      "setup_steps": [
+        "Поставь Roblox Studio. Исполнители кода не используются.",
+        "В Studio: Assistant → … → Manage MCP Servers → Enable Studio as MCP server. Это создаёт файл %LOCALAPPDATA%\\Roblox\\mcp.bat.",
+        "Выдели строку Roblox Studio и нажми «Настроить автоматически». Если mcp.bat нет, программа откажется и не скажет, что готово.",
+        "Перезапусти opencode. Студия должна быть открыта."
+      ],
+      "ready_here": false,
+      "ready_here_note": "2026-10-14 mcp.bat на этой машине не проверялся, живого ответа студии нет.",
+      "verdict": "Порог средний: Studio ставится, сервер включается внутри неё. Отдельный мост скачивать не надо"
+    },
+    {
+      "id": "godot",
+      "name": "Godot",
+      "source": "https://github.com/hi-godot/godot-ai",
+      "install": "плагин Godot AI в проекте, команда attach из дока редактора",
+      "program_install": {
+        "program": "Godot",
+        "method": "winget",
+        "winget_id": "GodotEngine.GodotEngine",
+        "catalog_version": "4.7.2",
+        "expected_publisher": "Godot Engine",
+        "expected_signer": "",
+        "signer_checked": "",
+        "needs_admin": false,
+        "needs_admin_verified": false,
+        "official_url": "https://godotengine.org/download",
+        "hand_over": false,
+        "publisher_trusted": true,
+        "bridge": "",
+        "instructions": "Идентификатор winget и версия 4.7.2 сверены живым winget show 2026-10-14 на этой машине; подпись файла пустая, файл не ставился. Godot AI v4 просит редактор 4.7 или новее. Плагин кладётся в addons/godot_ai/ и включается в настройках проекта. Команду attach пишет док плагина, не эта программа.",
+        "checked": "2026-10-14",
+        "installed_version": "",
+        "version_measured": "",
+        "bridge_checked": false,
+        "known_good": [],
+        "version_note": "Каталог сверен живым winget show 2026-10-14: 4.7.2, издатель Godot Engine. Пакет godot-ai 4.3.0 есть на PyPI, проверено 2026-10-14.",
+        "plugin": {
+          "finder": "godot",
+          "name": "Godot AI",
+          "button": "Докачать аддон Godot AI",
+          "hint": "выберет релиз под версию редактора, скачает godot-ai-v4-plugin.zip, сверит sha256 и распакует аддон в корень проекта. Глобальной папки аддонов у Godot нет: плагин живёт только в проекте. После распаковки включи его в Project → Project Settings → Plugins",
+          "unavailable": "не указан проект Godot (файл mcp-godot-project.txt) или редактор ниже 4.7 — под него плагина нет",
+          "fallback": ""
+        }
+      },
+      "connection": {
+        "kind": "local",
+        "command": [
+          "{DBAPP_PYTHON}",
+          "{PROGRAM}/tools/dbapp/launchers/godot_bridge_launcher.py"
+        ],
+        "warm_up": false,
+        "note": "Лаунчер запускает только command из mcp-godot-attach.json рядом с настройками. В списке обязано быть слово attach. Голый http://127.0.0.1:8000/mcp README запрещает: capability так не передаётся. Файл в репозиторий не кладётся."
+      },
+      "license": "MIT",
+      "why": "Сцены, узлы, скрипты и сигналы в открытом редакторе Godot 4.7+. Плагин и сервер — проект hi-godot, не официальный Godot.",
+      "requires": [
+        {
+          "what": "uv / uvx",
+          "check": "uvx",
+          "type": "command",
+          "args": [
+            "--version"
+          ],
+          "note": "док Godot AI запускает сервер через uvx"
+        },
+        {
+          "what": "Godot 4.7+ и включённый плагин Godot AI",
+          "check": "godot-ai-addon",
+          "type": "plugin",
+          "blocks": false,
+          "note": "программа снимает версию редактора и смотрит аддон addons/godot_ai в проекте. Godot AI v4 требует редактор 4.7 или новее: на 4.5 и 4.6 плагин не работает"
+        },
+        {
+          "what": "файл mcp-godot-attach.json с командой attach",
+          "check": null,
+          "type": "manual",
+          "blocks": false,
+          "note": "копия «Run this manually» из дока Godot AI. Без неё лаунчер отказывает, а не подставляет выдуманный адрес"
+        }
+      ],
+      "setup_steps": [
+        "Поставь Godot 4.7+ и uv. Плагин Godot AI включи в проекте: addons/godot_ai.",
+        "В доке плагина скопируй команду «Run this manually». В ней должно быть слово attach. Адрес http://127.0.0.1:8000/mcp не подходит.",
+        "Выдели строку Godot и нажми «Настроить автоматически». Вставь команду. Она ляжет в mcp-godot-attach.json рядом с настройками.",
+        "Перезапусти opencode. Редактор должен быть открыт. Программа его ответ не подделывает."
+      ],
+      "ready_here": false,
+      "ready_here_note": "2026-10-14 редактор не запускался, команда attach не снималась.",
+      "verdict": "Порог средний: Godot бесплатный, плагин ставится в проект, команда приходит из дока"
+    },
+    {
+      "id": "tiktok",
+      "name": "TikTok для бизнеса",
+      "source": "https://github.com/getmcpads-com/tiktok-ads-mcp-server",
+      "install": "npx -y @getmcpads/tiktok-ads-mcp-server@2.0.1",
+      "program_install": {
+        "program": "TikTok для бизнеса",
+        "method": "none",
+        "winget_id": "",
+        "catalog_version": "",
+        "expected_publisher": "",
+        "expected_signer": "",
+        "signer_checked": "",
+        "needs_admin": false,
+        "needs_admin_verified": false,
+        "official_url": "https://github.com/getmcpads-com/tiktok-ads-mcp-server",
+        "hand_over": true,
+        "publisher_trusted": true,
+        "bridge": "",
+        "instructions": "Ставить программу нечего: это API, не редактор. Нужны свой access token и App ID из кабинета TikTok Business. Они пишутся в mcp-tiktok.txt рядом с настройками и в репозиторий не попадают. Официальный удалённый MCP TikTok на 2026-10-14 в открытый доступ не подтверждался, поэтому берётся самостоятельный пакет Apache-2.0. Скрейпер и вход в чужой аккаунт не делаются.",
+        "checked": "2026-10-14",
+        "installed_version": "",
+        "version_measured": "",
+        "bridge_checked": false,
+        "known_good": [],
+        "version_note": "Пакет 2.0.1 есть в npm, license Apache-2.0, engines node >=22.12.0. Снято с реестра npm 2026-10-14. Живой запрос к API не делался: токена нет и быть не должно."
+      },
+      "connection": {
+        "kind": "local",
+        "command": [
+          "{DBAPP_PYTHON}",
+          "{PROGRAM}/tools/dbapp/launchers/tiktok_bridge_launcher.py"
+        ],
+        "warm_up": true,
+        "note": "Токен и App ID читает лаунчер из mcp-tiktok.txt и передаёт как TIKTOK_ACCESS_TOKEN и TIKTOK_APP_ID. В opencode.jsonc их нет. Запись в рекламный кабинет у пакета выключена, пока человек явно не подтвердит предпросмотр — так говорит описание пакета 2.0.1, живьём не проверялось."
+      },
+      "license": "Apache-2.0",
+      "why": "Читать рекламные кампании, группы и объявления своего кабинета TikTok. Запросы уходят на API TikTok. Чужие аккаунты и обход входа не поддерживаются.",
+      "requires": [
+        {
+          "what": "Node.js 22.12+",
+          "check": "node",
+          "type": "command",
+          "args": [
+            "--version"
+          ],
+          "min_version": 22,
+          "note": "engines пакета 2.0.1 требует >=22.12.0. Реестр проверяет мажор 22; границу 22.12 держит лаунчер"
+        },
+        {
+          "what": "npx",
+          "check": "npx",
+          "type": "command",
+          "args": [
+            "--version"
+          ],
+          "note": "пакет скачивается npx и в базу не копируется"
+        },
+        {
+          "what": "свой токен TikTok Business API",
+          "check": null,
+          "type": "manual",
+          "blocks": false,
+          "note": "файл mcp-tiktok.txt рядом с настройками. Без токена лаунчер отказывает и не печатает секрет"
+        }
+      ],
+      "setup_steps": [
+        "Нужен свой кабинет TikTok для бизнеса и Node 22.12+. Это не редактор и не обход входа.",
+        "Возьми access token и App ID в кабинете.",
+        "Выдели строку TikTok для бизнеса и нажми «Настроить автоматически». Впиши их. В opencode.jsonc и в журнал они не попадут: файл mcp-tiktok.txt ляжет рядом с настройками.",
+        "Перезапусти opencode. Запросы уйдут в API TikTok. Живой ответ кабинета программа не проверяла."
+      ],
+      "ready_here": false,
+      "ready_here_note": "2026-10-14 токена нет, запрос к API не выполнялся. Готовым сервер не считается.",
+      "verdict": "Порог высокий по доступу: нужен свой кабинет и токен. По установке — только Node"
+    },
+    {
+      "id": "capcut",
+      "name": "CapCut",
+      "source": "https://github.com/sun-guannan/VectCutAPI",
+      "install": "удалённый MCP по адресу, который даёт твой хост. Сайт CapCut адресом не является",
+      "program_install": {
+        "program": "CapCut",
+        "method": "winget",
+        "winget_id": "ByteDance.CapCut",
+        "catalog_version": "9.4.0.4015",
+        "expected_publisher": "Bytedance Pte. Ltd.",
+        "expected_signer": "",
+        "signer_checked": "",
+        "needs_admin": false,
+        "needs_admin_verified": false,
+        "official_url": "https://www.capcut.com",
+        "hand_over": true,
+        "publisher_trusted": true,
+        "bridge": "",
+        "instructions": "Редактор CapCut ставится через winget, идентификатор ByteDance.CapCut. Версия 9.4.0.4015 сверена живым winget show 2026-10-14 на этой машине. Вход в аккаунт программа не делает. Сам мост — не установщик: это адрес MCP в интернете, который даёт твой хост. На capcut.com опубликованного MCP нет, и программа туда не ходит.",
+        "checked": "2026-10-14",
+        "installed_version": "",
+        "version_measured": "",
+        "bridge_checked": false,
+        "known_good": [],
+        "version_note": "Каталог сверен живым winget show 2026-10-14: 9.4.0.4015, издатель Bytedance Pte. Ltd. Подпись не снималась: файла на машине нет."
+      },
+      "connection": {
+        "kind": "remote",
+        "manual_config": true,
+        "note": "OpenCode подключается по HTTPS к адресу из mcp-capcut.json. Адрес не выдуман: его вписывает человек. capcut.com, localhost и частные сети отвергаются. Живой запрос 2026-10-14 не делался. Черновик открывается в CapCut. Экспорт ролика и облачный рендер эта запись не обещает: облачный рендер VectCut закрытый и здесь не проверялся.",
+        "manual_hint": "У CapCut кнопки Copy Config нет: адрес MCP в интернете даёт твой хост, и вписывает его окно — выдели строку CapCut и нажми «Настроить автоматически». Нужен https и чужой адрес, не страница capcut.com. Токен — если хост его просит, можно оставить пустым."
+      },
+      "license": "Apache-2.0 у VectCutAPI; сам CapCut — программа ByteDance",
+      "why": "Монтажёр CapCut по сети: собрать черновик через чужой MCP в интернете и открыть его в CapCut. Это не официальный сервер ByteDance и не обход входа в CapCut.",
+      "auth": "Если хост просит токен, он лежит в mcp-capcut.json. В журнал не пишется. В opencode.jsonc попадает только как заголовок, иначе удалённый сервер его не увидит. В репозиторий не копировать.",
+      "requires": [
+        {
+          "what": "свой адрес MCP по HTTPS",
+          "check": null,
+          "type": "manual",
+          "blocks": false,
+          "note": "кнопка записывает его в mcp-capcut.json. Без адреса включать нечего. Адрес capcut.com не подходит"
+        },
+        {
+          "what": "CapCut, чтобы открыть черновик",
+          "check": null,
+          "type": "manual",
+          "blocks": false,
+          "note": "редактор ставится через winget, вход делает человек. Мост редактор не открывает и ролик не экспортирует"
+        }
+      ],
+      "setup_steps": [
+        "У CapCut нет своего MCP в интернете. Адрес capcut.com программа не примет и туда не ходит.",
+        "Нужен адрес MCP по https, который дал твой хост. Это не страница сайта и не порт 9001 локального VectCutAPI.",
+        "Выдели строку CapCut и нажми «Настроить автоматически». Впиши адрес. Токен — только если хост его просит. В журнал значение не попадёт.",
+        "Редактор CapCut поставь отдельно, если его нет. Вход в аккаунт программа не делает.",
+        "Перезапусти opencode. Готовым мост не считается: живого ответа не было. Ролик эта кнопка не экспортирует."
+      ],
+      "ready_here": false,
+      "ready_here_note": "2026-10-14 адреса MCP не было, запрос в интернет не выполнялся. Готовым мост не считается.",
+      "verdict": "Порог высокий: нужен свой хост с MCP. Официального интернет-моста у CapCut нет"
+    },
+    {
+      "id": "spotify",
+      "name": "Spotify",
+      "source": "https://github.com/XavierFabregat/spotify-mcp",
+      "install": "npx -y @xavifabregat/spotify-mcp@0.1.2",
+      "program_install": {
+        "program": "Spotify",
+        "method": "winget",
+        "winget_id": "Spotify.Spotify",
+        "catalog_version": "1.3.4.258.gc60b10b0946a",
+        "expected_publisher": "Spotify AB",
+        "expected_signer": "",
+        "signer_checked": "",
+        "needs_admin": false,
+        "needs_admin_verified": false,
+        "official_url": "https://www.spotify.com/download/",
+        "hand_over": true,
+        "publisher_trusted": true,
+        "bridge": "",
+        "instructions": "Плеер Spotify ставится через winget, идентификатор Spotify.Spotify, издатель Spotify AB по странице winstall. Версию на 2026-10-14 здесь не измеряли, поэтому в каталог она не записана. Сам мост — не плеер: это пакет @xavifabregat/spotify-mcp 0.1.2, MIT, Node 20+. Он ходит в Spotify Web API. Не продукт Spotify AB. Воспроизведение Spotify отдаёт только Premium и только уже открытому приложению. Вход делает мастер пакета, эта программа браузер не открывает.",
+        "checked": "2026-10-14",
+        "installed_version": "",
+        "version_measured": "",
+        "bridge_checked": false,
+        "known_good": [],
+        "version_note": "Пакет 0.1.2 есть в npm, license MIT, engines node >=20, bin spotify-mcp. Снято с реестра npm 2026-10-14. Живой запрос к Spotify не делался."
+      },
+      "connection": {
+        "kind": "local",
+        "command": [
+          "{DBAPP_PYTHON}",
+          "{PROGRAM}/tools/dbapp/launchers/spotify_bridge_launcher.py"
+        ],
+        "warm_up": true,
+        "note": "Client ID, если его записала кнопка, лаунчер кладёт в SPOTIFY_CLIENT_ID и в журнал не пишет. Токены пакета живут в ~/.spotify-mcp, не в репозитории. Живой ответ Spotify 2026-10-14 не проверялся."
+      },
+      "license": "MIT",
+      "why": "Включить, поставить на паузу и поставить в очередь трек в уже открытом Spotify. Это официальный Web API, не скачивание файла.",
+      "requires": [
+        {
+          "what": "Node.js 20+",
+          "check": "node",
+          "type": "command",
+          "args": [
+            "--version"
+          ],
+          "min_version": 20,
+          "note": "engines пакета 0.1.2 требует >=20. Границу держит и лаунчер"
+        },
+        {
+          "what": "npx",
+          "check": "npx",
+          "type": "command",
+          "args": [
+            "--version"
+          ],
+          "note": "пакет скачивается npx и в базу не копируется"
+        },
+        {
+          "what": "свой Client ID Spotify",
+          "check": null,
+          "type": "manual",
+          "blocks": false,
+          "note": "кнопка пишет его в mcp-spotify.txt. Вход в аккаунт делает мастер пакета, не эта программа"
+        },
+        {
+          "what": "Spotify Premium и открытое приложение",
+          "check": null,
+          "type": "manual",
+          "blocks": false,
+          "note": "без Premium и без устройства Web API трек не включает. Программа это не подделывает"
+        }
+      ],
+      "setup_steps": [
+        "Нужен свой Client ID приложения Spotify и аккаунт Premium. Чужой аккаунт не подходит.",
+        "Плеер Spotify должен быть установлен и открыт: API только рулит уже запущенным приложением.",
+        "Выдели строку Spotify и нажми «Настроить автоматически». Client ID в журнал не попадёт.",
+        "После включения один раз нужен вход пакета: npx -y @xavifabregat/spotify-mcp@0.1.2 init. Эту кнопку программа сама не нажимает.",
+        "Перезапусти opencode. Готовым мост не считается: живого ответа Spotify не было."
+      ],
+      "ready_here": false,
+      "ready_here_note": "2026-10-14 входа в Spotify не было, запрос к API не выполнялся.",
+      "verdict": "Порог средний: нужен свой Client ID, Premium и открытый Spotify. Скачивания трека нет"
+    },
+    {
+      "id": "chatgpt",
+      "name": "ChatGPT API",
+      "source": "https://developers.openai.com/api/reference/resources/responses/methods/create",
+      "install": "свой ключ и имя модели, запрос на https://api.openai.com/v1/responses",
+      "program_install": {
+        "program": "ChatGPT API",
+        "method": "none",
+        "winget_id": "",
+        "catalog_version": "",
+        "expected_publisher": "",
+        "expected_signer": "",
+        "signer_checked": "",
+        "needs_admin": false,
+        "needs_admin_verified": false,
+        "official_url": "https://platform.openai.com/api-keys",
+        "hand_over": true,
+        "publisher_trusted": true,
+        "bridge": "",
+        "instructions": "Ставить программу нечего: это официальный API, не сайт chatgpt.com. Ключ и имя модели человек копирует из своего кабинета. Имя модели программа не выдумывает. Браузер, куки и вход в чужой аккаунт не используются.",
+        "checked": "2026-10-14",
+        "installed_version": "",
+        "version_measured": "",
+        "bridge_checked": false,
+        "known_good": [],
+        "version_note": "Адрес POST /v1/responses и поле previous_response_id сверены с документацией OpenAI 2026-10-14. Живой запрос не делался: ключа нет и быть не должно."
+      },
+      "connection": {
+        "kind": "local",
+        "command": [
+          "{DBAPP_PYTHON}",
+          "{PROGRAM}/tools/dbapp/launchers/chatgpt_bridge_launcher.py"
+        ],
+        "warm_up": false,
+        "note": "Лаунчер сам является MCP. Ключ читает из mcp-chatgpt.txt и в журнал не пишет. При старте запрос не делает. Редиректы не следуют."
+      },
+      "license": "свой код программы; API — условия OpenAI",
+      "why": "Создать новый ответ и продолжить его по id. Это не чат на сайте chatgpt.com.",
+      "requires": [
+        {
+          "what": "свой ключ API и имя модели",
+          "check": null,
+          "type": "manual",
+          "blocks": false,
+          "note": "кнопка пишет их в mcp-chatgpt.txt. В журнал значения не попадают"
+        }
+      ],
+      "setup_steps": [
+        "Это не сайт chatgpt.com. Официального MCP у сайта нет, браузер программа не открывает.",
+        "В кабинете OpenAI возьми свой ключ и точное имя модели. Программа модель не подставляет.",
+        "Выдели строку ChatGPT API и нажми «Настроить автоматически». Ключ в журнал не попадёт.",
+        "Перезапусти opencode. Готовым мост не считается: живого ответа API не было."
+      ],
+      "ready_here": false,
+      "ready_here_note": "2026-10-14 ключа не было, запрос на api.openai.com не выполнялся.",
+      "verdict": "Порог высокий по доступу: нужен свой ключ. Сайт ChatGPT этот мост не открывает"
+    },
+    {
+      "id": "codex",
+      "name": "Codex",
+      "source": "https://learn.chatgpt.com/docs/non-interactive-mode",
+      "install": "winget install -e --id OpenAI.Codex, затем свой вход codex login",
+      "program_install": {
+        "program": "Codex CLI",
+        "method": "winget",
+        "winget_id": "OpenAI.Codex",
+        "catalog_version": "0.161.0",
+        "expected_publisher": "OpenAI, Inc.",
+        "expected_signer": "",
+        "signer_checked": "",
+        "needs_admin": false,
+        "needs_admin_verified": false,
+        "official_url": "https://learn.chatgpt.com/docs/non-interactive-mode",
+        "hand_over": true,
+        "publisher_trusted": true,
+        "bridge": "",
+        "instructions": "CLI ставится через winget, идентификатор OpenAI.Codex, издатель OpenAI, Inc. по странице winstall. Версию на 2026-10-14 командой winget show здесь не измеряли, поэтому в каталог она не записана. Магазинный идентификатор приложения сюда не записан: в поиске он путался с чужой программой, и здесь он не проверялся. Вход — codex login, пароль программа не спрашивает. По умолчанию песочница только на чтение. danger-full-access и --yolo не передаются.",
+        "checked": "2026-10-14",
+        "installed_version": "",
+        "version_measured": "",
+        "bridge_checked": false,
+        "known_good": [],
+        "version_note": "Команды codex exec и codex queue сверены с документацией OpenAI 2026-10-14. Живой запуск не делался."
+      },
+      "connection": {
+        "kind": "local",
+        "command": [
+          "{DBAPP_PYTHON}",
+          "{PROGRAM}/tools/dbapp/launchers/codex_bridge_launcher.py"
+        ],
+        "warm_up": false,
+        "note": "Новый чат — codex exec --json, по умолчанию --sandbox read-only. Сообщение в существующий чат — codex queue, ответ этой командой не ждётся. При старте запрос не делается."
+      },
+      "license": "свой код программы; Codex CLI — условия OpenAI",
+      "why": "Создать новый чат Codex CLI и отправить в него команду. Сайт не открывается, полный доступ к диску не даётся.",
+      "requires": [
+        {
+          "what": "команда codex",
+          "check": null,
+          "type": "manual",
+          "blocks": false,
+          "note": "её ставит winget OpenAI.Codex. Лаунчер откажется, если команды нет"
+        },
+        {
+          "what": "свой вход codex login",
+          "check": null,
+          "type": "manual",
+          "blocks": false,
+          "note": "пароль программа не спрашивает и сайт не открывает"
+        }
+      ],
+      "setup_steps": [
+        "Поставь Codex CLI: winget install -e --id OpenAI.Codex. Чужой магазинный пакет не подставляется.",
+        "Войди сам: codex login. Пароль эта программа не спрашивает.",
+        "Выдели строку Codex и нажми «Настроить автоматически». Кнопка только проверяет, что команда есть, и вписывает мост.",
+        "Новый чат по умолчанию только читает. Запись в папку — отдельная просьба workspace-write. danger-full-access нет.",
+        "Перезапусти opencode. Готовым мост не считается: живого ответа Codex не было."
+      ],
+      "ready_here": false,
+      "ready_here_note": "2026-10-14 команда codex здесь не запускалась.",
+      "verdict": "Порог средний: нужен свой Codex CLI и свой вход. Полный доступ к диску не даётся"
+    },
+    {
+      "id": "cursor",
+      "name": "Cursor",
+      "source": "https://cursor.com/docs/cli/reference/parameters",
+      "install": "официальная установка Cursor CLI, команда agent",
+      "program_install": {
+        "program": "Cursor CLI",
+        "method": "manual",
+        "winget_id": "",
+        "catalog_version": "",
+        "expected_publisher": "",
+        "expected_signer": "",
+        "signer_checked": "",
+        "needs_admin": false,
+        "needs_admin_verified": false,
+        "official_url": "https://cursor.com/docs/cli/installation",
+        "hand_over": true,
+        "publisher_trusted": true,
+        "bridge": "",
+        "instructions": "Нужна команда agent из Cursor CLI, не любой файл с таким именем. Установка описана на cursor.com/docs/cli/installation. Редактор Cursor и CLI — разные установки: кнопку «поставить редактор» здесь нет, чтобы не принять IDE за команду agent. Ключ, если он нужен, пишется в mcp-cursor.txt и в командную строку не попадает. --yolo не передаётся. --force ставится только если явно попросили правки в режиме агента.",
+        "checked": "2026-10-14",
+        "installed_version": "",
+        "version_measured": "",
+        "bridge_checked": false,
+        "known_good": [],
+        "version_note": "Команды agent create-chat и agent -p --resume сверены с документацией Cursor 2026-10-14. Живой запуск не делался."
+      },
+      "connection": {
+        "kind": "local",
+        "command": [
+          "{DBAPP_PYTHON}",
+          "{PROGRAM}/tools/dbapp/launchers/cursor_bridge_launcher.py"
+        ],
+        "warm_up": false,
+        "note": "Новый чат — agent create-chat. Команда в него — agent -p --resume, по умолчанию режим ask и без --force. Ключ уходит переменной CURSOR_API_KEY, не аргументом. При старте запрос не делается."
+      },
+      "license": "свой код программы; Cursor CLI — условия Cursor",
+      "why": "Создать новый чат Cursor CLI и отправить в него команду. Файлы без явной просьбы не правятся.",
+      "requires": [
+        {
+          "what": "команда agent из Cursor CLI",
+          "check": null,
+          "type": "manual",
+          "blocks": false,
+          "note": "не любой agent.exe. Лаунчер откажется, если команды нет"
+        },
+        {
+          "what": "свой вход или ключ Cursor",
+          "check": null,
+          "type": "manual",
+          "blocks": false,
+          "note": "ключ необязателен, если вход уже сделан. В журнал не пишется"
+        }
+      ],
+      "setup_steps": [
+        "Поставь Cursor CLI по официальной странице. Редактор сам по себе команду agent не заменяет.",
+        "Войди сам или приготовь свой ключ. Чужой аккаунт не подходит.",
+        "Выдели строку Cursor и нажми «Настроить автоматически». Ключ можно оставить пустым. В журнал он не попадёт.",
+        "По умолчанию режим ask и без --force. Правка файлов — только явная просьба.",
+        "Перезапусти opencode. Готовым мост не считается: живого ответа Cursor не было."
+      ],
+      "ready_here": false,
+      "ready_here_note": "2026-10-14 команда agent здесь не запускалась.",
+      "verdict": "Порог средний: нужен свой Cursor CLI. --yolo и правка файлов по умолчанию не включаются"
+    },
+    {
       "id": "ldplayer",
       "name": "LDPlayer (управление и пентест)",
       "source": "https://github.com/ThiagoFrag/mcp-ldplayer",
@@ -1099,6 +1978,70 @@
       "ready_here_note": "07.10.2026 в песочнице проверено: окружение моста ставится по requirements.txt, мост поднимается (python -m src.main), GET /api/v1/health отвечает «degraded» (сервер жив, токена и моделей нет), GET /api/v1/models отдаёт пустой список, POST /api/v1/chat/completions на несуществующую модель отвечает понятным 404, наш MCP-лаунчер отвечает по протоколу 2025-06-18 тремя инструментами и честно отказывает без токена. Чего проверить не удалось: живой ответ модели — из песочницы нет доступа к арене, а токена у программы нет; панель моста; поведение на Windows.",
       "verdict": "Мост поднимается и отвечает, модели становятся провайдером opencode; живой ответ модели на этой машине не проверен — зелёной отметки нет.",
       "manual_setup": false
+    },
+    {
+      "id": "claude",
+      "name": "Claude",
+      "source": "https://docs.claude.com/en/docs/claude-code/cli-reference",
+      "install": "официальная установка Claude Code: https://docs.claude.com/en/docs/claude-code/setup, затем свой вход claude auth login",
+      "program_install": {
+        "program": "Claude Code CLI",
+        "method": "official",
+        "winget_id": "",
+        "catalog_version": "",
+        "expected_publisher": "",
+        "expected_signer": "",
+        "signer_checked": "",
+        "needs_admin": false,
+        "needs_admin_verified": false,
+        "official_url": "https://docs.claude.com/en/docs/claude-code/setup",
+        "hand_over": true,
+        "publisher_trusted": false,
+        "bridge": "",
+        "instructions": "У Claude Code нет проверяемого нами магазинного идентификатора: установка описана на официальной странице, и подставлять выдуманный winget_id мы не будем. Версия CLI на этой машине не измерялась: программы нет. Вход — claude auth login, он открывает браузер; сам мост команды входа не запускает никогда.",
+        "checked": "2026-10-15",
+        "installed_version": "",
+        "version_measured": "",
+        "bridge_checked": false,
+        "known_good": [],
+        "version_note": "Формы команды сверены с документацией Claude Code 15.10.2026: `claude -p`, `--output-format json`, `--permission-mode plan`, `--permission-prompts none` (нужна версия 2.1.259+), `--disallowedTools` отдельными именами. Живой запуск не делался: настоящей CLI на машине нет."
+      },
+      "connection": {
+        "kind": "local",
+        "command": [
+          "{DBAPP_PYTHON}",
+          "{PROGRAM}/tools/dbapp/launchers/claude_bridge_launcher.py"
+        ],
+        "warm_up": false,
+        "note": "Новый чат — claude -p с --output-format json. Продолжение — тот же вызов плюс --resume <session_id>. Ограничения собираются заново на каждый вызов: plan, --permission-prompts none и --disallowedTools Edit Write NotebookEdit MultiEdit пятью отдельными аргументами. При старте запрос к модели не делается."
+      },
+      "license": "свой код программы; Claude Code — условия Anthropic",
+      "why": "Создать новый чат Claude Code CLI или продолжить начатый. Файлы модель не правит инструментами, но абсолютной защиты от изменений нет. Сайт не открывается.",
+      "requires": [
+        {
+          "what": "команда claude",
+          "check": null,
+          "type": "manual",
+          "blocks": false,
+          "note": "официальная установка описана на docs.claude.com/en/docs/claude-code/setup. Лаунчер откажется, если команды нет, и скажет почему."
+        },
+        {
+          "what": "свой вход claude auth login",
+          "check": null,
+          "type": "manual",
+          "blocks": false,
+          "note": "открывает браузер. Мост запускает только проверку claude auth status и никогда — саму команду входа."
+        }
+      ],
+      "setup_steps": [
+        "Поставь Claude Code по официальной инструкции: https://docs.claude.com/en/docs/claude-code/setup.",
+        "Войди сам: claude auth login. Браузер откроет программа, не мост.",
+        "Выдели строку Claude и нажми «Настроить автоматически»: кнопка только проверит, что команда есть и версия подходит, и впишет мост.",
+        "Перезапусти opencode. Готовым мост не считается: живого ответа Claude Code на этой машине ещё не было."
+      ],
+      "ready_here": false,
+      "ready_here_note": "2026-10-15 настоящей Claude Code CLI на машине нет, живой ответ модели не получен.",
+      "verdict": "Порог средний: нужна своя Claude Code и свой вход с браузером. Инструменты правки запрещены, но абсолютной защиты файлов нет"
     }
   ],
   "excluded": [
@@ -1116,6 +2059,21 @@
       "name": "book-to-skill",
       "source": "https://github.com/virgiliojr94/book-to-skill",
       "reason": "32,8 тыс. звёзд, MIT, но это Python-конвертер с зависимостями, а не готовый скилл. Просто скопировать нельзя: нужны Python и пакеты из pyproject.toml. Описан в инструкции как инструмент"
+    },
+    {
+      "name": "VK Музыка",
+      "source": "https://dev.vk.com",
+      "reason": "Официального API на включение трека нет. Сторонние клиенты ходят в закрытый API и скачивают файл. Этот мост так не делает: ни обход входа, ни скачивание."
+    },
+    {
+      "name": "Яндекс.Музыка",
+      "source": "https://music.yandex.ru",
+      "reason": "Открытого API на включение трека нет. Сторонние клиенты ходят в закрытый API, стримят и скачивают файл, либо внедряются в окно плеера. Этот мост так не делает."
+    },
+    {
+      "name": "ChatGPT на сайте chatgpt.com",
+      "source": "https://chatgpt.com",
+      "reason": "Официального MCP у сайта нет. Браузер и куки сюда не кладутся. В реестре отдельно есть мост к API api.openai.com по своему ключу и мост к Codex CLI по своему входу."
     }
   ],
   "program_install_note": "Поле program_install отвечает на вопрос «как поставить программу, нужную серверу, и где программа обязана остановиться». Имя отдельное от install намеренно: install занято человеческим пояснением и остаётся текстом. Метод: winget — кнопка «установить» ставит через winget; official-download — кнопка качает с официального адреса и сверяет подпись; manual — кнопки нет: официальная страница и готовая команда в буфер; none — программа не нужна, ставить нечего. Поле catalog_version — это версия в каталоге winget, а не установленная: они различаются, и путать их нельзя. Поле checked — когда сверяли с каталогом. Поле needs_admin_verified говорит, подтверждены ли права администратора живой проверкой; где false, записано ожидание, а не факт. Два поля про издателя не путать: expected_publisher — издатель из манифеста каталога winget, его показывает winget show; expected_signer — тот, кто подписал сам файл, и он другой. На Node.js издатель в каталоге Node.js Foundation, а подписал node.exe OpenJS Foundation. Сверка идёт по expected_signer, и сверять строго по издателю из каталога нельзя: настоящий файл был бы объявлен поддельным. Поле expected_signer заполнено только там, где CN подтверждён на настоящем файле; пустое означает «проверять не с чем», и сверка никогда не назовёт такой файл проверенным.",

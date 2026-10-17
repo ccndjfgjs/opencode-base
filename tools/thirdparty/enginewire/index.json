@@ -1,0 +1,23 @@
+{
+  "family": "enginewire",
+  "name": "EngineWire",
+  "kind": "archive",
+  "server": "unreal-engine-mcp-server@0.6.0-beta-f",
+  "checked": "2026-10-17",
+  "note": "Сервер и плагин обязаны быть из одного релиза: при расхождении каждый вызов падает с versionMismatch. Плагин приходит исходниками, бинарей в релизе нет — их собирает сам редактор при первом открытии проекта.",
+  "builds": [
+    {
+      "since": "5.0",
+      "until": "5.8",
+      "version": "0.6.0-beta-f",
+      "file": "EngineWire-plugin-0.6.0-beta-f.zip",
+      "url": "https://github.com/ChiR24/Unreal_mcp/releases/download/v0.6.0-beta-f/EngineWire-plugin-0.6.0-beta-f.zip",
+      "sha256": "5abe558f02d9a31b8cac78f46ef7768eb7283ea9de381d8b2dd0825d92c079bb",
+      "size": 3933665,
+      "bundled": true,
+      "folder": "plugins/EngineWire",
+      "strip": 1,
+      "dest": "Plugins"
+    }
+  ]
+}

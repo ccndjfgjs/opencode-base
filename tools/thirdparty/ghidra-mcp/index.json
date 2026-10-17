@@ -1,0 +1,25 @@
+{
+  "family": "ghidra-mcp",
+  "name": "GhidraMCP",
+  "kind": "archive",
+  "server": "bridge-mcp-ghidra",
+  "checked": "2026-10-17",
+  "note": "Расширение приходит с меткой своей версии Ghidra, и Гидра отказывается грузить расширение с чужой меткой. Поэтому полосы узкие: под каждую установленную версию — свой релиз. Официального sha256 у этих архивов нет (проверено по релизам 17.10.2026), поэтому сверка помечается как «нечем сверять», а не как «совпало». В релизе лежит исходник расширения, бинарей нет.",
+  "builds": [
+    {
+      "since": "12.1.4",
+      "until": "12.1.4",
+      "version": "7.0.0-rc.3",
+      "file": "GhidraMCP-7.0.0-rc.3.zip",
+      "url": "https://github.com/bethington/ghidra-mcp/releases/download/v7.0.0-rc.3/GhidraMCP-7.0.0-rc.3.zip",
+      "sha256": "",
+      "local_sha256": "0202384ee7c8506aac67ae7216a7e881a0977aa693c4ab2049a46621ca64d4d9",
+      "local_sha256_when": "2026-10-17",
+      "size": 759298,
+      "bundled": true,
+      "folder": "GhidraMCP",
+      "strip": 0,
+      "dest": "Extensions/Ghidra"
+    }
+  ]
+}

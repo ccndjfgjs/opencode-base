@@ -48,11 +48,13 @@ from pathlib import Path
 try:
     import blender_addon  # type: ignore[import-not-found]
     import bridges  # type: ignore[import-not-found]
+    import editor_plugins  # type: ignore[import-not-found]
     import mcp_registry  # type: ignore[import-not-found]
     import programs  # type: ignore[import-not-found]
-except ImportError:  # pragma: no cover - запуск как пакет
+except ImportError:  # pragma: no cover — запуск как пакет
     from . import blender_addon  # type: ignore[no-redef]
     from . import bridges  # type: ignore[no-redef]
+    from . import editor_plugins  # type: ignore[no-redef]
     from . import mcp_registry  # type: ignore[no-redef]
     from . import programs  # type: ignore[no-redef]
 
@@ -110,6 +112,7 @@ class Card:
     update: programs.UpdateView = field(default_factory=programs.UpdateView)
     alternatives: list[dict] = field(default_factory=list)
     exe_path: str = ""             # что открывать кнопкой «Открыть папку»
+    plugin_fetch: object = None    # кто умеет поставить плагин этой карточки
 
     @property
     def needs_admin(self) -> bool:
@@ -396,7 +399,15 @@ def _plugin_handler(finder: str):
         def state(use_fallback: bool = False):
             return bridges.obs_plugin_state()
 
-        return state, bridges.ensure_plugin
+        def fetch(progress=None):
+            # Путь ищется здесь, а не в окне: окно работает со всеми
+            # плагинами одинаково и не знает, где лежит папка OBS.
+            path = bridges.obs_installed()
+            if path is None:
+                return False, "OBS не установлена — докачивать некуда"
+            return bridges.ensure_plugin(path, progress=progress)
+
+        return state, fetch
     if finder == "blender-addon" and blender_addon is not None:
         # use_fallback приходит из реестра, а не из кода: разрешение на
         # запасную дорогу — решение человека о том, можно ли класть файл
@@ -408,6 +419,12 @@ def _plugin_handler(finder: str):
             return blender_addon.install_addon(use_fallback, progress=progress)
 
         return state, fetch
+    handlers = getattr(editor_plugins, "HANDLERS", {}) if editor_plugins else {}
+    if finder in handlers:
+        # Редакторы и движки: плагин лежит в проекте, а версия программы
+        # снимается сама. Карточка ничего не спрашивает — состояние и
+        # установка описаны в модуле программы.
+        return handlers[finder]
     return None
 
 
@@ -433,8 +450,11 @@ def _fill_plugin(card: Card) -> None:
                      f"а код такого не умеет: кнопки не будет — и это отказ, "
                      f"а не молчание")
         return
-    state, _fetch = handler
+    state, fetch = handler
     view.present, view.can_write, view.note = state(view.use_fallback)
+    # Кто умеет поставить — хранится на карточке, чтобы кнопка в окне не
+    # разбиралась, какому мосту какой плагин достался.
+    card.plugin_fetch = fetch
     if not view.present and view.note:
         card.bridge_pending.append(view.note)
 

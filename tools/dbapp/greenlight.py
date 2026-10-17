@@ -28,7 +28,7 @@ opencode-base (PyQt6, Windows) в ней не нуждается — опция 
     greenlight verify <папка> --build-name <имя>    облако Revyl, по подтверждению
 
 Чего программа не делает: не ставит Go и не собирает greenlight за человека
-без его команды (кнопка «Собрать greenlight» — отдельное действие), не
+без его команды (`greenlight.py build` — отдельное действие), не
 запускает `scan --app-id` и `auth` (это App Store Connect с аккаунтом), не
 подставляет имя сборки для облака и не отправляет в облако Revyl ничего без
 явного подтверждения.
@@ -95,6 +95,20 @@ NO_GO_NOTE = (
     "и сказать прямо, если их нет, — вот это оно и есть."
 )
 
+#: Проверкам ставить софт нельзя: программа ставит, а проверка не имеет права
+#: менять машину, на которой сама работает. Та же переменная, что у rtk.
+NO_INSTALL_ENV = "OPENCODE_NO_AUTO_INSTALL"
+
+#: Go ставим через winget и сами установщик не качаем: winget сверяет его хэш
+#: по своему манифесту. Пакет известный, версия — из go.mod автора (go 1.24.0).
+GO_PACKET = "GoLang.Go"
+GO_MIN = (1, 24, 0)
+GO_MANUAL = (
+    "Поставьте Go 1.24 или новее (winget install GoLang.Go) и повторите "
+    "установку галочки; либо положите готовый greenlight в PATH."
+)
+
+
 #: Возврат «есть находки уровня CRITICAL/HIGH» при --exit-code: у самого
 #: сканера это код 1 без сообщения, поэтому --exit-code мы не передаём, а
 #: судим по отчёту.
@@ -141,8 +155,26 @@ def find_binary() -> tuple[Path | None, str]:
 
 
 def find_go() -> str | None:
-    """Go в PATH — без него сборка из исходников невозможна."""
-    return shutil.which("go")
+    """Go для сборки из исходников. Без него сканер не сделать.
+
+    Найдено 15.10.2026 на живой проверке: PATH у процесса, который запущен
+    до установки Go, остаётся старым, и модуль отвечал «Go не установлен»,
+    хотя Go стоял. Поэтому смотрим и стандартную папку установки — так же,
+    как ищем rtk не только в PATH.
+    """
+    found = shutil.which("go")
+    if found:
+        return found
+    seen: set[str] = set()
+    for var in ("ProgramFiles", "ProgramW6432"):
+        root = os.environ.get(var) or r"C:\Program Files"
+        if root in seen:
+            continue
+        seen.add(root)
+        candidate = Path(root) / "Go" / "bin" / "go.exe"
+        if candidate.is_file():
+            return str(candidate)
+    return None
 
 
 def find_make() -> str | None:
@@ -177,6 +209,138 @@ def make_version(make: str | None = None) -> str:
         return ""
     text = (done.stdout or done.stderr).strip()
     return text.splitlines()[0] if text else ""
+
+
+def go_version_tuple(text: str) -> tuple[int, int, int] | None:
+    """Версия Go из строки «go version go1.27.0 windows/amd64»."""
+    for piece in text.split():
+        if not piece.startswith("go1."):
+            continue
+        try:
+            numbers = [int(p) for p in piece[3:].split(".")[:3]]
+        except ValueError:
+            return None
+        while len(numbers) < 3:
+            numbers.append(0)
+        return numbers[0], numbers[1], numbers[2]
+    return None
+
+
+def install_go(progress=None) -> tuple[list[str], list[str]]:
+    """Ставит Go сам, чтобы сканер можно было собрать на чужой машине.
+
+    Правило то же, что у rtk: нажата галочка — значит человек хочет эту
+    функцию. Скачиваем мы при этом не установщик, а winget сверяет его хэш
+    сам; проверкам ставить запрещено переменной NO_INSTALL_ENV.
+    """
+    messages: list[str] = []
+    errors: list[str] = []
+
+    def say(text: str) -> None:
+        messages.append(text)
+        if progress:
+            progress(text)
+
+    if os.environ.get(NO_INSTALL_ENV, ""):
+        return messages, [f"установка Go запрещена переменной {NO_INSTALL_ENV}: "
+                          "её выставили проверки."]
+
+    already = find_go()
+    if already:
+        return [f"Go уже есть: {go_version(already)}"], []
+
+    if not sys.platform.startswith("win"):
+        return messages, [f"автоустановка Go есть только на Windows. {GO_MANUAL}"]
+    if not shutil.which("winget"):
+        return messages, [f"winget не найден — поставить Go нечем. {GO_MANUAL}"]
+
+    say(f"Go не найден — ставлю сам через winget (пакет {GO_PACKET}). "
+        "Установщик около 100 МБ, система может запросить разрешение.")
+    command = ["winget", "install", "--id", GO_PACKET, "--exact", "--silent",
+               "--accept-package-agreements", "--accept-source-agreements"]
+    try:
+        done = subprocess.run(
+            command, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=1800,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return messages, [f"winget не отработал: {exc}. {GO_MANUAL}"]
+
+    tail = [line.strip() for line in (done.stdout or "").splitlines() if line.strip()]
+    tail = " / ".join(tail[-3:])[:200]
+
+    # Успех определяется не кодом winget, а тем, появился ли Go. Найдено
+    # 15.10.2026 живым прогоном: если Go уже стоит, winget отвечает кодом
+    # «пакет уже установлен» (2316632107), и по коду это выглядело бы как
+    # поломка, хотя всё на месте. Смотрим на результат, а не на код.
+    go = find_go()
+    if not go:
+        if done.returncode != 0:
+            return messages, [f"winget вернул код {done.returncode}: {tail}. "
+                              f"{GO_MANUAL}"]
+        return messages, ["winget отработал, но Go не найден даже в папке "
+                          "Program Files. Перезапустите программу: у процесса "
+                          f"старый PATH. {GO_MANUAL}"]
+    if done.returncode != 0:
+        say(f"winget ответил кодом {done.returncode} ({tail}), но Go на месте — "
+            "значит, он был установлен раньше.")
+    version = go_version(go)
+    triple = go_version_tuple(version)
+    if triple and triple < GO_MIN:
+        return messages, [f"{version} — старее нужного: нужно "
+                          f"{GO_MIN[0]}.{GO_MIN[1]} или новее, как в go.mod автора."]
+    say(f"Готово: {version}")
+    return messages, errors
+
+
+def ensure_scanner(dest: Path, progress=None) -> tuple[list[str], list[str]]:
+    """Доводит greenlight до рабочего состояния: сканер есть или будет собран.
+
+    Вызывается из пути установки галочки. Проверка состояния сюда не заходит:
+    она только читает и ничего не ставит.
+    """
+    messages: list[str] = []
+    errors: list[str] = []
+
+    def say(text: str) -> None:
+        messages.append(text)
+        if progress:
+            progress(text)
+
+    binary = find_binary()[0]
+    works, note = binary_works(binary)
+    if works:
+        return [f"Сканер уже собран: {note}"], []
+
+    if os.environ.get(NO_INSTALL_ENV, ""):
+        return messages, [f"установка greenlight запрещена переменной "
+                          f"{NO_INSTALL_ENV}: её выставили проверки."]
+
+    if not vendor_dir().is_dir():
+        return messages, [f"Нет копии исходников автора: {vendor_dir()}"]
+    sources_ok, good, bad = sources_check()
+    if not sources_ok:
+        return messages, ["Копия исходников не сходится с автором: "
+                          + "; ".join(bad[:5])]
+
+    if find_go():
+        say(f"Go найден: {go_version()}")
+    else:
+        go_messages, go_errors = install_go(progress=progress)
+        messages += go_messages
+        if go_errors:
+            return messages, go_errors
+
+    build_messages, build_errors = build(dest, progress=progress)
+    messages += build_messages
+    if build_errors:
+        return messages, build_errors
+
+    works, note = binary_works()
+    if not works:
+        return messages, [f"собрали, но сканер не отвечает: {note}"]
+    say(f"Сканер отвечает: {note}")
+    return messages, errors
 
 
 def binary_works(binary: Path | None = None) -> tuple[bool, str]:
@@ -277,8 +441,8 @@ def check(dest: Path) -> dict:
     if binary is None:
         if go:
             missing.append(
-                "greenlight не собран — нажми «Собрать greenlight» (Go найден, "
-                "сборка пройдёт), или " + INSTALL_HINT
+                "greenlight не собран — собери командой greenlight.py build "
+                "(Go найден, сборка пройдёт), или " + INSTALL_HINT
             )
         else:
             missing.append(
@@ -377,7 +541,16 @@ def install(dest: Path, progress=None) -> tuple[list[str], list[str]]:
     dest = Path(dest)
     data = check(dest)
     if not data["ready"]:
-        return messages, list(data["missing"])
+        # Найдено 15.10.2026: раньше здесь был простой отказ, и на чужой
+        # машине галочка упиралась в «Go не установлен». Теперь доводим сами:
+        # ставим Go, собираем сканер и только потом пишем отметку.
+        ready_messages, ready_errors = ensure_scanner(dest, progress=say)
+        messages += ready_messages
+        if ready_errors:
+            return messages, ready_errors
+        data = check(dest)
+        if not data["ready"]:
+            return messages, list(data["missing"])
 
     manifest, bad_manifest = _manifest(dest)
     if bad_manifest:
@@ -478,7 +651,15 @@ def build(dest: Path, progress=None, command: list[str] | None = None) -> tuple[
     go = find_go()
     make = find_make()
     if not go:
-        return messages, [NO_GO_NOTE]
+        # Раньше здесь был отказ: на чужой машине сборка не шла. Теперь Go
+        # доставляется сам — тем же путём, что и при нажатии галочки.
+        go_messages, go_errors = install_go(progress=progress)
+        messages += go_messages
+        if go_errors:
+            return messages, go_errors
+        go = find_go()
+        if not go:
+            return messages, [NO_GO_NOTE]
     cmd = command or build_command()
     if not cmd:
         return messages, [NO_GO_NOTE]
@@ -739,8 +920,21 @@ def _say(text: str) -> None:
     print(text)
 
 
+def _finish(errors: list[str]) -> int:
+    """Печатает ошибки команды и отдаёт её код.
+
+    Найдено 15.10.2026 на живом прогоне: `greenlight.py build` без Go не
+    сказал ни слова — просто код 1, и человек не знал, чего не хватает.
+    Успешные шаги команда печатает сама через progress, а отказ приходит
+    списком в return, и раньше он просто терялся.
+    """
+    for text in errors:
+        _say("ОШИБКА: " + text)
+    return 1 if errors else 0
+
+
 def _main(argv: list[str]) -> int:
-    """Командная строка — то же, что кнопки в окне."""
+    """Командная строка — то же, что делали кнопки окна."""
     import argparse  # noqa: PLC0415 — нужен только здесь
 
     parser = argparse.ArgumentParser(
@@ -761,6 +955,10 @@ def _main(argv: list[str]) -> int:
 
     p_dry = sub.add_parser("dry", help="список проверок без облака")
     p_dry.add_argument("project", help="папка проекта")
+
+    p_rep = sub.add_parser("reports", help="показать папку машинных отчётов")
+    p_rep.add_argument("--open", action="store_true",
+                       help="открыть папку в проводнике, а не только назвать")
 
     p_ver = sub.add_parser("verify", help="проверка в облаке Revyl (нужно подтверждение)")
     p_ver.add_argument("project", help="папка проекта")
@@ -788,26 +986,52 @@ def _main(argv: list[str]) -> int:
         return 0 if check(dest)["ready"] else 1
     if args.what == "install":
         messages, errors = install(dest, progress=_say)
-        return 1 if errors else 0
+        return _finish(errors)
     if args.what == "remove":
         messages, errors = remove(dest, progress=_say)
-        return 1 if errors else 0
+        return _finish(errors)
     if args.what == "build":
         messages, errors = build(dest, progress=_say)
-        return 1 if errors else 0
+        return _finish(errors)
     if args.what == "scan":
         messages, errors = scan(dest, args.project, ipa=args.ipa, progress=_say)
-        return 1 if errors else 0
+        return _finish(errors)
     if args.what == "dry":
         messages, errors = verify_dry(dest, args.project, progress=_say)
-        return 1 if errors else 0
+        return _finish(errors)
+    if args.what == "reports":
+        folder = reports_dir(dest)
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            _say(f"Папку отчётов создать не удалось: {exc}")
+            return 1
+        files = reports_seen(dest)
+        _say(f"Отчёты greenlight: {len(files)} в {folder}")
+        if not files:
+            _say("Отчётов пока нет — папка пустая.")
+        if args.open:
+            import subprocess as _sp  # noqa: PLC0415 — только для открытия
+            try:
+                _sp.Popen(["explorer", str(folder)])
+            except OSError as exc:
+                _say(f"Открыть папку не удалось: {exc}")
+                return 1
+        return 0
     if args.what == "verify":
         messages, errors = verify_cloud(
             dest, args.project, args.build_name, confirm=args.yes, progress=_say,
         )
-        return 1 if errors else 0
+        return _finish(errors)
     return 2
 
 
 if __name__ == "__main__":
-    sys.exit(_main(sys.argv[1:]))
+    try:
+        sys.exit(_main(sys.argv[1:]))
+    except FileNotFoundError as _exc:
+        # Сканера нет — это не поломка программы, а отсутствие сборки.
+        # Объясняем словами и называем команду, которая её сделает.
+        _say(str(_exc))
+        _say("Соберите сканер: python tools/dbapp/greenlight.py build")
+        sys.exit(1)

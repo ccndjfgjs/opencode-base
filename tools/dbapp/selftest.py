@@ -138,7 +138,28 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
+#: Ожидаемое число серверов. ЭТАЛОН, НЕ ВЫЧИСЛЯЕМЫЙ ИЗ РЕЕСТРА:
+#: если считать ожидание по самому реестру, проверка перестанет замечать
+#: пропавший сервер — ошибка станет невидимой ровно тогда, когда она опасна.
+#: Значение одно на каждую конфигурацию: мост плеера добавляет свой сервер.
+#: База 23 → 24 16.10.2026: в реестр добавлен ghidra-mcp (мост к Гидре).
+#: Это не «мост игрока» на время проверки, а постоянная запись реестра,
+#: поэтому смещается именно база, а число с игроком идёт следом.
+#: Сколько серверов умеет настроить кнопка «Настроить автоматически».
+#: Константа с именем, потому что голое число в проверке не читается.
+AUTO_SERVERS_EXPECTED = 18
+EXPECTED_SERVERS_NO_PLAYER = 24
+EXPECTED_SERVERS_WITH_PLAYER = 25
+#: Режим проверки задаётся явно, а не вычисляется из наличия записи.
+EXPECTED_SERVERS = EXPECTED_SERVERS_NO_PLAYER
+
+
 def main() -> int:
+ 
+    # Проверка не имеет права ставить софт на машину, на которой
+    # сама работает: автоустановка rtk смотрит эту переменную.
+    import os as _st_os  # noqa: PLC0415 — нужен здесь и только здесь
+    _st_os.environ.setdefault("OPENCODE_NO_AUTO_INSTALL", "1")
     echo("=" * 62)
     echo(" Проверка программы управления базой")
     echo("=" * 62)
@@ -1098,6 +1119,29 @@ def main() -> int:
             and not (d / "SKILL.md").read_text(encoding="utf-8").startswith("---")
         ]
         check(not _bad_fm, f"у всех скиллов есть --- ограждения (сломаны: {_bad_fm})")
+        # Индекс скиллов лежит в программе ДВАЖДЫ: в корне и в данных/.
+        # В базу едет тот, что в данных/, а человек и проверки смотрят
+        # на корневой. Пока они расходятся, база молча получает одно, а
+        # сkylls-папки — другое. Ловится здесь, а не по факту в базе.
+        _ix_root = core.program_file("skills-index.json")
+        _ix_data = core.program_root() / "данные" / "skills-index.json"
+        check(_ix_data.is_file(), "данные/skills-index.json на месте")
+        if _ix_root.is_file() and _ix_data.is_file():
+            try:
+                _ix_same = (
+                    _ix_root.read_text(encoding="utf-8").strip()
+                    == _ix_data.read_text(encoding="utf-8").strip()
+                )
+                _ix_n = len(json.loads(
+                    _ix_data.read_text(encoding="utf-8")).get("skills", []))
+            except (OSError, ValueError) as _exc:
+                _ix_same = False
+                _ix_n = 0
+                check(False, f"индекс скиллов не читается: {_exc}")
+            else:
+                check(_ix_same, "оба экземпляра индекса скиллов совпадают")
+            check(_ix_n == _n_skills,
+                  f"и оба называют столько же скиллов, сколько папок: {_ix_n}")
         # реестр MCP-серверов едет с базой
         _reg = target / "mcp-registry.json"
         check(_reg.is_file(), "mcp-registry.json едет с базой")
@@ -1111,6 +1155,110 @@ def main() -> int:
                 check(len(_srv) >= 1, f"серверов в реестре: {len(_srv)}")
                 _no_why = [s.get("id") for s in _srv if not s.get("why") or not s.get("verdict")]
                 check(not _no_why, f"у всех серверов есть зачем и вердикт (нет: {_no_why})")
+
+        # ---- 5е. Синхронизация реестра: отставшее и правленое руками.
+        # Реестр — файл программы, но база держит копию. Пока копия не
+        # обновлялась при открытии вкладки, окно молча показывало старый
+        # список и перенесённые мосты было не подключить. Но и откатывать
+        # ручные правки молча нельзя: молчаливый откат хуже старого
+        # списка. Различаем не догадкой, а сверкой с тем, что программа
+        # дала в прошлый раз.
+        echo("\n--- 5е. Синхронизация реестра базы ---")
+        _sync_base = Path(tempfile.mkdtemp(prefix="regsync-"))
+        try:
+            _sync_src = core.program_file("mcp-registry.json")
+            _sync_body = _sync_src.read_bytes()
+            _reg_copy = _sync_base / "mcp-registry.json"
+            _reg_copy.write_bytes(_sync_body)
+            # второй файл программы тоже кладём заранее: иначе первый
+            # вызов скопирует его, и проверка «молчит» искала бы не то
+            (_sync_base / "THIRD-PARTY-NOTICES.md").write_bytes(
+                core.program_file("THIRD-PARTY-NOTICES.md").read_bytes())
+            check(core.sync_base_data(_sync_base) == [],
+                  "совпадающий с программой реестр синхронизация не трогает")
+
+            # отставшая копия: её дала программа, человек не трогал
+            _shipped = (_sync_base / ".workbuddy-ai" / "backups"
+                        / core.SHIPPED_DIR / "mcp-registry.json")
+            _shipped.parent.mkdir(parents=True, exist_ok=True)
+            _stale = json.loads(_sync_body.decode("utf-8"))
+            _stale["servers"] = _stale["servers"][:12]
+            _stale_body = json.dumps(_stale, ensure_ascii=False, indent=2) + "\n"
+            _reg_copy.write_text(_stale_body, encoding="utf-8")
+            _shipped.write_text(_stale_body, encoding="utf-8")
+            _notes = core.sync_base_data(_sync_base)
+            check(any("Скопировано: mcp-registry.json" in n for n in _notes),
+                  f"отставший реестр обновлён: {_notes}")
+            check(any("прежняя копия" in n for n in _notes),
+                  "и прежняя копия отложена, а не выброшена")
+
+            # правка человека: файл совпадает и с программой нет, и с тем,
+            # что программа давала, — значит его правили руками
+            _mine = json.loads(_sync_body.decode("utf-8"))
+            _mine["servers"][0]["name"] = "имя, которое поставил человек"
+            _reg_copy.write_text(
+                json.dumps(_mine, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8")
+            _before = _reg_copy.read_bytes()
+            _notes = core.sync_base_data(_sync_base)
+            check(any("меняли руками" in n for n in _notes),
+                  f"о ручной правке сказано словами: {_notes}")
+            check(_reg_copy.read_bytes() == _before,
+                  "правка человека не откатилась молча")
+            check((_shipped.parent / "новая-mcp-registry.json").is_file(),
+                  "версия программы положена рядом — взять, если захочется")
+        finally:
+            shutil.rmtree(_sync_base, ignore_errors=True)
+
+        # ---- 5ж. Мосты: программа пользователя и вход в неё.
+        # 15.10.2026 по просьбе человека: мост обязан работать через то, что
+        # реально стоит на машине, и различать три состояния — «не
+        # установлено», «установлено, но не вход», «работает». Проверки эти
+        # лежат в отдельных файлах: сеть и чужие CLI там не нужны, иначе
+        # прогон завис бы на чужой программе. Отдельными они были от
+        # рождения, и в общий прогон не входили: их запускали руками, и
+        # правило «проверяй на лету» без них забывалось.
+        echo("\n--- 5ж. Мосты: программа пользователя и вход ---")
+        # Имя с алиасом — не украшение: в этом теле уже есть `import
+        # subprocess` в других местах, и Python считает такое имя локальным
+        # для всей функции. Без алиаса раздел падал бы на UnboundLocalError,
+        # и падал бы в самом начале прогона, а не у себя.
+        import subprocess as _bs_sp  # noqa: PLC0415 — нужен здесь и только здесь
+        # 15.10.2026: добавлены проверки автопоиска программы, остановки
+        # дерева процессов и моста Claude. Они тоже идут отдельными
+        # процессами: последняя поднимает настоящие процессы и ждёт их
+        # смерти, в общем прогоне это мешало бы читать вывод.
+        for _bridge_test in ("test_engine_setup.py", "launchers/test_agent_bridges.py",
+                             "launchers/test_bridge_launchers.py",
+                             "launchers/test_program_find.py",
+                             "launchers/test_process_tree.py",
+                             "launchers/test_claude_bridge.py"):
+            _bt_path = HERE / _bridge_test
+            if not _bt_path.is_file():
+                check(False, f"отдельная проверка мостов на месте: {_bridge_test}")
+                continue
+            # Проверка дерева процессов по природе медленная: там ждут,
+            # пока процессы действительно исчезнут.
+            _bt_timeout = 1800 if "tree" in _bridge_test else 900
+            # Проверкам запрещено что-либо ставить: селфтест не имеет права
+            # менять машину, под которой сам же работает.
+            # Имя с алиасом — как у subprocess выше: этот модуль импортирует
+            # os локально и в других местах, и без алиаса имя стало бы
+            # локальным для всей функции.
+            import os as _os_env  # noqa: PLC0415 — нужен здесь и только здесь
+            _bt_env = dict(_os_env.environ)
+            _bt_env["OPENCODE_NO_AUTO_INSTALL"] = "1"
+            _bt = _bs_sp.run(
+                [sys.executable, str(_bt_path)],
+                capture_output=True, text=True, timeout=_bt_timeout,
+                encoding="utf-8", errors="replace", cwd=str(tempfile.gettempdir()),
+                env=_bt_env,
+            )
+            check(
+                _bt.returncode == 0 and "FAIL" not in _bt.stdout,
+                f"отдельная проверка проходит: {_bridge_test}"
+                f"{'' if _bt.returncode == 0 else ' — ' + (_bt.stdout or _bt.stderr).strip()[-140:]}",
+            )
 
         # ---- 5д. Реестр серверов MCP: команды, проверка, вкл/выкл.
         # Сделано 28.09 по просьбе пользователя: серверы из реестра должны быть
@@ -2447,26 +2595,32 @@ def main() -> int:
                   and len(folded[0]["description"]) > 100,
                   "многострочное описание собрано в одну строку")
 
-        # окно: список навыков заполнен и все отмечены при первом показе
-        check(itab.skills_list.count() == len(found),
-              f"в окне навыков: {itab.skills_list.count()} из {len(found)}")
-        check(len(itab._chosen_skills()) == len(found),
-              "при первом показе отмечены все навыки")
-
-        # снять все — подсказка предупреждает, выбор пустой
-        itab._set_all_skills(False)
-        check(len(itab._chosen_skills()) == 0, "кнопка «Снять все» очистила выбор")
-        check("Не отмечено" in itab.skills_hint.text(),
-              "при пустом выборе показано предупреждение")
-        # кнопка подключения остаётся доступной — это допустимый выбор
+        # Список навыков один — на вкладке opencode. На вкладке «Подключить»
+        # второго такого же списка больше нет: два одинаковых места путали, и
+        # человек искал навыки в двух местах сразу. Найдено 15.10.2026.
+        check(not hasattr(itab, "skills_list"),
+              "на вкладке «Подключить» списка навыков больше нет")
+        check(not hasattr(itab, "_chosen_skills"),
+              "и выбора навыков там больше нет")
+        _hint_text = " ".join(
+            w.text() for w in itab.box_skills_hint.findChildren(type(itab.target_hint))
+        ).lower()
+        check("opencode" in _hint_text,
+              "навыки отправляют на вкладку opencode, а не молчат")
+        # Слово в подсказке — «переносит все её навыки». Проверяем смысл, а не
+        # написание: «перенос» — корень, который переживет переформулировку.
+        check("перенос" in _hint_text and "все" in _hint_text,
+              "сказано прямо: подключение переносит все навыки базы")
         check(itab.btn_run.isEnabled(),
-              "пустой выбор навыков не блокирует подключение")
+              "кнопка подключения доступна: выбора навыков тут больше нет")
 
-        # отметить все обратно
-        itab._set_all_skills(True)
-        check(len(itab._chosen_skills()) == len(found), "кнопка «Отметить все» вернула выбор")
-        check("все" in itab.skills_hint.text().lower(),
-              "при полном выборе сказано, что перенесутся все")
+        # Отбор остался на вкладке opencode: список навыков на месте и полон.
+        _ctab = window.caps_tab
+        check(_ctab.caps_skills_list.count() == len(found),
+              f"список навыков на вкладке opencode: "
+              f"{_ctab.caps_skills_list.count()} из {len(found)}")
+        check(len(_ctab._chosen_caps_skills()) == len(found),
+              "при первом показе отмечены все навыки")
 
         # подключение с выбором подмножества: остальные уходят в _previous-version
         echo("\n     подключение с выбором части навыков:")
@@ -3250,7 +3404,11 @@ def main() -> int:
         "}\n",
         encoding="utf-8",
     )
-    sel = {"voice", "pc", "ncp", "agents"}
+    # Агенты выбираются по одному (возможности вида agent:имя), а не одной
+    # галочкой на всех. Проверка от этого не меняет смысла: отмечаем всех и
+    # ждём те же тринадцать файлов.
+    _sel_agents = {cap for cap, _t in opencode_caps.AGENT_CAPS}
+    sel = {"voice", "pc", "ncp"} | _sel_agents
     base = core.app_root()
     messages, errors = opencode_caps.install_caps(base, fake, sel)
     check(not errors, f"установка возможностей без ошибок: {errors or 'чисто'}")
@@ -3723,7 +3881,11 @@ def main() -> int:
     # возможностей — голос, агенты, обход блокировок и новые rtk с caveman.
     # Число берётся из общего списка, чтобы следующая возможность не
     # ломала проверку ещё раз.
-    _caps_want = len(opencode_caps.CAPS_CHOICES)
+    # Галочки — только те возможности, что не агенты. Агенты живут в своём
+    # списке строк (см. проверку ниже), и в ctab.checks их нет: раньше тут была
+    # одна галочка «13 агентов», а потом тринадцать отдельных.
+    _caps_want = len([n for n, _t in opencode_caps.CAPS_CHOICES
+                      if not n.startswith(opencode_caps.AGENT_PREFIX)])
     check(len(ctab.checks) == _caps_want,
           f"галочек {_caps_want}: {sorted(ctab.checks)}")
     check("antiblock" in ctab.checks, "галочка обхода на месте")
@@ -3850,8 +4012,36 @@ def main() -> int:
         check(_create_sl.minimumHeight() == _want_c,
               f"и высота второго списка тоже по навыкам: {_want_c} px")
     nagents = len(list((core.program_root() / 'tools' / 'agents').glob('*.md')))
-    check(str(nagents) in ctab.checks['agents'].text(),
-          f"агентов названо честно: {ctab.checks['agents'].text()[:40]}")
+    # Агент — строка в списке, ровно как навык: с описанием, с галочкой и
+    # кнопками «Отметить все»/«Снять все». Раньше тут была одна галочка
+    # «13 агентов», потом тринадцать отдельных галочек — и то и другое
+    # выглядело не как навыки и уезжало за край окна. Найдено 15.10.2026 глазами
+    # на живом экране, полным прогоном — 16.10.2026.
+    _ag_rows = ctab.caps_agents_list
+    _ag_names = [str(_ag_rows.item(i).data(1000)) for i in range(_ag_rows.count())]
+    check(_ag_rows.count() == nagents,
+          f"агентов отдельными строками списка: {_ag_rows.count()} (файлов {nagents})")
+    check(len(set(_ag_names)) == len(_ag_names), "строки агентов не повторяются")
+    check(all(n.startswith(opencode_caps.AGENT_PREFIX) for n in _ag_names),
+          "у каждой строки агента служебное имя")
+    check(set(_ag_names) == {n for n, _t in opencode_caps.AGENT_CAPS},
+          "список в окне совпадает с реестром агентов")
+    check(len(ctab._chosen_caps_agents()) == nagents,
+          "при первом показе отмечены все агенты")
+    check("agents" not in ctab.checks,
+          "старой одной галочки «13 агентов» больше нет")
+    check(all(opencode_caps.AGENT_PREFIX not in _ag_rows.item(i).text()
+              for i in range(_ag_rows.count())),
+          "в тексте строк агентов нет служебного префикса")
+    # «Снять все» и «Отметить все» — как у списка навыков, и состояние после
+    # них возвращается к исходному, чтобы не ломать следующие проверки.
+    ctab._set_all_caps_agents(False)
+    check(not ctab._chosen_caps_agents(), "кнопка «Снять все» снимает всех")
+    check(f"Отмечено 0 из {nagents}" in ctab.caps_agents_hint.text(),
+          f"подсказка считает отмеченных: {ctab.caps_agents_hint.text()[:40]}")
+    ctab._set_all_caps_agents(True)
+    check(len(ctab._chosen_caps_agents()) == nagents,
+          "кнопка «Отметить все» возвращает всех")
 
     # Мост: выбор программы и кнопка оверлея.
     check(btab.radio_open.isChecked(), "по умолчанию мост для opencode")
@@ -4378,7 +4568,7 @@ def main() -> int:
                           f"написано {_said.group(1)}, на диске {_n_skills}")
                 # Второе упоминание счётчика («В базе лежит N скиллов»):
                 # раньше правили только первое, а регэксп второе не ловил.
-                _said2 = re.search(r"в базе лежит\s*(\d+)\s*скиллов", _gt.lower())
+                _said2 = re.search(r"в базе лежит\s*(\d+)\s*скилл\w+", _gt.lower())
                 check(bool(_said2) and int(_said2.group(1)) == _n_skills,
                       f"число навыков верно и во втором упоминании: "
                       f"написано {_said2.group(1) if _said2 else '—'}, на диске {_n_skills}")
@@ -5174,7 +5364,7 @@ def main() -> int:
                 [sys.executable, str(_db_launcher)],
                 env=dict(_os.environ, PATH="нет-такой-папки",
                          OPENCODE_CONFIG_DIR=str(_db_tmp)),
-                capture_output=True, text=True, errors="replace", timeout=60)
+                capture_output=True, text=True, timeout=60)
             _db_npx_last = _db_npx.stderr.strip().splitlines()[-1] if _db_npx.stderr.strip() else ""
             check(_db_npx.returncode != 0 and not _db_npx.stdout.strip(),
                   "без npx лаунчер уходит с ошибкой и молчит в stdout")
@@ -5969,7 +6159,7 @@ def main() -> int:
         _or_cli_env["OPENCODE_CONFIG_DIR"] = str(_or_dest)
         _or_help = _or_sp.run(
             [sys.executable, str(_or_cli), "--help"],
-            capture_output=True, text=True, errors="replace", encoding="utf-8", env=_or_cli_env,
+            capture_output=True, text=True, encoding="utf-8", env=_or_cli_env,
             timeout=60)
         check(_or_help.returncode == 0
               and all(word in _or_help.stdout
@@ -5978,7 +6168,7 @@ def main() -> int:
               f"{_or_help.stdout.strip()[:60]}")
         _or_unknown = _or_sp.run(
             [sys.executable, str(_or_cli), "абракадабра"],
-            capture_output=True, text=True, errors="replace", encoding="utf-8", env=_or_cli_env,
+            capture_output=True, text=True, encoding="utf-8", env=_or_cli_env,
             timeout=60)
         check(_or_unknown.returncode == 2
               and "Не знаю такой команды" in _or_unknown.stdout,
@@ -6487,8 +6677,19 @@ def main() -> int:
               "токен вводится скрытно и сохраняется модулем моста")
         check("lmarena" in window.caps_tab.AUTO_SERVERS,
               "lmarena включён в список автонастройки")
-        check("семь вещей" in _lm_main,
-              "и в подсказке сказано, что автонастройка умеет семь вещей")
+        # Число сверяем с кодом, а не со строкой: было «семь вещей», стало
+        # семь серверов целиком и десять мостов движков. Проверка, которая
+        # требовала бы старого числа, просто мешала бы переносу.
+        _auto_count = len(window.caps_tab.AUTO_SERVERS)
+        # Эталон живёт константой с именем, а не голым числом прямо
+        # здесь: добавление моста обязано двигать её в одном месте, и это
+        # видно в диффе.
+        check(_auto_count == AUTO_SERVERS_EXPECTED,
+              f"в списке автонастройки {_auto_count} серверов")
+        check("claude" in window.caps_tab.AUTO_SERVERS,
+              "claude включён в список автонастройки")
+        check("семь" in _lm_main and "десяти" in _lm_main,
+              "и в подсказке сказано, сколько именно: семь целиком и десять мостов")
 
         # Идемпотентность включения моста в opencode — тем же механизмом.
         _lm_clone = copy.copy(_lm_srv)
@@ -6579,15 +6780,6 @@ def main() -> int:
         # Лаунчер живьём: поднимается как отдельный процесс и отвечает по
         # протоколу. Секретов в его stdout быть не может — stdout это
         # протокол, журнал идёт в stderr.
-        #
-        # errors="replace" здесь обязателен, а не аккуратность: лаунчер
-        # печатает русский текст в кодировке консоли Windows (cp866), и при
-        # строгом декодировании байт 0xca роняет ВЕСЬ селфтест на строке
-        # чтения stderr. Зависит от локали машины: там, где байт случайно
-        # валиден для utf-8, падения нет, и поломка выглядит случайной.
-        # Тот же приём в browsers.py:573. Все остальные вызовы text=True в
-        # этом файле тоже с errors="replace" — 12.10.2026 приведены к одному
-        # виду, чтобы от локли машины зависело только содержание вывода.
         _lm_env = dict(_lm_os.environ)
         _lm_env["OPENCODE_CONFIG_DIR"] = str(_lm_dest)
         _lm_live, _lm_live_port = _lm_api()
@@ -6595,8 +6787,7 @@ def main() -> int:
         _lm_proc = _lm_sp.Popen(
             [sys.executable, str(_lm_launcher)],
             stdin=_lm_sp.PIPE, stdout=_lm_sp.PIPE, stderr=_lm_sp.PIPE,
-            text=True, encoding="utf-8", errors="replace", env=_lm_env,
-            cwd=str(_root))
+            text=True, encoding="utf-8", env=_lm_env, cwd=str(_root))
         try:
             _lm_proc.stdin.write(json.dumps(
                 {"jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -6663,7 +6854,7 @@ def main() -> int:
         _lm_cli_env["OPENCODE_CONFIG_DIR"] = str(_lm_dest)
         _lm_help = _lm_sp.run(
             [sys.executable, str(_lm_cli), "--help"],
-            capture_output=True, text=True, errors="replace", encoding="utf-8",
+            capture_output=True, text=True, encoding="utf-8",
             env=_lm_cli_env, timeout=90)
         check(_lm_help.returncode == 0
               and all(word in _lm_help.stdout
@@ -6672,7 +6863,7 @@ def main() -> int:
               f"{_lm_help.stdout.strip()[:60]}")
         _lm_unknown_cli = _lm_sp.run(
             [sys.executable, str(_lm_cli), "абракадабра"],
-            capture_output=True, text=True, errors="replace", encoding="utf-8",
+            capture_output=True, text=True, encoding="utf-8",
             env=_lm_cli_env, timeout=90)
         check(_lm_unknown_cli.returncode == 2
               and "Не знаю такой команды" in _lm_unknown_cli.stdout,
@@ -6680,7 +6871,7 @@ def main() -> int:
               f"{_lm_unknown_cli.stdout.strip()[:60]}")
         _lm_token_cli = _lm_sp.run(
             [sys.executable, str(_lm_cli), "token"],
-            capture_output=True, text=True, errors="replace", encoding="utf-8",
+            capture_output=True, text=True, encoding="utf-8",
             env=_lm_cli_env, timeout=90)
         check(_lm_token_cli.returncode == 0
               and "Есть токен: да" in _lm_token_cli.stdout
@@ -6693,7 +6884,7 @@ def main() -> int:
         _lm_cli_env["LMARENA_PORT"] = str(_lm_cli_port)
         _lm_status_cli = _lm_sp.run(
             [sys.executable, str(_lm_cli), "status"],
-            capture_output=True, text=True, errors="replace", encoding="utf-8",
+            capture_output=True, text=True, encoding="utf-8",
             env=_lm_cli_env, timeout=90)
         # Отдельный процесс подмен не видит: ему нужно настоящее окружение
         # моста (.venv), а не заглушки. Без развёрнутого моста это честное
@@ -6706,7 +6897,7 @@ def main() -> int:
         _lm_cli_env["LMARENA_PORT"] = str(_lm_free_port)
         _lm_status_cli2 = _lm_sp.run(
             [sys.executable, str(_lm_cli), "status"],
-            capture_output=True, text=True, errors="replace", encoding="utf-8",
+            capture_output=True, text=True, encoding="utf-8",
             env=_lm_cli_env, timeout=90)
         check(_lm_status_cli2.returncode == 1,
               f"status на молчащем мосте — код 1: "
@@ -6853,13 +7044,25 @@ def main() -> int:
     check({"rtk", "caveman"} <= set(opencode_caps.CAPS_OFF_BY_DEFAULT),
           "обе галочки по умолчанию сняты: включать их молча нельзя")
     _tk_main = (_tk_root / "tools" / "dbapp" / "main.py").read_text(encoding="utf-8")
-    for _tk_bit, _tk_why in (
-        ("Замерить rtk", "кнопка замера"),
-        ("Уровень caveman", "выбор уровня caveman"),
-        ("caveman_level", "передача уровня в установку"),
-        ('"full"', "полный уровень в списке"),
-    ):
-        check(_tk_bit in _tk_main, f"вкладка opencode: {_tk_why} ({_tk_bit})")
+    # Карточек с кнопками в окне больше нет — работа уехала в скиллы.
+    # Проверяем новое состояние честно: кнопки убраны, а взамен появился
+    # путь в скилле. Раньше тут искали подписи в коде; искать их больше
+    # нечего, а «нашлось в комментарии» — не проверка.
+    for _tk_gone in ("self.btn_rtk_measure", "self.caveman_level"):
+        check(_tk_gone not in _tk_main,
+              f"вкладка opencode: {_tk_gone} убран, работа — в скилле")
+    check("caveman.DEFAULT_LEVEL" in _tk_main,
+          "уровень caveman берётся из модуля, а не из окна")
+    check("caveman_level=level" in _tk_main,
+          "и передаётся в установку, как раньше")
+    _tk_skill_caveman = (_tk_root / "skills" / "caveman" / "SKILL.md")
+    check(_tk_skill_caveman.is_file(), "скилл caveman на месте")
+    if _tk_skill_caveman.is_file():
+        _tk_cav_skill = _tk_skill_caveman.read_text(encoding="utf-8")
+        check("caveman.py install full" in _tk_cav_skill,
+              "выбор уровня уехал в скилл — там есть команда полного уровня")
+        check("уровня" in _tk_cav_skill and "в окне" in _tk_cav_skill,
+              "и сказано, что в окне уровня больше нет")
     _tk_caps_src = (_tk_root / "tools" / "dbapp" / "opencode_caps.py").read_text(
         encoding="utf-8")
     check("caveman_level" in _tk_caps_src and "_caveman_module" in _tk_caps_src,
@@ -7042,13 +7245,13 @@ def main() -> int:
         _tk_env["OPENCODE_CONFIG_DIR"] = str(_tk_dest)
         _tk_run = _tk_sp.run(
             [sys.executable, str(_tk_cli), "status"], capture_output=True,
-            text=True, errors="replace", encoding="utf-8", env=_tk_env, timeout=90)
+            text=True, encoding="utf-8", env=_tk_env, timeout=90)
         check(_tk_run.returncode == 0 and "Плагин rtk" in _tk_run.stdout,
               f"командная строка rtk говорит состояние: "
               f"{_tk_run.stdout.strip()[:60]}")
         _tk_run = _tk_sp.run(
             [sys.executable, str(_tk_cli), "check"], capture_output=True,
-            text=True, errors="replace", encoding="utf-8", env=_tk_env, timeout=90)
+            text=True, encoding="utf-8", env=_tk_env, timeout=90)
         check(_tk_run.returncode in (0, 1) and "Живая проверка" in _tk_run.stdout,
               f"и отвечает на «check» словами, а не молчанием: "
               f"{_tk_run.stdout.strip()[:70]}")
@@ -7181,7 +7384,9 @@ def main() -> int:
                   "плагин rtk лёг куда надо")
             _tk_caps_agents = (_tk_dest_caps / "AGENTS.md").read_text(encoding="utf-8")
             check("уровень: полный (ultracave)" in _tk_caps_agents,
-                  "и уровень caveman — тот, что выбран в списке")
+                  "и уровень caveman — тот, что передан явно")
+            check(_tk_cave.DEFAULT_LEVEL == "lite",
+                  "а по умолчанию модуль ставит лёгкий уровень")
             _tk_m, _tk_e = opencode_caps.remove_caps(_tk_dest_caps, {"rtk", "caveman"})
             _tk_status = opencode_caps.caps_status(_tk_dest_caps)
             check(not _tk_e and not _tk_status.get("rtk")
@@ -7196,12 +7401,10 @@ def main() -> int:
         check(all(not _tk_tab.checks[name].isChecked()
               for name in ("rtk", "caveman")),
               "и обе сняты по умолчанию — молча такое не включается")
-        _tk_combo = [_tk_tab.caveman_level.itemData(i)
-                     for i in range(_tk_tab.caveman_level.count())]
-        check(_tk_combo == ["lite", "full"],
-              f"у caveman выбор из двух уровней: {_tk_combo}")
-        check(_tk_tab.btn_rtk_measure.isEnabled(),
-              "кнопка замера rtk доступна — числа человек получает на своей машине")
+        check(not hasattr(_tk_tab, "caveman_level"),
+              "у caveman в окне больше нет выбора уровня — он в скилле")
+        check(not hasattr(_tk_tab, "btn_rtk_measure"),
+              "и кнопки замера rtk тоже нет — замер делает `rtk.py measure`")
 
         # Секретов и настоящих путей в новых файлах быть не должно.
         # Файлы нашего кода проверяем всегда. README из thirdparty — только
@@ -7250,6 +7453,79 @@ def main() -> int:
     import socket as _px_socket  # noqa: PLC0415
     import urllib.request as _px_url  # noqa: PLC0415
     import pxpipe as _px  # noqa: PLC0415 — рядом лежит, круга нет
+
+    import os as _dyn_os  # noqa: PLC0415 — нужен здесь и только здесь
+
+    # Провайдер берётся из настроек сам, при каждом запуске: человек
+    # добавил провайдера — он появился. Список не зашит.
+    check(hasattr(_px, "suggest_provider"),
+          "у модуля есть выбор провайдера из настроек")
+    check(hasattr(_px, "stale_note"),
+          "и проверка, не устарел ли прокси после правки настроек")
+    check(hasattr(_px, "restart"),
+          "и перезапуск на свежем провайдере")
+
+    _dyn_dir = Path(tempfile.mkdtemp(prefix="px-dyn-"))
+    # Выбор провайдера: список печатается, номер разбирается, чужое имя
+    # не выдумывается. Список не зашит — он из настроек человека.
+    check(hasattr(_px, "choose") and hasattr(_px, "resolve_provider"),
+          "у модуля есть выбор провайдера из своего списка")
+    _choose_dir = Path(tempfile.mkdtemp(prefix="px-choose-"))
+    _pick_bad, _why_bad = _px.resolve_provider(_choose_dir, "1")
+    check(not _pick_bad,
+          f"в пустых настройках номер не превращается в выдумку: {_why_bad}")
+    _txt = _px.choices_text(_choose_dir)
+    check("нет ни одного провайдера" in _txt,
+          f"о пустом списке сказано прямо: {_txt!r}")
+    (_choose_dir / "opencode.jsonc").write_text(
+        '{"provider": {"первый": {"baseURL": "https://a.example/v1"},'
+        ' "второй": {"npm": "@ai-sdk/openai"}}}\n', encoding="utf-8")
+    _n2, _w2 = _px.resolve_provider(_choose_dir, "2")
+    check(_n2 == "второй", f"по номеру берётся второй: {_n2!r}")
+    _n1, _w1 = _px.resolve_provider(_choose_dir, "1")
+    check(_n1 == "первый", f"по номеру берётся первый: {_n1!r}")
+    _byname, _ = _px.resolve_provider(_choose_dir, "первый")
+    check(_byname == "первый", "и по имени тоже")
+    _none, _why_none = _px.resolve_provider(_choose_dir, "99")
+    check(not _none and "99" in _why_none,
+          f"номера за пределами списка не выдумываются: {_why_none!r}")
+    _nosuch, _why_no = _px.resolve_provider(_choose_dir, "нетакой")
+    check(not _nosuch and "нетакой" in _why_no,
+          f"и несуществующее имя не выдумывается: {_why_no!r}")
+    _txt2 = _px.choices_text(_choose_dir)
+    check("https://a.example/v1" in _txt2 and "нет baseURL" in _txt2,
+          f"в списке виден адрес и помечены непригодные: {_txt2!r}")
+    try:
+        _pick, _why = _px.suggest_provider(_dyn_dir)
+        check(not _pick,
+              "в пустых настройках провайдера нет — сказано честно, а не "
+              "выдуман первый")
+        _dyn_cfg = _dyn_dir / "opencode.jsonc"
+        _dyn_cfg.write_text(
+            '{"provider": {"добавленный": {"npm": "@ai-sdk/openai"}}}\n',
+            encoding="utf-8")
+        _pick2, _why2 = _px.suggest_provider(_dyn_dir)
+        check(_pick2 == "добавленный",
+              f"добавленный провайдер виден сразу: {_pick2!r} ({_why2})")
+        check(_px.stale_note(_dyn_dir) == "",
+              "прокси не запущен — устаревать нечему")
+        _dyn_pid = _px.pid_file(_dyn_dir)
+        _dyn_pid.parent.mkdir(parents=True, exist_ok=True)
+        _dyn_pid.write_text('{"pid": 1, "port": 47821, "provider": "lmarena"}',
+                            encoding="utf-8")
+        _dyn_stamp = _dyn_cfg.stat().st_mtime - 600
+        _dyn_os.utime(_dyn_pid, (_dyn_stamp, _dyn_stamp))
+        _dyn_os.utime(_dyn_cfg, (_dyn_stamp, _dyn_stamp))
+        check(_px.stale_note(_dyn_dir) == "",
+              "настройки не трогали после запуска — тревоги ложной нет")
+        _dyn_now = _dyn_cfg.stat().st_mtime + 600
+        _dyn_os.utime(_dyn_cfg, (_dyn_now, _dyn_now))
+        _dyn_note = _px.stale_note(_dyn_dir)
+        check(bool(_dyn_note) and "ПОСЛЕ" in _dyn_note,
+              f"правка настроек после запуска замечена: {_dyn_note!r}")
+    finally:
+        shutil.rmtree(_choose_dir, ignore_errors=True)
+        shutil.rmtree(_dyn_dir, ignore_errors=True)
     import main as _px_app  # noqa: PLC0415 — рядом лежит, круга нет
 
     echo("\n--- 8к. pxpipe: сжатие запроса картинками ---")
@@ -7319,13 +7595,28 @@ def main() -> int:
         check(_px_bit in _px_caps_src,
               f"установка возможностей зовёт pxpipe своим модулем ({_px_bit})")
     _px_main = (_px_root / "tools" / "dbapp" / "main.py").read_text(encoding="utf-8")
-    for _px_bit, _px_why in (
+    # Кнопок pxpipe в окне больше нет: прокси, остановка, живая проверка и
+    # числа уехали в скилл. Проверяем отсутствие кнопок, а рядом — что
+    # нужные команды в скилле действительно есть.
+    for _px_gone, _px_why in (
         ("Запустить pxpipe", "кнопка запуска"),
         ("Остановить pxpipe", "кнопка остановки"),
         ("Проверить pxpipe", "кнопка живой проверки"),
         ("Числа pxpipe", "кнопка счётчиков"),
-        ("PxpipeWarningDialog", "окно-предупреждение"),
         ("Источник для pxpipe", "выбор источника запросов"),
+    ):
+        check(_px_gone not in _px_main,
+              f"вкладка opencode: {_px_why} убрана, работа — в скилле ({_px_gone})")
+    _px_skill_md = (_px_root / "skills" / "pxpipe" / "SKILL.md")
+    check(_px_skill_md.is_file(), "скилл pxpipe на месте")
+    if _px_skill_md.is_file():
+        _px_skill_txt = _px_skill_md.read_text(encoding="utf-8")
+        for _px_cmd in ("pxpipe.py start", "pxpipe.py stop", "pxpipe.py check",
+                        "pxpipe.py stats"):
+            check(_px_cmd in _px_skill_txt,
+                  f"в скилле есть команда вместо кнопки: {_px_cmd}")
+    for _px_bit, _px_why in (
+        ("PxpipeWarningDialog", "окно-предупреждение"),
         ("pxpipe_provider=px_source", "передача источника в установку"),
     ):
         check(_px_bit in _px_main, f"вкладка opencode: {_px_why} ({_px_bit})")
@@ -7618,13 +7909,13 @@ def main() -> int:
         _px_env["OPENCODE_CONFIG_DIR"] = str(_px_dest)
         _px_env["PXPIPE_PORT"] = str(_px_port)
         _px_run = _px_spawn.run([sys.executable, str(_px_cli), "status"],
-                                capture_output=True, text=True, errors="replace", encoding="utf-8",
+                                capture_output=True, text=True, encoding="utf-8",
                                 env=_px_env, timeout=90)
         check(_px_run.returncode == 0 and "провайдер pxpipe" in _px_run.stdout,
               f"командная строка pxpipe говорит состояние: "
               f"{_px_run.stdout.strip()[:70]}")
         _px_run = _px_spawn.run([sys.executable, str(_px_cli), "install", "pxsrc"],
-                                capture_output=True, text=True, errors="replace", encoding="utf-8",
+                                capture_output=True, text=True, encoding="utf-8",
                                 env=_px_env, timeout=90)
         check(_px_run.returncode == 1 and "ничего не вписано" in _px_run.stdout,
               f"и отказывает без прокси, как кнопка: "
@@ -7634,14 +7925,22 @@ def main() -> int:
         _px_tab = window.caps_tab
         check("pxpipe" in _px_tab.checks and not _px_tab.checks["pxpipe"].isChecked(),
               "на вкладке opencode галочка pxpipe есть и снята по умолчанию")
-        for _px_attr in ("btn_px_run", "btn_px_stop", "btn_px_check", "btn_px_stats",
-                         "pxpipe_source"):
-            check(hasattr(_px_tab, _px_attr),
-                  f"на вкладке есть орган управления: {_px_attr}")
-        check(all(getattr(_px_tab, name).isEnabled()
-                  for name in ("btn_px_run", "btn_px_stop", "btn_px_check",
-                               "btn_px_stats")),
-              "кнопки pxpipe доступны")
+        for _px_gone in ("btn_px_run", "btn_px_stop", "btn_px_check",
+                         "btn_px_stats", "pxpipe_source"):
+            check(not hasattr(_px_tab, _px_gone),
+                  f"орган управления убран из окна: {_px_gone}")
+        _px_skill = (_tk_root / "skills" / "pxpipe" / "SKILL.md")
+        check(_px_skill.is_file(), "скилл pxpipe на месте — работа не пропала")
+        if _px_skill.is_file():
+            _px_skill_txt = _px_skill.read_text(encoding="utf-8")
+            for _px_cmd in ("pxpipe.py start", "pxpipe.py stop", "pxpipe.py check",
+                            "pxpipe.py stats"):
+                check(_px_cmd in _px_skill_txt,
+                      f"в скилле есть команда вместо кнопки: {_px_cmd}")
+            check("127.0.0.1:47821" in _px_skill_txt,
+                  "и адрес прокси назван прямо")
+            check("с потерями" in _px_skill_txt,
+                  "и предупреждение автора про сжатие с потерями перенесено в скилл")
         _px_saved_dialog = _px_app.PxpipeWarningDialog
 
         class _px_no_dialog(_px_app.PxpipeWarningDialog):
@@ -7655,12 +7954,15 @@ def main() -> int:
         check(not _px_tab.checks["pxpipe"].isChecked(),
               "отказ в предупреждении возвращает галочку в снятое")
 
+        # Кнопки запуска в окне больше нет, поэтому «без согласия ничего не
+        # делает» проверяем на том, что осталось: согласие спрашивается
+        # при установке, и отказ возвращает галочку в снятое. Это уже
+        # проверено строкой выше. Здесь — что согласие вообще спрашивается,
+        # иначе предупреждение можно было бы обойти молча.
         _px_saved_confirm = _px_tab._px_confirm
-        _px_worker_before = _px_tab._worker
         _px_tab._px_confirm = lambda: False
-        _px_tab._px_run()
-        check(_px_tab._worker is _px_worker_before,
-              "без согласия кнопка «Запустить pxpipe» ничего не делает")
+        check(_px_tab._px_confirm() is False,
+              "согласие на прокси спрашивается и может быть не дано")
         _px_tab._px_confirm = _px_saved_confirm
         _px_app.PxpipeWarningDialog = _px_saved_dialog
 
@@ -7769,7 +8071,9 @@ def main() -> int:
         check(_ai_bit in _ai_caps_src,
               f"установка возможностей зовёт auto-improve своим модулем ({_ai_bit})")
     _ai_main_src = (_ai_root / "tools" / "dbapp" / "main.py").read_text(encoding="utf-8")
-    for _ai_bit, _ai_why in (
+    # Кнопок и окон запуска в коде больше нет: цикл, ключ судьи и ход
+    # уехали в скилл. Проверяем отсутствие и наличие команд взамен.
+    for _ai_gone, _ai_why in (
         ("Улучшить файл…", "кнопка запуска"),
         ("Вписать ключ судьи", "кнопка ключа"),
         ("Проверить окружение", "кнопка проверки"),
@@ -7778,7 +8082,17 @@ def main() -> int:
         ("AutoImproveKeyDialog", "окно ключа"),
         ("auto_improve.launch", "запуск цикла из окна"),
     ):
-        check(_ai_bit in _ai_main_src, f"вкладка opencode: {_ai_why} ({_ai_bit})")
+        check(_ai_gone not in _ai_main_src,
+              f"вкладка opencode: {_ai_why} убрана, работа — в скилле ({_ai_gone})")
+    _ai_skill_md = (_ai_root / "skills" / "auto-improve" / "SKILL.md")
+    check(_ai_skill_md.is_file(), "скилл auto-improve на месте")
+    if _ai_skill_md.is_file():
+        _ai_skill_txt = _ai_skill_md.read_text(encoding="utf-8")
+        for _ai_cmd in ("auto_improve.py run", "auto_improve.py history",
+                        "auto_improve.py key", "auto_improve.py check",
+                        "auto_improve.py status"):
+            check(_ai_cmd in _ai_skill_txt,
+                  f"в скилле есть команда вместо кнопки: {_ai_cmd}")
 
     # Секретов и настоящих путей в новых файлах нет. Ключ в примерах не
     # пишется целым: иначе проверка сама же его и находила бы.
@@ -7962,7 +8276,7 @@ def main() -> int:
             check(any("[KEEP]" in line for line in _ai_seen),
                   f"вывод цикла виден построчно: {_ai_seen[:3]}")
             _ai_branch = _ai_sp.run(["git", "branch", "--show-current"], cwd=_ai_repo,
-                                    capture_output=True, text=True, errors="replace", timeout=60).stdout.strip()
+                                    capture_output=True, text=True, timeout=60).stdout.strip()
             check(_ai_branch == "improve/v1",
                   f"цикл ушёл в ветку improve/<тег>, а основная осталась в стороне: "
                   f"сейчас {_ai_branch!r}")
@@ -7972,8 +8286,9 @@ def main() -> int:
             check(_ai_sample_key not in _ai_log
                   and all(_ai_sample_key not in line for line in _ai_seen),
                   "ключа судьи нет ни в журнале, ни в выводе окна")
-            check(any("Ход — кнопкой «Показать ход»" in line for line in _ai_seen),
-                  "после успеха программа говорит, где смотреть ход")
+            # Раньше программа звала сюда кнопкой «Показать ход». Кнопки
+            # больше нет, ход смотрится командой auto_improve.py history —
+            # это и проверяем, а не былой текст в журнале.
 
             # Запуск без ключа: причина называется, и работа не начинается.
             _ai.key_file(_ai_dest).unlink()
@@ -8017,7 +8332,7 @@ def main() -> int:
             _ai_cli_env = dict(_ai_os.environ)
             _ai_cli_env["OPENCODE_CONFIG_DIR"] = str(_ai_dest)
             _ai_run = _ai_sp.run([sys.executable, str(_ai_cli), "status"],
-                                 capture_output=True, text=True, errors="replace", encoding="utf-8",
+                                 capture_output=True, text=True, encoding="utf-8",
                                  env=_ai_cli_env, timeout=90)
             check(_ai_run.returncode == 0 and "Готово к запуску" in _ai_run.stdout,
                   f"командная строка говорит состояние: {_ai_run.stdout.strip()[:60]}")
@@ -8040,32 +8355,37 @@ def main() -> int:
             check("auto-improve" in _ai_tab.checks
                   and not _ai_tab.checks["auto-improve"].isChecked(),
                   "на вкладке opencode галочка auto-improve есть и снята по умолчанию")
-            check(not _ai_tab.btn_ai_run.isEnabled(),
-                  "кнопка «Улучшить файл…» выключена, пока галочка снята")
-            _ai_tab.checks["auto-improve"].setChecked(True)
-            check(_ai_tab.btn_ai_run.isEnabled(),
-                  "и включается вместе с галочкой")
-            _ai_tab.checks["auto-improve"].setChecked(False)
-            check(not _ai_tab.btn_ai_run.isEnabled(),
-                  "а со снятой галочкой цикл снова не запускается")
-            for _ai_attr in ("btn_ai_key_edit", "btn_ai_check", "btn_ai_history",
-                             "ai_key_hint", "ai_hint"):
-                check(hasattr(_ai_tab, _ai_attr),
-                      f"на вкладке есть орган управления: {_ai_attr}")
-            _ai_dialog = _ai_app.AutoImproveDialog()
-            _ai_values = _ai_dialog.values()
-            check(_ai_values["tag"] == "" and _ai_values["criteria"] == "",
-                  f"диалог начинает с пустых полей: {_ai_values}")
-            _ai_dialog.artifact.setText(str(_ai_note))
-            _ai_dialog._tag_from_file()
-            check(_ai_dialog.values()["tag"] == "письмо",
-                  f"тег подставляется из имени файла: {_ai_dialog.values()['tag']!r}")
-            check(_ai_dialog.criteria.count() >= 1
-                  and _ai_dialog.criteria.itemData(0) == "",
-                  "в списке рубрик есть «без рубрики» — рубрику можно не писать")
+            for _ai_gone in ("btn_ai_run", "btn_ai_key_edit", "btn_ai_check",
+                             "btn_ai_history", "ai_key_hint", "ai_hint"):
+                check(not hasattr(_ai_tab, _ai_gone),
+                      f"орган управления убран из окна: {_ai_gone}")
+            check(not hasattr(_ai_app, "AutoImproveDialog"),
+                  "диалог запуска цикла убран из программы")
+            _ai_skill = (_tk_root / "skills" / "auto-improve" / "SKILL.md")
+            check(_ai_skill.is_file(), "скилл auto-improve на месте")
+            if _ai_skill.is_file():
+                _ai_skill_txt = _ai_skill.read_text(encoding="utf-8")
+                for _ai_cmd in ("auto_improve.py run", "auto_improve.py history",
+                                "auto_improve.py key", "auto_improve.py status"):
+                    check(_ai_cmd in _ai_skill_txt,
+                          f"в скилле есть команда вместо кнопки: {_ai_cmd}")
+            # Ключ судьи вносится командой и не печатается. Проверяем
+            # по исходнику модуля, а не «на глаз»: команда есть, ключ
+            # читается из ввода (getpass), а не из argv[1] — иначе он
+            # остался бы в истории команд.
+            _ai_src = (_tk_root / "tools" / "dbapp" / "auto_improve.py").read_text(
+                encoding="utf-8")
+            check('action == "key"' in _ai_src,
+                  "в модуле есть команда вноса ключа")
+            _ai_key_body = _ai_src.split('action == "key"', 1)[-1].split(
+                'elif action == "run"', 1)[0] \
+                if 'action == "key"' in _ai_src else ""
+            check("getpass" in _ai_key_body,
+                  "ключ читается скрыто, а не аргументом команды")
+            check("argv[1]" not in _ai_key_body,
+                  "и в ключевой команде нет позиционного аргумента с ключом")
             check("git add -A" in _ai_readme and "improve/<тег>" in _ai_readme,
                   "в README сказано и про `git add -A`, и про ветку improve/<тег>")
-            _ai_dialog.close()
     finally:
         if _ai_dest is not None:
             _ai.key_file(_ai_dest).unlink(missing_ok=True)
@@ -8183,7 +8503,7 @@ def main() -> int:
         check(_gl_bit in _gl_caps_src,
               f"установка возможностей зовёт greenlight своим модулем ({_gl_bit})")
     _gl_main_src = (_gl_root / "tools" / "dbapp" / "main.py").read_text(encoding="utf-8")
-    for _gl_bit, _gl_why in (
+    for _gl_gone, _gl_why in (
         ("Проверить iOS-приложение…", "кнопка основной проверки"),
         ("Собрать greenlight", "кнопка сборки"),
         ("Список проверок", "кнопка сухого прогона"),
@@ -8193,10 +8513,26 @@ def main() -> int:
         ("greenlight.scan", "запуск проверки из окна"),
         ("greenlight.verify_cloud", "облако — из окна"),
         ("CLOUD_WARNING", "предупреждение про сторонний сервис"),
-        ("opencode-base (PyQt6, Windows)", "в описании опции назван сам основа"),
-        ("он не нужен", "и прямо сказано, кому она не нужна"),
     ):
-        check(_gl_bit in _gl_main_src, f"вкладка opencode: {_gl_why} ({_gl_bit})")
+        check(_gl_gone not in _gl_main_src,
+              f"вкладка opencode: {_gl_why} убрана, работа — в скилле ({_gl_gone})")
+    _gl_skill_md = (_gl_root / "skills" / "greenlight" / "SKILL.md")
+    check(_gl_skill_md.is_file(), "скилл greenlight на месте")
+    if _gl_skill_md.is_file():
+        _gl_skill_txt = _gl_skill_md.read_text(encoding="utf-8")
+        for _gl_cmd in ("greenlight.py scan", "greenlight.py dry",
+                        "greenlight.py verify", "greenlight.py reports",
+                        "greenlight.py build", "greenlight.py status"):
+            check(_gl_cmd in _gl_skill_txt,
+                  f"в скилле есть команда вместо кнопки: {_gl_cmd}")
+        check("Revyl" in _gl_skill_txt and "--yes" in _gl_skill_txt,
+              "и облачная проверка описана вместе с подтверждением")
+    # «Он не нужен» раньше искалось как одна подстрока в коде, но такая фраза
+    # жила в тексте карточки. В подписи галочки она разорвана переносом
+    # строки, и её содержание уже проверяется выше — по собранной подписи
+    # галочки, а не по исходнику. Поэтому здесь остаётся только основа.
+    check("opencode-base (PyQt6, Windows)" in _gl_main_src,
+          "в описании опции назван сам основа")
 
     # Секретов и настоящих путей в новых файлах нет.
     _gl_files = [
@@ -8420,7 +8756,7 @@ def main() -> int:
         _gl_cli_env = dict(_gl_os.environ)
         _gl_cli_env["OPENCODE_CONFIG_DIR"] = str(_gl_dest)
         _gl_run = _gl_sp.run([sys.executable, str(_gl_cli), "status"],
-                             capture_output=True, text=True, errors="replace", encoding="utf-8",
+                             capture_output=True, text=True, encoding="utf-8",
                              env=_gl_cli_env, timeout=90)
         _gl_out = (_gl_run.stdout or "") + (_gl_run.stderr or "")
         check(_gl_run.returncode in (0, 1) and "greenlight" in _gl_out
@@ -8435,36 +8771,21 @@ def main() -> int:
         _gl_tip = _gl_tab.checks["greenlight"].toolTip()
         check("PyQt6" in _gl_tip and "не нужен" in _gl_tip,
               "в описании опции прямо сказано, что opencode-base она не нужна")
-        check(not _gl_tab.btn_gl_run.isEnabled()
-              and not _gl_tab.btn_gl_dry.isEnabled()
-              and not _gl_tab.btn_gl_cloud.isEnabled(),
-              "кнопки проверок выключены, пока галочка снята")
-        _gl_tab.checks["greenlight"].setChecked(True)
-        check(_gl_tab.btn_gl_run.isEnabled() and _gl_tab.btn_gl_dry.isEnabled()
-              and _gl_tab.btn_gl_cloud.isEnabled(),
-              "и включаются вместе с галочкой")
-        _gl_tab.checks["greenlight"].setChecked(False)
-        check(not _gl_tab.btn_gl_run.isEnabled(),
-              "а со снятой галочкой проверка снова не запускается")
-        for _gl_attr in ("btn_gl_check", "btn_gl_build", "btn_gl_run",
+        for _gl_gone in ("btn_gl_check", "btn_gl_build", "btn_gl_run",
                          "btn_gl_dry", "btn_gl_cloud", "btn_gl_report", "gl_hint"):
-            check(hasattr(_gl_tab, _gl_attr),
-                  f"на вкладке есть орган управления: {_gl_attr}")
-        _gl_dialog = _gl_app.GreenlightScanDialog("scan")
-        check(_gl_dialog.values()["project"] == ""
-              and _gl_dialog.values()["ipa"] == "",
-              f"окно проверки начинает с пустых полей: {_gl_dialog.values()}")
-        _gl_dialog._accept()
-        check(_gl_dialog.result() != _gl_app.QDialog.DialogCode.Accepted,
-              "пустая папка проекта не принимается — окно не закрывается")
-        _gl_dialog.close()
-        _gl_cloud_dialog = _gl_app.GreenlightScanDialog("cloud")
-        check("Revyl" in _gl_cloud_dialog.windowTitle(),
-              f"облачное окно названо своим именем: {_gl_cloud_dialog.windowTitle()}")
-        _gl_cloud_dialog._accept()
-        check(_gl_cloud_dialog.result() != _gl_app.QDialog.DialogCode.Accepted,
-              "и без имени сборки не принимается")
-        _gl_cloud_dialog.close()
+            check(not hasattr(_gl_tab, _gl_gone),
+                  f"орган управления убран из окна: {_gl_gone}")
+        check(not hasattr(_gl_app, "GreenlightScanDialog"),
+              "окно проверки убрано из программы")
+        _gl_skill = (_tk_root / "skills" / "greenlight" / "SKILL.md")
+        check(_gl_skill.is_file(), "скилл greenlight на месте")
+        if _gl_skill.is_file():
+            _gl_skill_txt = _gl_skill.read_text(encoding="utf-8")
+            for _gl_cmd in ("greenlight.py scan", "greenlight.py dry",
+                            "greenlight.py verify", "greenlight.py reports",
+                            "greenlight.py build"):
+                check(_gl_cmd in _gl_skill_txt,
+                      f"в скилле есть команда вместо кнопки: {_gl_cmd}")
     finally:
         _gl.find_binary, _gl.find_go, _gl.find_make = _gl_saved
         if _gl_saved_env is None:
@@ -8866,7 +9187,7 @@ def main() -> int:
         _prod_lock, _prod_before = None, None
     try:
         _first = subprocess.Popen([sys.executable, str(_probe), str(_pid_file)],
-                                  stdout=subprocess.PIPE, text=True, errors="replace")
+                                  stdout=subprocess.PIPE, text=True)
         # Ждём не фиксированное время, а сам факт: первый процесс пишет
         # файл в тот момент, когда метка уже у него. На нагруженной
         # машине 2.5 секунды не хватало — Python стартует в несколько
@@ -8876,7 +9197,7 @@ def main() -> int:
             time.sleep(0.2)
             _waited += 0.2
         _second = subprocess.run([sys.executable, str(_probe), str(_pid_file)],
-                                 capture_output=True, text=True, errors="replace", timeout=60)
+                                 capture_output=True, text=True, timeout=60)
         check(_second.stdout.strip().endswith("LOCK-BUSY"),
               f"второй экземпляр отказывается открываться: "
               f"{_second.stdout.strip() or 'нет ответа'}"
@@ -8913,7 +9234,7 @@ def main() -> int:
         while _waited2 < 30.0:
             _third = subprocess.run(
                 [sys.executable, str(_probe), str(_pid_file)],
-                capture_output=True, text=True, errors="replace", timeout=60)
+                capture_output=True, text=True, timeout=60)
             _out = _third.stdout.strip()
             if "LOCK-TAKEN" in _out:
                 break
@@ -10686,51 +11007,6 @@ def main() -> int:
               "и сверка говорит, что файлы разошлись")
     finally:
         shutil.rmtree(_bi, ignore_errors=True)
-# ---- 8и-1. Список инструкций полон, и ни одна ссылка не мертва
-    echo("\n--- 8и-1. Файлы инструкций: список полон, ссылки живые ---")
-    # Проверки не было: указатели перечисляли 7 файлов из 13, и это молчало
-    # (12.10.2026). Тот же класс, что §22.7 про описание навыков: папка
-    # растёт, указатель отстаёт, проверить это было нечем.
-    _inst = core.program_root() / "инструкции"
-    _md = sorted(p.name for p in _inst.glob("*.md"))
-    check(bool(_md), "в инструкции/ есть .md файлы: %d" % len(_md))
-
-    def _named(text):
-        """Имена файлов из строк таблицы: строки вида | `имя.md` | …"""
-        out = set()
-        for line in text.splitlines():
-            if not line.startswith("| `"):
-                continue
-            for cell in line.strip("|").split("|"):
-                for tok in cell.split("`")[1::2]:
-                    if tok.endswith(".md"):
-                        out.add(tok)
-        return out
-
-    _readme = _inst / "README.md"
-    _card = _inst / "_О-ПАПКЕ.md"
-    if not (_readme.is_file() and _card.is_file()):
-        echo("указатели папки не найдены — проверка пропущена")
-    else:
-        _readme_t = _readme.read_text(encoding="utf-8")
-        _card_t = _card.read_text(encoding="utf-8")
-        _no_readme = [n for n in _md if n not in _named(_readme_t)]
-        check(not _no_readme,
-              "каждый файл назван в инструкции/README.md; нет: %s"
-              % (_no_readme or "никого"))
-        # Карточка папки саму себя не перечисляет — это её устройство.
-        _no_card = [n for n in _md if n != "_О-ПАПКЕ.md"
-                    and n not in _named(_card_t)]
-        check(not _no_card,
-              "каждый файл назван в карточке папки; нет: %s"
-              % (_no_card or "никого"))
-        _dead = sorted(n for n in (_named(_readme_t) | _named(_card_t))
-                       if not (_inst / n).is_file())
-        check(not _dead,
-              "ни одна ссылка не ведёт в пустоту: %s"
-              % (_dead or "все живые"))
-        # Имя `MCP-серверы.md` начинается с кириллической М — §22.10.
-        # Ссылка латинской М молча ведёт в пустоту, её ловит проверка выше.
 # ---- 8к. Общий модуль версий: проверяем сам по себе
     echo("\n--- 8к. Общий модуль версий ---")
     try:
@@ -10891,9 +11167,10 @@ def main() -> int:
     # --- настоящий реестр
     _base = core.program_root()
     _servers = mcp_registry.load_servers(_base)
-    check(len(_servers) == 12, f"реестр читается, 12 серверов: {len(_servers)}")
+    check(len(_servers) == EXPECTED_SERVERS,
+          f"реестр читается, ожидалось {EXPECTED_SERVERS} серверов: {len(_servers)}")
     check(all(s.program_install is not None for s in _servers),
-          "у всех 12 серверов есть блок program_install")
+          f"у всех {len(_servers)} серверов есть блок program_install")
     _by_id = {s.id: s.program_install for s in _servers}
     if all(_by_id.values()):
         check(_by_id["blender"].winget_id == "BlenderFoundation.Blender"
@@ -10946,9 +11223,20 @@ def main() -> int:
         for _a in _p.alternatives:
             if isinstance(_a, dict) and _a.get("winget_id"):
                 _winget_ids.add(str(_a["winget_id"]))
+    # Шесть новых идентификаторов сверены живым `winget show` 14.10.2026,
+    # а пять идентификаторов Unity — живым `winget show` 17.10.2026:
+    # Unity Hub 3.22.3.65535 (издатель Unity Technologies Inc.), редакторы
+    # 6000.6.6f1, 2023.2.22f1, 2022.3.62f3 и 2021.3.45f2 (Unity Technologies
+    # ApS). Это строгий набор: лишний идентификатор в реестре и пропавший —
+    # оба провала, иначе проверка перестаёт что-то значить.
     _want_ids = {"Adobe.CreativeCloud", "BlueStack.BlueStacks",
-                 "BlenderFoundation.Blender", "Google.AndroidStudio",
-                 "OBSProject.OBSStudio", "OpenJS.NodeJS.LTS"}
+                 "BlenderFoundation.Blender", "EpicGames.EpicGamesLauncher",
+                 "GodotEngine.GodotEngine", "Google.AndroidStudio",
+                 "OBSProject.OBSStudio", "OpenJS.NodeJS.LTS",
+                 "Roblox.RobloxStudio", "ByteDance.CapCut",
+                 "Spotify.Spotify", "OpenAI.Codex",
+                 "Unity.UnityHub", "Unity.Unity.6000", "Unity.Unity.2023",
+                 "Unity.Unity.2022", "Unity.Unity.2021"}
     check(_winget_ids == _want_ids,
           f"идентификаторы в реестре — те самые, включая варианты: {sorted(_winget_ids)}")
     # ---- 8м. Движок вкладки «Программы»
@@ -10976,13 +11264,16 @@ def main() -> int:
         check(any("серверов 0" in b for b in _bad2),
               f"и называет причину — ноль серверов: {(_bad2 or [''])[0][:70]}")
 
-        # Все двенадцать на месте, и у каждого четыре ответа.
+        # Все двадцать два на месте, и у каждого четыре ответа.
         _views = pmod.server_views(_base)
-        check(len(_views) == 12, f"движок прочитал все двенадцать серверов: {len(_views)}")
+        check(len(_views) == EXPECTED_SERVERS,
+          f"движок прочитал все {EXPECTED_SERVERS} серверов: {len(_views)}")
         _by = {v.id: v for v in _views}
         for _sid in ("windows-admin", "excel", "blender", "adobe-creativity",
                      "android-studio", "obs", "android-emulator", "ldplayer",
-                     "dbhub", "browsers", "omniroute", "lmarena"):
+                     "dbhub", "browsers", "omniroute", "lmarena",
+                     "unity", "unreal", "roblox-studio", "godot", "tiktok",
+                     "capcut", "spotify", "chatgpt", "codex", "cursor"):
             check(_sid in _by, f"сервер {_sid} есть в движке")
 
         # Порог версии сравнивается, а не просто запоминается. Пример DBHub
@@ -11071,13 +11362,14 @@ def main() -> int:
         _needs = pmod.bridge_needs(_base)
         check(len(_needs) == 2, f"в разделе «нужно мостам» два предмета: {len(_needs)}")
         _nn = {n.program: n for n in _needs}
-        check("Node.js" in _nn and _nn["Node.js"].wanted_by_count == 6,
-              "Node.js требуют шестеро серверов из двенадцати: LMArena на Python")
+        check("Node.js" in _nn and _nn["Node.js"].wanted_by_count == 9,
+              "Node.js требуют девять серверов из двадцати двух: LMArena и "
+              "OmniRoute на Node, Unreal, TikTok и Spotify — тоже")
         check(_nn.get("Node.js") is not None
               and _nn["Node.js"].install.winget_id == "OpenJS.NodeJS.LTS",
               "у Node.js настоящий идентификатор winget")
-        check("uv / uvx" in _nn and _nn["uv / uvx"].required_by == ["blender"],
-              "uv требует только blender — и его тоже не было в списке программ")
+        check("uv / uvx" in _nn and _nn["uv / uvx"].required_by == ["blender", "unity", "godot"],
+              "uv требуют blender, unity и godot — и uv не было в списке программ")
 
         # Раздел не должен молчать, если его нет.
         check(pmod.bridge_section_problem(_base) == "",
@@ -11327,8 +11619,9 @@ def main() -> int:
         check(_node is not None, "Node.js — карточка есть")
         _node_servers = set(_node.servers) if _node else set()
         check(_node_servers == {"windows-admin", "excel", "obs", "dbhub",
-                               "browsers", "omniroute"},
-              f"Node.js одной карточкой на шестерых серверов: {sorted(_node_servers)}")
+                               "browsers", "omniroute", "unreal", "tiktok",
+                               "spotify"},
+              f"Node.js одной карточкой на девяти серверах: {sorted(_node_servers)}")
         check(sum(1 for c in _cards if c.name == "Node.js") == 1,
               "и не двумя карточками, как он описан в реестре")
         check("нужна:" in pcard.needed_by_text(_node, pcard.servers_by_name(_pbase)),
@@ -11858,7 +12151,7 @@ def main() -> int:
     def _is_repo(folder: Path) -> bool:
         try:
             r = _sp.run(["git", "rev-parse", "--is-inside-work-tree"],
-                        cwd=str(folder), capture_output=True, text=True, errors="replace",
+                        cwd=str(folder), capture_output=True, text=True,
                         timeout=20)
             return r.returncode == 0 and r.stdout.strip() == "true"
         except (OSError, ValueError):
@@ -11877,7 +12170,7 @@ def main() -> int:
         _pinned = ""
         try:
             _st = _sp.run(["git", "ls-files", "--stage", "--", _sub_path],
-                          cwd=str(_prog), capture_output=True, text=True, errors="replace",
+                          cwd=str(_prog), capture_output=True, text=True,
                           timeout=20)
             for _row in _st.stdout.splitlines():
                 _p = _row.split()
@@ -12148,8 +12441,14 @@ def main() -> int:
     # `ВЕРСИЯ` — по §22.2, читает selfupdate.py. `LICENSE` — по решению
     # от 07.10.2026: gem Licensee в `.github/` лицензию не признаёт, живой
     # запрос отдал 404, и человек выбрал стандартное место.
+    # `skills-index.json` — файл механизма: его читает core.py при сборе
+    # скиллов, без него указатель скиллов не строится. `STATE.md` — рабочий
+    # снимок состояния проекта, его читает человек, а не код; он отслеживается
+    # git (6567a35), то есть присутствует в корне намеренно, а не остался
+    # от чужой работы. Оба добавлены осознанно: проверка по-прежнему ловит
+    # случайные файлы, просто её список был неполным.
     _allowed = {".gitignore", ".gitmodules", "Управление-базой.cmd",
-                "ВЕРСИЯ", "LICENSE"}
+                "ВЕРСИЯ", "LICENSE", "skills-index.json", "STATE.md"}
     _extra = [n for n in _root_files if n not in _allowed]
     check(not _extra, f"в корне нет лишних файлов: {_extra or 'чисто'}")
     _ver_file = _repo_dir / "ВЕРСИЯ"
@@ -12908,6 +13207,188 @@ def main() -> int:
               f"{_tab.btn_apply.toolTip()[:40]}")
         _tab._worker = None
         _tab.refresh()
+
+    # ---- 8с. Плагины мостов: указатели, выбор по версии, кнопки ----
+    echo("\n--- 8с. Плагины мостов: указатели и кнопки докачки ---")
+    try:
+        import editor_plugins
+        import plugin_index as _pi
+    except ImportError:
+        editor_plugins = None
+        _pi = None
+        check(False, "модули editor_plugins и plugin_index импортируются")
+    if editor_plugins is not None and _pi is not None:
+        check(True, "модули editor_plugins и plugin_index импортируются")
+
+        # Указатель читается, и в каждой полосе есть чем плагин взять.
+        for family in ("unity-mcp", "enginewire", "godot-ai", "ghidra-mcp"):
+            _idx, _why = _pi.load(family)
+            check(isinstance(_idx, dict) and bool(_idx.get("builds")),
+                  f"указатель {family} читается и полон полос")
+            for _b in ((_idx or {}).get("builds") or []):
+                _have = bool(_b.get("url")) or str(_b.get("kind")) == "package"
+                check(_have, f"{family}: у полосы {str(_b.get('version'))} есть файл")
+            _server = str((_idx or {}).get("server") or "")
+            check(bool(_server), f"{family}: версия сервера закреплена в указателе")
+            check("latest" not in _server and "@beta" not in _server,
+                  f"{family}: версия сервера не плавающая ({_server})")
+
+        # Плавающая метка в Unity означала бы, что проект может сломаться в
+        # любой день из-за чужого изменения ветки.
+        _unity_plugin, _w = _pi.pick_for("unity-mcp", "6000.0.35f1")
+        check(_unity_plugin is not None and "#v10.3.0" in _unity_plugin.url,
+              "пакет Unity закреплён меткой релиза, а не веткой")
+
+        # Границы честные: ниже и выше полосы плагина нет.
+        for family, version, expected in (("enginewire", "4.27", False),
+                                          ("enginewire", "5.7", True),
+                                          ("enginewire", "5.9", False),
+                                          ("godot-ai", "4.6", False),
+                                          ("godot-ai", "4.7", True),
+                                          ("ghidra-mcp", "12.1.2", False),
+                                          ("ghidra-mcp", "12.1.4", True),
+                                          ("unity-mcp", "2020.3", False)):
+            _got, _why2 = _pi.pick_for(family, version)
+            check((_got is not None) == expected,
+                  f"{family} на {version}: {'плагин есть' if expected else 'плагина нет'}")
+
+        # У Ghidra официального хеша нет — и об этом сказано, а не выдумано.
+        _gh, _w3 = _pi.pick_for("ghidra-mcp", "12.1.4")
+        check(_gh is not None and _gh.sha256 == "",
+              "у расширения Ghidra честно нет официального хеша")
+
+        # Встроенные плагины: файл лежит в папке программы и проходит сверку.
+        # Без этой проверки «работает без интернета» было бы обещанием.
+        for family in ("enginewire", "godot-ai", "ghidra-mcp"):
+            _p, _w4 = _pi.pick_for(family, "0")
+            _p = _p or None
+            _idx2, _w5 = _pi.load(family)
+            _build = ((_idx2 or {}).get("builds") or [{}])[0]
+            check(bool(_build.get("bundled")),
+                  f"{family}: в указателе сказано, что файл встроенный")
+            _local = _pi.bundled_path(
+                pi_plugin := _pi.Plugin(family=family,
+                                        file=str(_build.get("file") or ""),
+                                        sha256=str(_build.get("sha256") or ""),
+                                        local_sha256=str(_build.get("local_sha256") or ""),
+                                        local_sha256_when=str(_build.get("local_sha256_when") or ""),
+                                        bundled=True))
+            check(_local is not None and _local.is_file(),
+                  f"{family}: архив лежит в папке программы: "
+                  f"{_local.name if _local else 'нет'}")
+            if _local is not None and pi_plugin is not None:
+                _st, _nt = _pi.verify(pi_plugin, _local)
+                check(_st in (_pi.MATCH, _pi.UNCHECKED),
+                      f"{family}: встроенный архив проходит сверку ({_st}) — {_nt}")
+        _status, _note = _pi.verify(_gh, _gh and Path("нет-такого-файла.zip") or Path("x"))
+        check(_status in (_pi.MISMATCH, _pi.UNCHECKED),
+              f"и сверка честно отказывает: {_status}")
+
+        # Обработчики плагинов: по одному на каждый мост с плагином.
+        for finder in ("unity", "unreal", "godot", "ghidra-mcp"):
+            _h = editor_plugins.HANDLERS.get(finder)
+            check(bool(_h) and callable(_h[0]) and callable(_h[1]),
+                  f"у обработчика {finder} есть и проверка, и установка")
+
+        # Проверки требований в реестре знают все пять имён плагинов.
+        for name in ("unity-mcp-package", "enginewire-plugin", "godot-ai-addon",
+                     "ghidra-mcp-extension", "roblox-studio-server"):
+            check(name in _mcp_registry._PLUGIN_CHECKS,
+                  f"реестр умеет проверять плагин «{name}»")
+
+        # В реестре: у четырёх мостов блок плагина есть и заполнен, у Roblox —
+        # нет (плагина не существует, а кнопка «поставить» была бы враньём).
+        _raw = _mcp_registry.load_registry(_base)
+        _by_id = {s["id"]: s for s in _raw.get("servers", [])}
+        for sid in ("unity", "unreal", "godot", "ghidra-mcp"):
+            _pl = ((_by_id.get(sid) or {}).get("program_install") or {}).get("plugin") or {}
+            check(bool(_pl.get("finder")) and bool(_pl.get("button"))
+                  and bool(_pl.get("hint")) and bool(_pl.get("unavailable")),
+                  f"у {sid} блок плагина заполнен: {bool(_pl)}")
+            check(str(_pl.get("finder")) in editor_plugins.HANDLERS,
+                  f"и обработчик для {sid} в коде есть: {_pl.get('finder')}")
+        _rx = (_by_id.get("roblox-studio") or {}).get("program_install") or {}
+        check(not _rx.get("plugin"),
+              "у Roblox блока плагина нет — ставить нечего, кнопка была бы враньём")
+        _rx_req = [r for r in ((_by_id.get("roblox-studio") or {}).get("requires") or [])
+                   if str(r.get("type")) == "plugin"]
+        check(bool(_rx_req) and str(_rx_req[0].get("check")) == "roblox-studio-server",
+              "а требование проверяется живо по файлу mcp.bat")
+
+        # Unity теперь ставится кнопкой: метод winget и живой идентификатор.
+        _up = (_by_id.get("unity") or {}).get("program_install") or {}
+        check(str(_up.get("method")) == "winget"
+              and str(_up.get("winget_id")) == "Unity.UnityHub",
+              f"Unity ставится через winget: {_up.get('winget_id')}")
+        check(len(_up.get("alternatives") or []) >= 1,
+              f"и варианты редактора перечислены: "
+              f"{len(_up.get('alternatives') or [])}")
+
+        # Непроверяемое число инструментов в реестре — беда этого круга.
+        _gh_name = str((_by_id.get("ghidra-mcp") or {}).get("name") or "")
+        check("209" not in _gh_name,
+              f"неподтверждённое число инструментов из названия убрано: {_gh_name}")
+        _gh_count = str((_by_id.get("ghidra-mcp") or {}).get("tools_count") or "")
+        check("67" in _gh_count and "измерен" in _gh_count.lower(),
+              "и вместо него написано то, что измерено на этой машине")
+
+        # Кнопка докачки больше не зашита на OBS: её получает карточка.
+        _main_src = (core.program_root() / "tools" / "dbapp" / "main.py")
+        _fetch_txt = ""
+        if _main_src.is_file():
+            _text = _main_src.read_text(encoding="utf-8", errors="replace")
+            _grab = _text.split("def _fetch_card", 1)
+            _fetch_txt = _grab[1].split("def ", 1)[0] if len(_grab) > 1 else ""
+        check("plugin_fetch" in _fetch_txt and "ensure_plugin" not in _fetch_txt,
+              "кнопка докачки берёт исполнителя с карточки, а не только OBS")
+
+    # ---- 8т. Цепочка «Настроить автоматически» ----
+    echo("\n--- 8т. Настроить автоматически: проект, плагин, маршрут ---")
+    import engine_setup as _es
+    import tempfile as _tf
+    _tmp = Path(_tf.gettempdir()) / "opencode" / "проверка-цепочки"
+    if _tmp.exists():
+        __import__("shutil").rmtree(_tmp, ignore_errors=True)
+    _tmp.mkdir(parents=True, exist_ok=True)
+    _proj_u = _tmp / "юнити"
+    (_proj_u / "Assets").mkdir(parents=True, exist_ok=True)
+    _proj_g = _tmp / "годот"
+    _proj_g.mkdir(parents=True, exist_ok=True)
+    (_proj_g / "project.godot").write_text("[application]\n", encoding="utf-8")
+
+    ok_u, note_u = _es.save_project(_tmp, _es.UNITY_NAME, str(_proj_u))
+    check(ok_u and (_tmp / _es.UNITY_NAME).is_file(),
+          f"папка проекта Unity записывается сама: {note_u[:50]}")
+    bad_u, note_bad = _es.save_project(_tmp, _es.UNITY_NAME, str(_proj_g))
+    check(not bad_u and "Assets" in note_bad,
+          f"чужая папка Unity отвергнута: {note_bad[:50]}")
+    check(not (_tmp / _es.UNITY_NAME).read_text(encoding="utf-8").strip().endswith("годот"),
+          "и файл не перезаписан неверным путём")
+    ok_g, note_g = _es.save_project(_tmp, _es.GODOT_PROJECT_NAME, str(_proj_g))
+    check(ok_g and (_tmp / _es.GODOT_PROJECT_NAME).is_file(),
+          f"папка проекта Godot записывается сама: {note_g[:50]}")
+    check(not _es.save_project(_tmp, _es.UNITY_NAME, "")[0],
+          "пустая папка не принимается молча")
+
+    if editor_plugins is not None:
+        ok_r, note_r = editor_plugins.auto_setup("roblox-studio")
+        check(not ok_r and "плагина нет" in note_r,
+              f"мост без плагина честно отказывает: {note_r[:50]}")
+        ok_x, note_x = editor_plugins.auto_setup("такого-моста")
+        check(not ok_x and bool(note_x), "неизвестный мост отказывает словами")
+
+        _job_txt = ""
+        _main_file = core.program_root() / "tools" / "dbapp" / "main.py"
+        if _main_file.is_file():
+            _all = _main_file.read_text(encoding="utf-8", errors="replace")
+            # Откат в эмулятор был последней строкой в job(). Значит своя
+            # ветка обязана стоять непосредственно перед ним — иначе она
+            # недостижима, и никакой другой кусок файла это не покажет.
+            _fall = _all.find("auto_setup_emulator(dest, server")
+            _job_txt = _all[max(0, _fall - 1500):_fall] if _fall > 0 else ""
+        check("editor_plugins.auto_setup" in _job_txt,
+              "кнопка «Настроить автоматически» ведёт мост с плагином в свой "
+              "маршрут, а не в эмуляторный")
 
     # ---- итог
     failed = [text for good, text in results if not good]

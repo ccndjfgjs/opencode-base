@@ -99,9 +99,146 @@ def find_settings_dir() -> Path:
     return Path.home() / ".config" / "opencode"
 
 
+#: Выпуски, которые разрешено ставить. Хэш обязателен: скачанный со
+#: страницы архив без сверки мы бы не ставили. Версия 1.0.1 — первая, у
+#: которой есть команда `rtk hook opencode`; в winget лежит устаревшая
+#: 0.50.0, и на живой проверке 15.10.2026 от неё отказ.
+RELEASE_BASE = "https://github.com/rtk-ai/rtk/releases/download"
+KNOWN_RELEASES = {
+    "v1.0.1": {
+        "asset": "rtk-x86_64-pc-windows-msvc.zip",
+        "sha256": "64b4807c50b61dddf2ac1e86751dbda9117ab94ed02bf266e6584da571c39896",
+    },
+}
+
+#: Проверкам ставить нельзя: программа ставит софт, а проверка не имеет
+#: права менять машину, на которой сама работает.
+NO_INSTALL_ENV = "OPENCODE_NO_AUTO_INSTALL"
+
+
+def binary_dir() -> Path:
+    """Куда кладём программу. Эта папка уже есть в PATH."""
+    return Path.home() / ".local" / "bin"
+
+
+def install_binary(progress=None) -> tuple[list[str], list[str]]:
+    """Ставит rtk сам. Тихо, без вопросов: галочка нажата — значит надо.
+
+    Повторный вызов ничего не делает: если программа уже есть и отвечает,
+    это уже готово. Ничего не ставим, если выставлен запрет проверок.
+    """
+    import hashlib  # noqa: PLC0415 — нужен только здесь
+    import shutil  # noqa: PLC0415 — нужен только здесь
+    import urllib.request  # noqa: PLC0415 — нужен только здесь
+    import zipfile  # noqa: PLC0415 — нужен только здесь
+
+    messages: list[str] = []
+    errors: list[str] = []
+
+    def say(text: str) -> None:
+        messages.append(text)
+        if progress:
+            progress(text)
+
+    if os.environ.get(NO_INSTALL_ENV, ""):
+        # Отказ говорит так же, как остальные отказы rtk: «не включён» и
+        # «ничего не вписано». Одна и та же неудача двумя разными словами
+        # неудобна: человек не понимает, что произошло, и ищет причину не там.
+        return [], [f"rtk не включён: установка запрещена переменной "
+                    f"{NO_INSTALL_ENV} — её выставили проверки. "
+                    "В настройки opencode ничего не вписано."]
+
+    found = find_binary()
+    if found:
+        ok, note = live_check()
+        if ok:
+            return [f"rtk уже стоит: {found}"], []
+        say(f"rtk есть, но не отвечает ({note}) — поставлю подходящую версию.")
+    else:
+        say("rtk не найден — ставлю сам.")
+
+    if not KNOWN_RELEASES:
+        return messages, ["Нет ни одного выпуска с известным хэшем — ставить "
+                          "нечем. Поставь rtk сам, как в README автора."]
+
+    version = sorted(KNOWN_RELEASES, reverse=True)[0]
+    spec = KNOWN_RELEASES[version]
+    url = f"{RELEASE_BASE}/{version}/{spec['asset']}"
+    say(f"Качаю {version}: {spec['asset']}")
+
+    target = binary_dir()
+    target.mkdir(parents=True, exist_ok=True)
+    temp = target / f"rtk-{version}.zip"
+    try:
+        with urllib.request.urlopen(url, timeout=300) as response, \
+                temp.open("wb") as out:
+            shutil.copyfileobj(response, out)
+    except OSError as exc:
+        return messages, [f"скачать rtk не удалось: {exc}"]
+
+    got = hashlib.sha256(temp.read_bytes()).hexdigest()
+    if got != spec["sha256"]:
+        temp.unlink(missing_ok=True)
+        return messages, [
+            f"хэш не совпал: получили {got[:16]}…, а ждали "
+            f"{spec['sha256'][:16]}… Архив удалён, ничего не ставлю.",
+        ]
+    say(f"Хэш сверен: {got[:16]}…")
+
+    try:
+        with zipfile.ZipFile(temp) as archive:
+            for name in archive.namelist():
+                low = name.lower()
+                if low.endswith("rtk.exe") and low.count("/") == 0:
+                    (target / (BINARY + ".exe")).write_bytes(archive.read(name))
+                    break
+            else:
+                return messages, ["В архиве нет rtk.exe — ставить нечего."]
+    except (OSError, zipfile.BadZipFile) as exc:
+        return messages, [f"архив не распаковался: {exc}"]
+    finally:
+        temp.unlink(missing_ok=True)
+
+    exe = target / (BINARY + ".exe")
+    if not exe.is_file():
+        return messages, [f"файл положен, но называется не {BINARY}.exe: {exe}"]
+    say(f"Готово: {exe} ({exe.stat().st_size} байт)")
+    ok, note = live_check()
+    if not ok:
+        return messages, [f"поставил, но не работает: {note}"]
+    say("Проверка после установки прошла: " + note)
+    return messages, errors
+
+
+#: winget ставит пакет в свою папку и НЕ ВСЕГДА создаёт псевдоним в Links.
+#: Живая проверка 15.10.2026: rtk 0.50.0 лежал в
+#: WinGet\Packages\rtk-ai.rtk_...\rtk.exe, а Links содержал только чужой
+#: файл — то есть программа стояла и была не видна. Ровно то же было с
+#: Claude Code, и там это уже закрыто отдельным источником поиска.
+WINGET_PACKAGES = ("%LOCALAPPDATA%\\Microsoft\\WinGet\\Packages",)
+
+
 def find_binary() -> str | None:
-    """Путь к rtk. None — программы в PATH нет."""
-    return shutil.which(BINARY)
+    """Путь к rtk. None — программы нет.
+
+    Сначала PATH, как всегда. Если там нет, смотрим пакетные папки winget:
+    там программа бывает уже поставлена, но без псевдонима.
+    """
+    found = shutil.which(BINARY)
+    if found:
+        return found
+    import glob  # noqa: PLC0415 — нужен только здесь
+
+    for root in WINGET_PACKAGES:
+        # Широкий шаблон ловит и служебные файлы пакета (живая проверка:
+        # подобран .db вместо программы), поэтому отбираем по имени и
+        # расширению: сначала настоящий .exe, потом пакетный .cmd.
+        for pattern in ("*\\" + BINARY + ".exe", "*\\" + BINARY + ".cmd"):
+            for hit in sorted(glob.glob(os.path.expandvars(
+                    root + "\\" + BINARY + "*" + pattern))):
+                if os.path.isfile(hit) and Path(hit).stem.lower() == BINARY.lower():
+                    return hit
+    return None
 
 
 def _run(args: list[str], timeout: int) -> tuple[int, str, str]:
@@ -205,6 +342,16 @@ def install(dest: Path, progress=None) -> tuple[list[str], list[str]]:
         messages.append(text)
         if progress:
             progress(text)
+
+    # Программы может не быть. Тогда ставим её сами: человек нажал галочку,
+    # значит он её хочет. Проверка состояния сюда не заходит — она только
+    # читает и ничего не ставит, иначе прогон самопроверки ставил бы софт.
+    if not find_binary():
+        auto_messages, auto_errors = install_binary(progress=progress)
+        messages += auto_messages
+        if auto_errors:
+            errors += auto_errors
+            return messages, errors
 
     ok, note = live_check()
     if not ok:
@@ -342,7 +489,7 @@ def _say(text: str) -> None:
 
 
 def _main(argv: list[str]) -> int:
-    """Командная строка rtk: то же, что галочка и кнопки окна.
+    """Командная строка rtk: то же, что делали галочка и кнопки окна.
 
     Нужна затем, что проверки и скиллы не могут нажать галочку в окне.
     """

@@ -11,7 +11,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-PROG = Path(r'C:\Users\Dedy_Sher\Downloads\opencode-base-main')
+PROG = Path.home() / 'Downloads' / 'opencode-base-main'
 sys.path.insert(0, str(PROG / 'tools' / 'dbapp'))
 import core  # noqa: E402
 

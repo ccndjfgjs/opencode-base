@@ -66,20 +66,39 @@ CATEGORY_TITLES = {
 CATEGORY_BY_ID = {
     # Модели: не мост к программе, а источник моделей для opencode.
     "lmarena": "models",
-    # На Node.js. У всех шести мост поднимается через npm или npx.
+    # На Node.js. Мост поднимается через npm или npx.
     "windows-admin": "javascript",
     "excel": "javascript",
     "obs": "javascript",
     "dbhub": "javascript",
     "browsers": "javascript",
     "omniroute": "javascript",
-    # На Python.
+    "unreal": "javascript",
+    "tiktok": "javascript",
+    "spotify": "javascript",
+    # На Python: uvx тянет сервер Unity и godot-ai.
+    # ghidra-mcp тоже Python: мост поднимается через uv из папки
+    # репозитория. Правило раздела — «по тому, чем он поднят», а не по
+    # тому, к какой программе подключается. Без этой строки сервер молча
+    # уезжал в раздел «Прочее», а панель врала о подключённом: полный
+    # прогон самопроверки поймал это 16.10.2026.
+    "ghidra-mcp": "python",
     "blender": "python",
     "android-emulator": "python",
     "ldplayer": "python",
-    # Настоящего рантайма нет: плагин внутри IDE и сервер вендора.
+    "unity": "python",
+    "godot": "python",
+    # Настоящего рантайма нет: плагин внутри IDE или сервер на стороне вендора.
     "android-studio": "ide",
+    "roblox-studio": "ide",
     "adobe-creativity": "cloud",
+    "capcut": "cloud",
+    "chatgpt": "cloud",
+    "codex": "cloud",
+    "cursor": "cloud",
+    # Claude — такой же облачный разговор, как Codex и Cursor: поднимается
+    # локальной командой, а сама программа живёт в облаке.
+    "claude": "cloud",
 }
 
 BASE_BRIDGES_TITLE = "Мосты базы"

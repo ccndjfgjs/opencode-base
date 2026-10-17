@@ -274,6 +274,9 @@ PROGRAM_FILES = {
     "THIRD-PARTY-NOTICES.md": ("документы",),
     "mcp-registry.json": ("данные",),
     "skills-index.json": ("данные",),
+    #: Реестр агентов — такой же список, как у навыков: имя, описание и
+    #: команда вызова. Без него база не знает, кого вообще можно выбрать.
+    "agents-index.json": ("данные",),
 }
 
 
@@ -2638,22 +2641,140 @@ def refresh_skills(base: Path) -> list[str]:
             if changed:
                 messages.append(f"Агенты обновлены: {len(changed)} файл")
 
-    # Реестр MCP-серверов — та же история, едет вместе с базой.
-    for name in ("mcp-registry.json", "THIRD-PARTY-NOTICES.md"):
-        src_file = program_file(name)
-        dst_file = base / name
-        if not src_file.is_file():
-            continue
-        if dst_file.is_file() and dst_file.read_bytes() == src_file.read_bytes():
-            continue
-        try:
-            shutil.copy2(src_file, dst_file)
-            messages.append(f"Скопировано: {name}")
-        except OSError as exc:
-            messages.append(f"{name}: не удалось скопировать ({exc})")
+    # Реестр MCP-серверов и уведомления — та же история, едут вместе с базой.
+    messages.extend(sync_base_data(base))
     return messages
 
 
+#: Файлы, которые программа считает своими, а база получает копией.
+BASE_DATA_FILES = ("mcp-registry.json", "THIRD-PARTY-NOTICES.md")
+
+#: Папка в backups, где лежит версия, которую программа положила в базу
+#: в прошлый раз. По ней отличается «база просто отстала» от «человек
+#: правил реестр руками»: первое можно обновить молча, второе нельзя.
+SHIPPED_DIR = "дано-программой"
+
+
+def sync_base_data(base: Path, program: Path | None = None) -> list[str]:
+    """Приводит копии файлов программы в базе к тому, что лежит в программе.
+
+    Реестр серверов — часть программы, а не запись человека: пока он не
+    обновлялся при открытии вкладки, окно молча показывало старый список
+    и человек не мог подключить перенесённые мосты.
+
+    Но обновлять надо с умом. Три случая, и они различаются не догадкой:
+
+    * копия совпала с программой — ничего не делаем;
+    * копия совпала с тем, что программа дала в прошлый раз, — значит
+      человек её не трогал, она просто отстала. Обновляем, прежнюю
+      копию оставляем в backups;
+    * копия не совпала ни с чем — её правили руками. Тогда файл не
+      трогаем вовсе, а версию программы кладём рядом в backups и говорим
+      об этом словами. Молчаливый откат правок хуже старого списка.
+    """
+    messages: list[str] = []
+    base = Path(base)
+    if not base.is_dir():
+        return messages
+    for name in BASE_DATA_FILES:
+        src_file = program_file(name, program)
+        dst_file = base / name
+        if not src_file.is_file():
+            continue
+        src_bytes = src_file.read_bytes()
+        dst_bytes = dst_file.read_bytes() if dst_file.is_file() else None
+        if dst_bytes == src_bytes:
+            _remember_shipped(base, name, src_bytes)
+            continue
+        shipped = _shipped_bytes(base, name)
+        if dst_bytes is not None and shipped is not None and dst_bytes != shipped:
+            parked = _park_program_copy(base, name, src_bytes)
+            messages.append(
+                f"{name} в базе меняли руками — программа его не перезаписала. "
+                f"Твоя версия на месте, версия программы: {parked}"
+            )
+            continue
+        backup = _keep_previous(base, dst_file)
+        if dst_bytes is not None and shipped is None:
+            # Первая сверка после обновления программы: отличить «отстала»
+            # от «правили руками» ещё нечем, прошлой выдачи нет. Файл всё
+            # равно обновляем — иначе новая программа молча показывала бы
+            # старый список, — но говорим, что проверить было нечем и куда
+            # легла прежняя копия. Молчать здесь нельзя.
+            backup += ("; первая сверка после обновления программы, отличить "
+                       "правку от отставания было нечем — прежняя копия "
+                       "отложена")
+        try:
+            dst_file.parent.mkdir(parents=True, exist_ok=True)
+            dst_file.write_bytes(src_bytes)
+        except OSError as exc:
+            messages.append(f"{name}: не удалось скопировать ({exc})")
+            continue
+        _remember_shipped(base, name, src_bytes)
+        detail = _registry_size_note(base / name) if name == "mcp-registry.json" else ""
+        messages.append(f"Скопировано: {name}{detail}{backup}")
+    return messages
+
+
+def _shipped_path(base: Path, name: str) -> Path:
+    return base / ".workbuddy-ai" / "backups" / SHIPPED_DIR / name
+
+
+def _shipped_bytes(base: Path, name: str) -> bytes | None:
+    path = _shipped_path(base, name)
+    try:
+        return path.read_bytes()
+    except OSError:
+        return None
+
+
+def _remember_shipped(base: Path, name: str, body: bytes) -> None:
+    """Запоминает, что именно программа положила в базу. Молча."""
+    try:
+        path = _shipped_path(base, name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.is_file() and path.read_bytes() == body:
+            return
+        path.write_bytes(body)
+    except OSError:
+        # Не вышло запомнить — не повод мешать человеку: в следующий раз
+        # файл просто будет выглядеть как отставший.
+        pass
+
+
+def _keep_previous(base: Path, dst_file: Path) -> str:
+    """Откладывает прежнюю копию файла. Пустая строка — если её нет."""
+    if not dst_file.is_file():
+        return ""
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    folder = base / ".workbuddy-ai" / "backups" / f"{dst_file.stem}-{stamp}"
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(dst_file, folder / dst_file.name)
+        return f" (прежняя копия: {folder.name})"
+    except OSError as exc:
+        return f" (сохранить прежнюю не удалось: {exc})"
+
+
+def _park_program_copy(base: Path, name: str, body: bytes) -> str:
+    """Кладёт версию программы рядом, не трогая базу. Путь — для человека."""
+    folder = base / ".workbuddy-ai" / "backups" / SHIPPED_DIR
+    path = folder / f"новая-{name}"
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(body)
+        return str(path)
+    except OSError:
+        return "не удалось сохранить"
+
+
+def _registry_size_note(path: Path) -> str:
+    """Сколько серверов в реестре после копирования. Пусто — если не разобрали."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return f" — серверов в реестре: {len(data.get('servers') or [])}"
+    except (OSError, UnicodeDecodeError, ValueError):
+        return ""
 def refresh_instructions(base: Path) -> list[str]:
     """Обновляет инструкции в базе из конструктора.
 

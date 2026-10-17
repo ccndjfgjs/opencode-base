@@ -354,6 +354,36 @@ def start(dest: Path, provider: str = "", progress=None) -> tuple[list[str], lis
         if progress:
             progress(text)
 
+    if provider:
+        # Номер разбираем по списку: это единственное место, где список
+        # нужен. Имя наоборот — НЕ проверяем здесь: раньше неизвестное имя
+        # доходило дальше и отказывалось позже, с настоящей причиной
+        # (нет baseURL, нет прокси). Проверка по списку заменяла ту причину
+        # своей и ломала прежнее поведение.
+        if provider.strip().isdigit():
+            name, why = resolve_provider(dest, provider)
+            if not name:
+                say(choices_text(dest))
+                return [], [
+                    "запускать нечем: " + why + ".",
+                    "В настройки opencode ничего не вписано.",
+                ]
+            provider, why = name, why
+            say(f"Провайдер: «{provider}» ({why}).")
+        else:
+            say(f"Провайдер назван: «{provider.strip()}».")
+    else:
+        # Провайдера не назвали. Если в настройках есть кого взять — берём
+        # оттуда: так добавленный человеком провайдер подхватывается сам.
+        # Если взять некого, идём дальше как шли: прокси умеет работать на
+        # адресах по умолчанию. Ошибкой «нет ни одного провайдера» это
+        # заканчиваться не должно.
+        pick, why = suggest_provider(dest)
+        if pick:
+            provider = pick
+            say(f"Провайдер не назван — беру из настроек: «{provider}» "
+                f"({why}). Свой выбор: pxpipe.py choose.")
+
     if not find_npx():
         return [], [
             "npx не найден: он ставится вместе с Node.js, а pxpipe берётся "
@@ -371,14 +401,20 @@ def start(dest: Path, provider: str = "", progress=None) -> tuple[list[str], lis
         return [], [
             f"На {base_url()} уже работает pxpipe, но запущен не программой: "
             "неизвестно, куда он пересылает запросы. Останови его сам и "
-            "нажми «Запустить pxpipe» — тогда программа будет знать, к какому "
-            "провайдеру идут запросы.",
+            "запусти командой pxpipe.py start — тогда программа будет знать, "
+            "к какому провайдеру идут запросы.",
             "В настройки opencode ничего не вписано.",
         ]
 
     upstream = provider_base_url(dest, provider) if provider else ""
     if provider and not upstream:
-        return [], [
+        # Сообщения накопленные выше возвращаем: иначе строка «Провайдер
+        # назван» исчезала бы, и человек не видел бы, к кому он обращался.
+        messages.append(
+            f"Провайдер: «{provider}» — в настройках у него нет baseURL, "
+            f"пересылать некуда."
+        )
+        return messages, [
             f"У провайдера «{provider}» в настройках нет baseURL — непонятно, "
             "куда пересылать запросы.",
             "В настройки opencode ничего не вписано.",
@@ -401,8 +437,8 @@ def start(dest: Path, provider: str = "", progress=None) -> tuple[list[str], lis
         tail = _tail(log_file(dest))
         errors.append(
             f"Прокси не ответил за {START_TIMEOUT} с: {note}. "
-            "Первый запуск скачивает пакет из npm — если это он, нажми "
-            "кнопку ещё раз." + (f" Журнал: {tail}" if tail else "")
+            "Первый запуск скачивает пакет из npm — если это он, повтори "
+            "команду." + (f" Журнал: {tail}" if tail else "")
         )
         return messages, errors
     say(note)
@@ -681,6 +717,56 @@ def _block_text(text: str, obj_key: str = "provider", name: str = PROVIDER) -> s
     return text[start + len(begin) : stop]
 
 
+#: Проверкам запускать прокси нельзя: проверка не имеет права менять машину,
+#: на которой сама работает. Та же переменная, что у rtk и greenlight.
+NO_INSTALL_ENV = "OPENCODE_NO_AUTO_INSTALL"
+
+
+def ensure_proxy(dest: Path, provider: str = "",
+                 progress=None) -> tuple[list[str], list[str]]:
+    """Поднимает прокси, если он не отвечает: галочка доводит до готового сама.
+
+    Найдено 15.10.2026 живым прогоном: раньше установка просто отказывалась и
+    требовала, чтобы человек сам вспомнил про `pxpipe.py start`. Прокси и есть
+    та зависимость, которую надо доставить, а не предъявлять человеку.
+    """
+    messages: list[str] = []
+    errors: list[str] = []
+
+    def say(text: str) -> None:
+        messages.append(text)
+        if progress:
+            progress(text)
+
+    ok, _note = dashboard_ok(timeout=5)
+    if ok:
+        if _launch_info(dest).get("pid"):
+            return messages, errors
+        return messages, [
+            "Прокси отвечает, но запущен не программой — неизвестно, куда он "
+            "пересылает запросы. Остановите его и повторите галочку.",
+        ]
+
+    if os.environ.get(NO_INSTALL_ENV, ""):
+        # Как и остальные отказы: «pxpipe не включён» и про то, что в настройки
+        # ничего не попало (эту строку дописывает install). Найдено 16.10.2026
+        # полным прогоном самопроверки.
+        return messages, [f"pxpipe не включён: запуск прокси запрещён "
+                          f"переменной {NO_INSTALL_ENV} — её выставили проверки."]
+
+    name = (provider or "").strip() or suggest_provider(dest)[0]
+    if not name:
+        return messages, [
+            "провайдера выбрать не из чего: в настройках opencode нет ни одного "
+            "с адресом. Добавьте провайдера или назовите его прямо: "
+            "pxpipe.py start <имя>.",
+        ]
+    say(f"Прокси не отвечает — поднимаю сам на провайдере «{name}».")
+    start_messages, start_errors = start(dest, provider=name, progress=say)
+    messages += start_messages
+    return messages, start_errors
+
+
 def install(dest: Path, provider: str = "", progress=None) -> tuple[list[str], list[str]]:
     """Включает pxpipe: проверяет прокси и вписывает свой провайдер.
 
@@ -699,19 +785,25 @@ def install(dest: Path, provider: str = "", progress=None) -> tuple[list[str], l
     import opencode_caps  # noqa: PLC0415 — рядом лежит, круга нет
 
     dest = Path(dest)
+    proxy_messages, proxy_errors = ensure_proxy(dest, provider, progress=say)
+    messages += proxy_messages
+    if proxy_errors:
+        return messages, proxy_errors + [
+            "В настройки opencode ничего не вписано.",
+        ]
     ok, note = dashboard_ok(timeout=5)
     if not ok:
-        return [], [
-            f"pxpipe не включён: {note}. Сначала нажми «Запустить pxpipe» — "
-            "без живого прокси запись в настройках ничего не значит.",
+        return messages, [
+            f"pxpipe не включён: {note}. Прокси не отвечает даже после попытки "
+            "поднять его — проверьте, не занят ли порт.",
             "В настройки opencode ничего не вписано.",
         ]
     info = _launch_info(dest)
     if not info.get("pid"):
         return [], [
             "pxpipe не включён: прокси отвечает, но запущен не программой — "
-            "неизвестно, куда он пересылает запросы. Останови его и нажми "
-            "«Запустить pxpipe».",
+            "неизвестно, куда он пересылает запросы. Останови его и запусти "
+            "командой pxpipe.py start.",
             "В настройки opencode ничего не вписано.",
         ]
     say("Живая проверка прошла: " + note)
@@ -723,15 +815,15 @@ def install(dest: Path, provider: str = "", progress=None) -> tuple[list[str], l
     if not src:
         return [], [
             "pxpipe не включён: неизвестно, к какому провайдеру пересылает "
-            "запущенный прокси. Останови его и нажми «Запустить pxpipe» "
-            "с выбранным провайдером.",
+            "запущенный прокси. Останови его и запусти командой "
+            "pxpipe.py start <провайдер>.",
             "В настройки opencode ничего не вписано.",
         ]
     if chosen and chosen != src:
         return [], [
             f"pxpipe не включён: прокси запущен с источником «{src}», а выбран "
-            f"«{chosen}». Нажми «Остановить pxpipe», потом «Запустить pxpipe» "
-            "с нужным провайдером.",
+            f"«{chosen}». Останови командой pxpipe.py stop, потом "
+            "pxpipe.py start <провайдер> с нужным провайдером.",
             "В настройки opencode ничего не вписано.",
         ]
     choices = provider_choices(dest)
@@ -931,6 +1023,72 @@ def status(dest: Path) -> dict[str, object]:
     }
 
 
+def _settings_mtime(dest: Path) -> float:
+    """Когда последний раз правили настройки opencode.
+
+    Ключи и адреса провайдеров живут там. Правили файл — мог смениться
+    провайдер, ключ или адрес, и прокси, поднятый раньше, работает со
+    старыми данными. Время файла — единственное, чем это честно видно.
+    """
+    newest = 0.0
+    for name in ("opencode.jsonc", "opencode.json", "auth.json"):
+        try:
+            newest = max(newest, (Path(dest) / name).stat().st_mtime)
+        except OSError:
+            continue
+    return newest
+
+
+def stale_note(dest: Path) -> str:
+    """Пусто — прокси свежий. Иначе почему он устарел и что делать."""
+    info = _launch_info(dest)
+    if not info.get("pid"):
+        return ""
+    try:
+        known = pid_file(dest).stat().st_mtime
+    except OSError:
+        return ""
+    # Отсчёт идёт не от запуска прокси, а от более позднего из двух: запуск
+    # или последняя вписка плагина. Иначе прокси объявлял бы себя устаревшим
+    # сам у себя: вписка плагина меняет настройки, и через секунду status
+    # говорил бы «правили после запуска». Живая проверка это вскрыла.
+    try:
+        known = max(known, _manifest_mtime(dest))
+    except OSError:
+        pass
+    changed = _settings_mtime(dest)
+    if changed and changed > known + 1:
+        return ("настройки opencode правили ПОСЛЕ того, как прокси поднят и "
+                "плагин вписан — провайдер, ключ или адрес могли смениться. "
+                "Сменился провайдер или адрес — перезапусти: pxpipe.py restart. "
+                "Сменился только ключ — прокси трогать не надо, ключ читает "
+                "сам opencode.")
+    return ""
+
+
+def _manifest_mtime(dest: Path) -> float:
+    """Когда вписывали плагин. Файл манифеста трогается вместе с настройками."""
+    import opencode_caps  # noqa: PLC0415 — рядом лежит, круга нет
+
+    return (Path(dest) / opencode_caps.MANIFEST).stat().st_mtime
+
+
+def suggest_provider(dest: Path) -> tuple[str, str]:
+    """Провайдер из настроек прямо сейчас и почему именно он.
+
+    Порядок тот же, что у списка в окне: наши пресеты первыми, потом
+    остальные. Список берётся из настроек при каждом вызове, поэтому
+    добавленный человеком провайдер появляется сам.
+    """
+    names = provider_choices(dest)
+    if not names:
+        return "", "в настройках opencode нет ни одного провайдера"
+    if PROVIDER in names:
+        return PROVIDER, "это сам прокси"
+    return names[0], ("первый из списка ваших провайдеров; назови другой "
+                      "явно: pxpipe.py start <имя>")
+
+
 def status_text(dest: Path) -> str:
     """Строка состояния словами — для окна и для командной строки."""
     data = status(dest)
@@ -948,7 +1106,112 @@ def status_text(dest: Path) -> str:
     )
     if data["installed"] and data["source"]:
         parts.append(f"модели взяты у «{data['source']}»")
+    want, why = suggest_provider(dest)
+    if want:
+        parts.append(f"из настроек сейчас подходит провайдер «{want}» ({why})")
+    if data["running"]:
+        stale = stale_note(dest)
+        if stale:
+            parts.append(stale)
     return ". ".join(parts) + "."
+
+
+def choices_text(dest: Path) -> str:
+    """Список провайдеров из настроек с номерами — то, что видит человек."""
+    names = provider_choices(dest)
+    if not names:
+        return "В настройках opencode нет ни одного провайдера."
+    lines = ["Провайдеры в твоих настройках:"]
+    usable = 0
+    for i, name in enumerate(names, 1):
+        # Помечаем тех, к кому пересылать некуда: адреса в настройках нет.
+        # Иначе человек выбирает провайдера и получает отказ вместо работы.
+        where = provider_base_url(dest, name)
+        if where:
+            usable += 1
+            lines.append(f"  {i}. {name} — {where}")
+        else:
+            lines.append(f"  {i}. {name} — нет baseURL, прокси через него "
+                         f"не заработает")
+    if not usable:
+        lines.append("Годится ни один: у всех нет baseURL. Прокси нужен "
+                     "провайдер с адресом.")
+    lines.append("Назови номер или имя. Список читается из настроек при "
+                 "каждом запуске — добавленные тобой провайдеры тоже здесь.")
+    return "\n".join(lines)
+
+
+def resolve_provider(dest: Path, given: str = "") -> tuple[str, str]:
+    """Что человек назвал: номер из списка или имя. Пусто — не разобрались.
+
+    Возвращает (провайдер, причина). Причина непуста, когда имя не
+    найдено: тогда выдумывать ничего нельзя.
+    """
+    names = provider_choices(dest)
+    if not names:
+        return "", "в настройках opencode нет ни одного провайдера"
+    given = (given or "").strip()
+    if not given:
+        return "", "провайдер не назван"
+    if given.isdigit():
+        index = int(given)
+        if 1 <= index <= len(names):
+            return names[index - 1], f"выбран номер {index}"
+        return "", (f"номера {index} нет: в списке от 1 до {len(names)}")
+    if given in names:
+        return given, "назван именем"
+    return "", f"«{given}» нет в списке: {', '.join(names)}"
+
+
+def choose(dest: Path, progress=None) -> tuple[str, str]:
+    """Показывает список и спрашивает номер. Это то, о просил человек.
+
+    Перенаправленный ввод тоже годится: если строка пришла — берём её.
+    Отказываем только когда ввода действительно нет, и говорим чем
+    заменить: именем или номером прямо в команде.
+    """
+    import sys as _sys  # noqa: PLC0415 — нужен только здесь
+
+    _say(choices_text(dest))
+    _say("Твой выбор (номер или имя, Enter — отмена):")
+    try:
+        answer = _sys.stdin.readline()
+    except (EOFError, KeyboardInterrupt):
+        answer = ""
+    if not answer.strip():
+        # Пустая строка и конец ввода — разные вещи. Человек нажал Enter:
+        # это отмена. Ввода не было вовсе (агент, конвейер, перенаправление):
+        # сказать «отменено» было бы враньём, надо сказать правду.
+        if _sys.stdin.isatty():
+            return "", "отменено"
+        return "", ("ввода не было — выбирать не из чего. Назови провайдера "
+                    "явно: pxpipe.py start <номер или имя>")
+    name, why = resolve_provider(dest, answer.strip())
+    if not name:
+        return "", why
+    return name, why
+
+
+def restart(dest: Path, provider: str = "", progress=None) -> tuple[list[str], list[str]]:
+    """Перезапускает прокси, заново выбрав провайдера из настроек.
+
+    Нужно, когда провайдер или адрес сменились после запуска. Ключ
+    поменялся — перезапуск не нужен, его читает сам opencode.
+    """
+    messages: list[str] = []
+    errors: list[str] = []
+
+    def say(text: str) -> None:
+        messages.append(text)
+        if progress:
+            progress(text)
+
+    _, stop_errors = stop(dest)
+    if stop_errors:
+        return [], stop_errors
+    say("Прокси остановлен.")
+    started, start_errors = start(dest, provider=provider, progress=progress)
+    return started, start_errors
 
 
 def _say(text: str) -> None:
@@ -956,12 +1219,16 @@ def _say(text: str) -> None:
 
 
 def _main(argv: list[str]) -> int:
-    """Командная строка pxpipe: то же, что галочка и кнопки окна."""
+    """Командная строка pxpipe: то же, что делали галочка и кнопки."""
     action = (argv[0] if argv else "status").lower()
     dest = Path(os.environ.get("OPENCODE_CONFIG_DIR")
                 or Path.home() / ".config" / "opencode")
     if action in ("-h", "--help", "help"):
-        _say("pxpipe.py status | check | start [провайдер] | stop | install [провайдер] | remove | stats")
+        _say("pxpipe.py choose                    — показать твой список и выбрать")
+        _say("pxpipe.py status | check | start [номер|имя] | restart [номер|имя]")
+        _say("          | stop | install [номер|имя] | remove | stats")
+        _say("Провайдера можно не называть: он берётся из настроек opencode "
+             "при каждом запуске, а добавленный тобой провайдер появляется сам.")
         _say("Переключатель — на вкладке opencode; здесь то же самое словами.")
         return 0
     if action == "status":
@@ -971,9 +1238,18 @@ def _main(argv: list[str]) -> int:
         ok, note = dashboard_ok()
         _say(("Живая проверка: " if ok else "Живая проверка не прошла: ") + note)
         return 0 if ok else 1
-    if action == "start":
+    if action == "choose":
+        name, why = choose(dest)
+        if not name:
+            _say(why)
+            return 2
+        messages, errors = start(dest, provider=name)
+    elif action == "start":
         provider = argv[1] if len(argv) > 1 else ""
         messages, errors = start(dest, provider=provider)
+    elif action == "restart":
+        provider = argv[1] if len(argv) > 1 else ""
+        messages, errors = restart(dest, provider=provider)
     elif action == "stop":
         messages, errors = stop(dest)
     elif action == "install":
@@ -985,7 +1261,11 @@ def _main(argv: list[str]) -> int:
         messages, errors = stats(dest)
     else:
         _say(f"Не знаю такой команды: {action}")
-        _say("pxpipe.py status | check | start [провайдер] | stop | install [провайдер] | remove | stats")
+        _say("pxpipe.py choose                    — показать твой список и выбрать")
+        _say("pxpipe.py status | check | start [номер|имя] | restart [номер|имя]")
+        _say("          | stop | install [номер|имя] | remove | stats")
+        _say("Провайдера можно не называть: он берётся из настроек opencode "
+             "при каждом запуске, а добавленный тобой провайдер появляется сам.")
         return 2
     for line in messages:
         _say(line)
