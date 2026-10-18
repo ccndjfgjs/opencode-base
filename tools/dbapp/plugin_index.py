@@ -13,8 +13,8 @@
   "family": "enginewire",
   "name": "EngineWire",
   "kind": "archive",
-  "server": "unreal-engine-mcp-server@0.6.0-beta-f",
-  "checked": "2026-10-17",
+  "server": "встроенный в плагин, отдельной версии нет",
+  "checked": "2026-10-18",
   "builds": [
     {"since": "5.0", "until": "5.8", "version": "0.6.0-beta-f",
      "file": "EngineWire-plugin-0.6.0-beta-f.zip",
@@ -28,12 +28,13 @@
 Три правила, которые здесь зашиты и которые нельзя ломать молча:
 
 1. **Версия вне всех полос — отказ, а не «самый новый на всякий случай».**
-   Плагин не той версии хуже, чем никакого: Unity отказывается собирать проект,
-   Unreal роняет каждый вызов с `versionMismatch`.
+   Плагин не той версии хуже, чем никакого: Unity отказывается собирать проект.
 2. **Пустой `sha256` — честное «сверять нечем», а не «считаем, что совпало».**
    Возвращается третий статус `unchecked`, и вызывающий решает сам.
 3. **Версия сервера едет из указателя.** Две строки правды («константа в коде»
-   и «указатель») разъедутся на первом же обновлении.
+   и «указатель») разъедутся на первом же обновлении. У мостов, где сервер
+   встроен в плагин (так у Unreal в линии 0.6), `server` не содержит номера
+   версии — сверять тогда нечего, и это правда, а не недосказанность.
 """
 
 from __future__ import annotations
@@ -134,24 +135,9 @@ def _reason_none(data: dict, version: str, parsed: tuple[int, ...]) -> str:
             f"({data.get('family', '?')}). Плагин есть для: {'; '.join(spans)}")
 
 
-def pick(data: dict | None, version: str | tuple[int, ...],
-         family: str = "") -> tuple[Plugin | None, str]:
-    """Плагин для версии программы. Второе значение — причина отказа.
-
-    Самая свежая подходящая полоса выигрывает: полосы могут пересекаться по
-    границам, и брать надо ту, где версия плагина новее.
-    """
-    if not data:
-        return None, "указатель не загружен"
-    text = version if isinstance(version, str) else ".".join(map(str, version))
-    parsed = versions.version_tuple(text)
-    if not any(parsed):
-        return None, _reason_none(data, str(text), parsed)
-    fits = [b for b in (data.get("builds") or []) if isinstance(b, dict) and _fits(b, parsed)]
-    if not fits:
-        return None, _reason_none(data, str(text), parsed)
-    best = max(fits, key=lambda b: versions.version_tuple(str(b.get("version") or "")))
-    plugin = Plugin(
+def _build_plugin(data: dict, best: dict, family: str = "") -> Plugin:
+    """Собрать Plugin из полосы указателя. Один на всех — и pick, и latest."""
+    return Plugin(
         family=str(data.get("family") or family),
         name=str(data.get("name") or ""),
         version=str(best.get("version") or ""),
@@ -173,10 +159,55 @@ def pick(data: dict | None, version: str | tuple[int, ...],
         note=str(data.get("note") or ""),
         extra=dict(best.get("extra") or {}),
     )
+
+
+def pick(data: dict | None, version: str | tuple[int, ...],
+         family: str = "") -> tuple[Plugin | None, str]:
+    """Плагин для версии программы. Второе значение — причина отказа.
+
+    Самая свежая подходящая полоса выигрывает: полосы могут пересекаться по
+    границам, и брать надо ту, где версия плагина новее.
+    """
+    if not data:
+        return None, "указатель не загружен"
+    text = version if isinstance(version, str) else ".".join(map(str, version))
+    parsed = versions.version_tuple(text)
+    if not any(parsed):
+        return None, _reason_none(data, str(text), parsed)
+    fits = [b for b in (data.get("builds") or []) if isinstance(b, dict) and _fits(b, parsed)]
+    if not fits:
+        return None, _reason_none(data, str(text), parsed)
+    best = max(fits, key=lambda b: versions.version_tuple(str(b.get("version") or "")))
+    plugin = _build_plugin(data, best, family)
     if plugin.kind != "package" and not plugin.url:
         return None, (f"в полосе для версии {text} нет ссылки на файл плагина — "
                       f"указатель описан не полностью")
     return plugin, ""
+
+
+def latest(data: dict, family: str = "") -> tuple[Plugin | None, str]:
+    """Самая свежая полоса указателя — когда версия программы не измерена.
+
+    Нужна мостам, у которых движок может и стоять, и ещё не стоять: пустая
+    строка в требовании — это «пока неизвестно», а не «версия 9999».
+    """
+    builds = [b for b in (data.get("builds") or []) if isinstance(b, dict)]
+    if not builds:
+        return None, f"в указателе {data.get('family', family)} нет ни одной полосы"
+    best = max(builds, key=lambda b: versions.version_tuple(str(b.get("since") or "")))
+    plugin = _build_plugin(data, best, family)
+    if plugin.kind != "package" and not plugin.url:
+        return None, (f"у свежей полосы указателя ({data.get('family', family)}) "
+                      f"нет ссылки на файл плагина — указатель описан не полностью")
+    return plugin, ""
+
+
+def latest_for(family: str, root: Path | None = None) -> tuple[Plugin | None, str]:
+    """Прочитать указатель и взять его самую свежую полосу."""
+    data, note = load(family, root)
+    if data is None:
+        return None, note
+    return latest(data, family)
 
 
 def pick_for(family: str, version: str | tuple[int, ...],
@@ -186,6 +217,79 @@ def pick_for(family: str, version: str | tuple[int, ...],
     if data is None:
         return None, note
     return pick(data, version, family)
+
+
+def family_pair(family: str, version: str | tuple[int, ...],
+                root: Path | None = None) -> tuple[Plugin | None, str]:
+    """Плагин для версии программы и сверка версий — одним вызовом.
+
+    Порядок именно такой: сначала сверка, потом всё остальное. Мост не
+    должен качать и разворачивать архив, если сервер и плагин из разных
+    релизов — вызывающий получает отказ до сети.
+    """
+    plugin, why = pick_for(family, version, root)
+    if plugin is None:
+        return None, why
+    same, note = server_matches(plugin)
+    if not same:
+        return None, note
+    return plugin, note
+
+
+def server_version(plugin: Plugin) -> str:
+    """Версия из строки сервера. Формат у мостов разный: `пакет@1.2.3`
+    и `пакет==1.2.3`, поэтому знак ищется, а не зашит."""
+    text = str(plugin.server or "").strip()
+    if not text:
+        return ""
+    for mark in ("==", "@", ">="):
+        if mark in text:
+            return text.rsplit(mark, 1)[1].strip()
+    return ""
+
+
+def server_package(plugin: Plugin) -> str:
+    """Строка пакета сервера той же версии, что и выбранный плагин.
+
+    Версия сервера и плагина обязаны быть из одного релиза: при расхождении
+    Unreal отвечает на каждый вызов `versionMismatch`, и это выглядит как
+    «мост сломан», хотя сломан не мост. Поэтому версия подставляется из
+    указателя — той полосы, что выбрана для измеренной версии движка, — а
+    не из константы в коде лаунчера, которая разъедется при первом же
+    обновлении указателя.
+    """
+    text = str(plugin.server or "").strip()
+    if not text:
+        return ""
+    version = str(plugin.version or "").strip()
+    if not version:
+        return text
+    for mark in ("==", "@", ">="):
+        if mark in text:
+            return text.rsplit(mark, 1)[0] + mark + version
+    return text
+
+
+def server_matches(plugin: Plugin) -> tuple[bool, str]:
+    """Совпадают ли версии сервера и плагина. Расхождение — отказ, а не «и так сойдёт».
+
+    Пустая версия сервера в указателе — это не расхождение: bridges без
+    сервера в указателе (Ghidra) просто не объявляют его.
+    """
+    name = str(plugin.name or "").strip() or "плагин"
+    want = server_version(plugin)
+    got = str(plugin.version or "").strip()
+    if not want:
+        return True, (f"указатель не заявляет версию сервера для {name} — "
+                      f"сверять нечего")
+    if not got:
+        return False, (f"у {name} не записана версия, а сервер заявлен как "
+                       f"{want} — сверять не с чем")
+    if versions.version_tuple(want) == versions.version_tuple(got):
+        return True, f"сервер и плагин одного релиза: {got}"
+    return False, (f"версии не совпадают: сервер {want}, плагин {got}. При таком "
+                   f"расхождении {name} отвечает на каждый вызов "
+                   f"versionMismatch — мост включать нельзя")
 
 
 #: Потолок файла. Плагины весят единицы мегабайт; 200 МБ — это уже не плагин,

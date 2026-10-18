@@ -35,6 +35,7 @@ sys.path.insert(0, str(HERE / "launchers"))
 
 import plugin_index  # noqa: E402
 import versions  # noqa: E402
+from engine_setup import UNREAL_PORT_DEFAULT  # noqa: E402
 
 WIN = os.name == "nt"
 PROBE_TIMEOUT = 20
@@ -162,6 +163,15 @@ def process_running(image: str) -> bool:
     return code == 0 and image.lower() in (out or "").lower()
 
 
+def process_running_any(images) -> bool:
+    """Открыт ли хоть один из процессов.
+
+    Список, а не одно имя: у разных версий редактора имя файла разное, и
+    проверка по одному имени молчала бы там, где редактор открыт.
+    """
+    return any(process_running(str(image)) for image in images)
+
+
 def cache_dir() -> Path:
     """Папка для скачанных плагинов внутри программы."""
     target = HERE / CACHE_DIRNAME
@@ -201,6 +211,46 @@ UNITY_HUBS = (
 )
 UNITY_PROJECT_MARKER = "Assets"
 UNITY_PACKAGE = "com.coplaydev.unity-mcp"
+UNITY_STANDALONE_PREFIX = "Unity "
+
+
+def program_files_dirs() -> list[Path]:
+    """Папки, куда установщики по умолчанию кладут программы."""
+    out: list[Path] = []
+    for name in ("ProgramFiles", "ProgramFiles(x86)"):
+        value = os.environ.get(name, "")
+        if value:
+            out.append(Path(value))
+    local = os.environ.get("LOCALAPPDATA", "")
+    if local:
+        out.append(Path(local) / "Programs")
+    return out
+
+
+def unity_standalone_editors(bases) -> list[tuple[str, Path]]:
+    """Редакторы, поставленные winget без хаба.
+
+    Такой установщик кладёт редактор отдельной папкой рядом с Program
+    Files — «Unity 6000.6.6f1\\Editor\\Unity.exe», — а не в раскладку хаба
+    «Unity\\Hub\\Editor\\<версия>». Раньше программа искала только вторую и
+    установленный редактор объявляла ненайденным.
+
+    Папки передаются снаружи специально: так проверка идёт по временным
+    каталогам, а не по тому, что случайно стоит на машине.
+    """
+    found: list[tuple[str, Path]] = []
+    for base in (Path(item) for item in bases):
+        if not base.is_dir():
+            continue
+        for child in sorted(base.iterdir()):
+            # Только папка редактора: у «Unity Hub» такого префикса нет.
+            if not child.is_dir() or not child.name.startswith(UNITY_STANDALONE_PREFIX):
+                continue
+            version = child.name[len(UNITY_STANDALONE_PREFIX):].strip()
+            exe = child / "Editor" / "Unity.exe"
+            if version and exe.is_file():
+                found.append((version, exe))
+    return found
 
 
 def unity_editors() -> Found:
@@ -210,8 +260,10 @@ def unity_editors() -> Found:
     `Unity.exe` в свойствах файла версию редактора не отдаёт.
     """
     found = Found(hint="Ставится через winget: Unity.UnityHub (хаб) и "
-                       "Unity.Unity.6000 (редактор). Бесплатную лицензию "
-                       "Unity Personal активирует только хаб.")
+                       "Unity.Unity.6000 (редактор). Редактор без хаба "
+                       "кладётся отдельной папкой рядом с Program Files. "
+                       "Бесплатную лицензию Unity Personal активирует "
+                       "только хаб.")
     roots = [Path(p) for p in UNITY_HUBS]
     local = os.environ.get("LOCALAPPDATA", "")
     if local:
@@ -227,6 +279,11 @@ def unity_editors() -> Found:
             if not found.ok or versions.version_tuple(child.name) > versions.version_tuple(found.version):
                 found.path = exe
                 found.version = child.name
+    for version, exe in unity_standalone_editors(program_files_dirs()):
+        found.attempts.append(str(exe.parent.parent))
+        if not found.ok or versions.version_tuple(version) > versions.version_tuple(found.version):
+            found.path = exe
+            found.version = version
     return found
 
 
@@ -238,6 +295,111 @@ def unity_project_version(project: Path) -> str:
     match = re.search(r"m_EditorVersion:\s*(\S+)",
                       path.read_text(encoding="utf-8", errors="replace"))
     return match.group(1) if match else ""
+
+
+# Папки пользователя, где проекты лежат чаще всего. Обход всего диска не
+# делается никогда: это минуты ожидания и окно, в котором всё зависло.
+UNITY_PROJECT_FOLDERS = ("Documents", "Desktop", "Downloads", "Projects",
+                         "Unity", "Unity Projects", "Games", "Source", "Repos")
+# Внутри этих папок проектов не бывает, а обход вхолостую — это минуты.
+UNITY_SCAN_SKIP = frozenset({
+    "Library", "Temp", "Obj", "obj", "Logs", "Build", "Builds",
+    "node_modules", ".git", ".svn", "$RECYCLE.BIN", "System Volume Information",
+})
+UNITY_SCAN_DEPTH = 3
+UNITY_SCAN_LIMIT = 200
+# Бюджет папок: без него поиск по «Загрузкам» с 38 тысячами файлов идёт
+# полторы минуты, и окно с этим окном выглядит зависшим. Обрезанный поиск
+# честно говорит, что он обрезан — иначе это молчаливый пропуск проекта.
+UNITY_SCAN_BUDGET = 2000
+
+
+@dataclass
+class ProjectScan:
+    """Результат поиска проектов: что нашлось и не обрезался ли обход."""
+
+    items: list[tuple[Path, str]] = field(default_factory=list)
+    truncated: bool = False
+    visited: int = 0
+
+
+def unity_project_roots() -> list[Path]:
+    """Папки пользователя и дисков, в которых ищутся проекты Unity.
+
+    Игры и проекты часто лежат не в профиле, а на отдельном диске, поэтому
+    смотрятся и несколько папок верхнего уровня дисков. Обход диска целиком
+    не делается никогда: смотреть будут только эти папки.
+    """
+    out: list[Path] = []
+    home = os.environ.get("USERPROFILE", "")
+    if home:
+        base = Path(home)
+        for name in UNITY_PROJECT_FOLDERS:
+            for candidate in (base / name, base / "Documents" / name):
+                if candidate.is_dir() and candidate not in out:
+                    out.append(candidate)
+    for letter in "CDEFGHIJKLMNOPQRSTUVWXYZ":
+        drive = Path(f"{letter}:\\")
+        if not drive.is_dir():
+            continue
+        for name in UNITY_PROJECT_FOLDERS:
+            candidate = drive / name
+            if candidate.is_dir() and candidate not in out:
+                out.append(candidate)
+    return out
+
+
+def is_unity_project(path: Path) -> bool:
+    """Проект ли это: нужны и Assets, и ProjectSettings.
+
+    Одной папки Assets мало — так устроены и обычные папки с картинками.
+    """
+    path = Path(path)
+    return is_project(path, UNITY_PROJECT_MARKER) and (path / "ProjectSettings").is_dir()
+
+
+def scan_unity_projects(roots=None, max_depth: int = UNITY_SCAN_DEPTH,
+                        limit: int = UNITY_SCAN_LIMIT,
+                        budget: int = UNITY_SCAN_BUDGET) -> ProjectScan:
+    """Проекты Unity под указанными папками: (путь, версия редактора).
+
+    Версия берётся из самого проекта, а не из установленного редактора:
+    плагин выбирается под версию проекта — иначе проект на 2022 получит
+    пакет от 6000 и не откроется.
+
+    Обход ограничен бюджетом папок: папка «Загрузки» с программами внутри
+    обходится минуту с лишним. Если бюджет исчерпан, `truncated` говорит
+    об этом прямо — выбрать проект из списка можно, но молчать нельзя.
+    """
+    if roots is None:
+        roots = unity_project_roots()
+    scan = ProjectScan()
+    for root in (Path(item) for item in roots):
+        if not root.is_dir() or len(scan.items) >= limit:
+            continue
+        stack: list[tuple[Path, int]] = [(root, 0)]
+        while stack and len(scan.items) < limit:
+            current, depth = stack.pop()
+            scan.visited += 1
+            if scan.visited > budget:
+                scan.truncated = True
+                break
+            try:
+                children = sorted(item for item in current.iterdir() if item.is_dir())
+            except OSError:
+                continue
+            for child in children:
+                if child.name in UNITY_SCAN_SKIP or child.name.startswith("."):
+                    continue
+                if is_unity_project(child):
+                    scan.items.append((child, unity_project_version(child)))
+                    continue  # внутри проекта других проектов не бывает
+                if depth < max_depth:
+                    stack.append((child, depth + 1))
+        if scan.truncated:
+            break
+    scan.items.sort(key=lambda pair: str(pair[0]).lower())
+    return scan
 
 
 def unity_package_state(project: Path, package: str = UNITY_PACKAGE) -> tuple[bool, str]:
@@ -386,13 +548,83 @@ def enginewire_state(project: Path) -> tuple[bool, str]:
                   + (f", проверен на движке {engine}" if engine else ""))
 
 
+def enginewire_pair(engine_version: str) -> tuple[bool, str]:
+    """Совпадают ли версии плагина и сервера для этого движка Unreal.
+
+    Это ровно тот случай, который выглядит как «мост сломан», хотя сломан
+    не мост: сервер и плагин из разных релизов, и Unreal отвечает на
+    каждый вызов `versionMismatch`. Проверяется до установки и до записи
+    моста в настройки — включать то, что упадёт, нельзя.
+    """
+    plugin, why = plugin_index.pick_for("enginewire", engine_version)
+    if plugin is None:
+        return False, why
+    same, note = plugin_index.server_matches(plugin)
+    if not same:
+        return False, note
+    return True, note
+
+
+
+#: Кому какое семейство указателей. Ключ — `finder` в реестре: по нему
+#: программа знает, какой указатель читать для этого моста.
+FAMILY_BY_FINDER = {
+    "unity": "unity-mcp",
+    "unreal": "enginewire",
+    "godot": "godot-ai",
+    "ghidra-mcp": "ghidra-mcp",
+}
+#: Мосты, у которых указателя нет по существу, а не по недосмотру: плагин
+#: ставится руками (OBS, Blender) или сервер встроенный (Roblox). Их версии
+#: сверять не по чему, и называть это проблемой было бы враньём.
+NO_POINTER_FINDERS = ("obs", "blender-addon", "roblox")
+
+
+def family_for(finder: str) -> str:
+    """Семейство указателя по имени моста. Пусто — указателя нет."""
+    return FAMILY_BY_FINDER.get(str(finder or "").strip().lower(), "")
+
+
+def without_pointer(finder: str) -> bool:
+    """Указателя нет по существу — молчание здесь честно."""
+    return str(finder or "").strip().lower() in NO_POINTER_FINDERS
+
+
+def bridge_versions(finder: str, program_version: str = "") -> tuple[bool, str]:
+    """Какие версии сервера и плагина нужны этому мосту — и совпадают ли.
+
+    Пустая версия программы означает «движок, может быть, ещё не измерен»:
+    берётся самая свежая полоса указателя, а не выдуманная «9999».
+    """
+    family = family_for(finder)
+    if not family:
+        if without_pointer(finder):
+            return True, (f"у моста «{finder}» указателя плагинов нет по существу: "
+                          f"плагин ставится руками или сервер встроенный, сверять "
+                          f"нечего")
+        return True, (f"у моста «{finder}» указателя плагинов нет: версии "
+                      f"сверять не по чему")
+    if program_version:
+        plugin, note = plugin_index.family_pair(family, program_version)
+    else:
+        plugin, note = plugin_index.latest_for(family)
+        if plugin is not None:
+            same, note2 = plugin_index.server_matches(plugin)
+            if not same:
+                return False, note2
+    if plugin is None:
+        return False, note
+    return True, (f"{plugin.name} {plugin.version}; сервер "
+                  f"{plugin_index.server_package(plugin) or '—'}")
+
+
 def install_enginewire(project: Path, engine_version: str,
                        progress=None) -> tuple[bool, str]:
     """Скачать плагин под версию движка и разложить в проект."""
     project = Path(project)
     if not is_project(project, UNREAL_PROJECT_MARKER):
         return False, (f"{project} не похож на проект Unreal: нет папки Content")
-    plugin, why = plugin_index.pick_for("enginewire", engine_version)
+    plugin, why = plugin_index.family_pair("enginewire", engine_version)
     if plugin is None:
         return False, why
     if progress is not None:
@@ -406,7 +638,8 @@ def install_enginewire(project: Path, engine_version: str,
         return False, note2
     if progress is not None:
         progress(note)
-    return True, note2
+    return True, (f"{note2}. Сервер поднимает сам плагин в редакторе: мост "
+                  f"заработает, когда Unreal открыт с этим плагином")
 
 
 # --------------------------------------------------------------------------
@@ -482,7 +715,7 @@ def install_godot_addon(project: Path, godot_version: str,
     project = Path(project)
     if not (project / "project.godot").is_file():
         return False, f"в {project} нет project.godot — это не проект Godot"
-    plugin, why = plugin_index.pick_for("godot-ai", godot_version)
+    plugin, why = plugin_index.family_pair("godot-ai", godot_version)
     if plugin is None:
         return False, why
     if plugin.file != "godot-ai-v4-plugin.zip":
@@ -634,7 +867,7 @@ def install_ghidra_extension(engine_version: str, install: Path | None = None,
     install = Path(install) if install else ghidra_install()
     if not install:
         return False, "Гидра не найдена — качать некуда"
-    plugin, why = plugin_index.pick_for("ghidra-mcp", engine_version)
+    plugin, why = plugin_index.family_pair("ghidra-mcp", engine_version)
     if plugin is None:
         return False, why
     if progress is not None:
@@ -690,6 +923,22 @@ def roblox_studio() -> Found:
     return found
 
 
+def roblox_app_state() -> tuple[bool, str]:
+    """Установлена ли Roblox Studio — без разбора, включён сервер или нет.
+
+    Отдельная проверка от `roblox_mcp_state` намеренно: «студия стоит» и
+    «сервер в ней включён» — разные вещи. Когда обе были одной строкой,
+    программа писала «проверяется вручную» про студию, даже когда она
+    стояла, и человек думал, что настройка не сработала.
+    """
+    studio = roblox_studio()
+    if studio.ok:
+        return True, f"Roblox Studio {studio.version} на месте ({studio.path})"
+    return False, (studio.why("Roblox Studio") + " Ставится через winget, "
+                   "идентификатор Roblox.RobloxStudio — официальный установщик, "
+                   "тихой установки у него нет, нужно нажать Install в окне")
+
+
 def roblox_mcp_state() -> tuple[bool, str]:
     """Включён ли встроенный сервер Roblox.
 
@@ -721,6 +970,8 @@ def roblox_mcp_state() -> tuple[bool, str]:
 UNITY_PROJECT_FILE = "mcp-unity-project.txt"
 GODOT_PROJECT_FILE = "mcp-godot-project.txt"
 UNREAL_PROJECT_FILE = "mcp-unreal.txt"
+# Рядом с настройками opencode, не в проекте Unreal: версия сервера — дело
+# моста, а не проекта, и лаунчер читает её отсюда.
 
 
 def settings_dir() -> Path:
@@ -793,18 +1044,111 @@ def unity_fetch(progress=None) -> tuple[bool, str]:
     if not editors.ok:
         return False, editors.why("Unity")
     version = unity_project_version(project) or editors.version
-    plugin, why = plugin_index.pick_for("unity-mcp", version)
+    plugin, why = plugin_index.family_pair("unity-mcp", version)
     if plugin is None:
         return False, why
     return install_unity_package(project, plugin, progress)
 
 
+
+#: Признаки ответа настоящего MCP-сервера: код 4xx/5xx либо тело с полем
+#: error или заголовком сессии. Ровно это отличает сервер плагина от любой
+#: другой программы, которая заняла порт.
+MCP_MARKERS = ("jsonrpc", "\"error\"", "mcp-session-id", "streamable")
+UNREAL_EDITOR_IMAGES = ("UnrealEditor.exe", "UE4Editor.exe")
+
+
+def _probe_http(url: str, timeout: float = 3.0):
+    """Спросить адрес один раз. Нет ответа — None, а не «ошибка 0»."""
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(url, method="GET",
+                                     headers={"User-Agent": "opencode-base/1.0"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.status, response.read(2048).decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read(2048).decode("utf-8", errors="replace")
+        except Exception:  # noqa: BLE001 — тело не обязано читаться
+            body = ""
+        return exc.code, body
+    except Exception:  # noqa: BLE001 — сеть может отказать по-разному
+        return None
+
+
+def unreal_http_state(port: int, editor_running=None, timeout: float = 3.0) -> tuple[bool, str]:
+    """Отвечает ли сервер в плагине — и почему нет, если не отвечает.
+
+    Четыре разные причины и четыре разных ответа: одна общая ошибка не
+    говорит человеку ничего.
+
+    * редактор не открыт — мост отвечать не может в принципе;
+    * редактор открыт, порт молчит — плагин не включён или порт другой;
+    * порт отвечает, но не MCP — заняла другая программа;
+    * отвечает MCP — адрес можно вписывать в настройки.
+
+    Параметр `editor_running` передаётся только в проверках: по умолчанию
+    смотрится настоящий процесс редактора.
+    """
+    try:
+        port = int(port)
+    except (TypeError, ValueError):
+        return False, f"порт «{port}» — не число"
+    if not 1 <= port <= 65535:
+        return False, f"порт {port} — за пределами 1…65535"
+    running = (process_running_any(UNREAL_EDITOR_IMAGES)
+               if editor_running is None else bool(editor_running))
+    answer = _probe_http(f"http://127.0.0.1:{port}/mcp", timeout)
+    if answer is None:
+        if not running:
+            return False, ("Unreal не открыт — мост отвечает, только пока "
+                           "запущен редактор с плагином EngineWire. "
+                           "Открой проект и повтори")
+        return False, (f"редактор открыт, но на порту {port} никто не слушает: "
+                       f"либо плагин не включён, либо в его настройках другой "
+                       f"порт (по документации автора — {UNREAL_PORT_DEFAULT}, "
+                       f"на этой машине не проверено)")
+    code, body = answer
+    low = (body or "").lower()
+    if code >= 400 or any(marker in low for marker in MCP_MARKERS):
+        return True, (f"сервер плагина отвечает на 127.0.0.1:{port}/mcp "
+                      f"(код {code}). Мост можно вписывать; работать он будет, "
+                      f"пока открыт редактор")
+    return False, (f"порт {port} занят другой программой: отвечает код {code}, "
+                   f"и это не MCP-сервер. Освободи порт или укажи в настройках "
+                   f"плагина другой")
+
+
 def unreal_state(use_fallback: bool = False) -> tuple[bool, bool, str]:
-    """Плагин EngineWire в проекте Unreal."""
+    """Плагин EngineWire в проекте Unreal и отвечает ли его сервер.
+
+    Отдельной версии сервера больше нет: в линии 0.6 он живёт внутри
+    плагина, и проверять надо не две строки, а живой ответ по адресу.
+    """
     project = project_from_file(UNREAL_PROJECT_FILE)
     if project is None:
         return _no_project(UNREAL_PROJECT_FILE, UNREAL_PROJECT_MARKER)
     present, note = enginewire_state(project)
+    if present:
+        engines = unreal_engines()
+        if engines.ok:
+            same, note_same = enginewire_pair(engines.version)
+            if not same:
+                # Плагин лежит, но из другого релиза: кнопка поставит тот,
+                # который задуман. Молчать об этом нельзя.
+                return True, True, (f"{note}. {note_same}. Кнопка поставит "
+                                    f"версию, которая совпадает с указателем")
+        from engine_setup import read_unreal_port  # noqa: PLC0415 — настройки рядом
+
+        port = read_unreal_port(settings_dir())
+        live, live_note = unreal_http_state(port)
+        if not live:
+            # Плагин на месте, а сервер молчит: причину называем, кнопка
+            # остаётся рабочей — человек может починить и повторить.
+            return True, True, f"{note}. {live_note}"
+        return True, False, f"{note}. {live_note}"
     return present, not present, note
 
 

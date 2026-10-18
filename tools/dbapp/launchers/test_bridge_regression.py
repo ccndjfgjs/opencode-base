@@ -102,8 +102,30 @@ def main() -> None:
     # где они и закреплены.
     check(common.UNITY_FROM == "mcpforunityserver==10.3.0",
           "Unity осталась на закреплённой версии")
-    check(common.UNREAL_PACKAGE == "unreal-engine-mcp-server@0.6.0-beta-e",
-          "Unreal остался на закреплённой версии")
+    check(not hasattr(common, "UNREAL_PACKAGE"),
+          "мосту Unreal npm-пакет больше не нужен: константы в коде нет")
+
+    # === 7б. Лаунчер Unreal больше не запускает мост, а объясняет ===
+    # Сервер линии 0.6 встроен в плагин EngineWire, поэтому лаунчер не
+    # запускает ничего. Но файл остаётся: в старых настройках opencode ещё
+    # может стоять команда с ним, и вместо загадочной ошибки npm человек
+    # должен прочитать, что делать.
+    import tempfile
+    import re as _re
+    _unreal_src = Path(unreal.__file__).read_text(encoding="utf-8", errors="replace")
+    # Ищем именно закреплённый пакет вида `пакет@версия`. Голое число в
+    # пояснении («в npm последний 0.5.30») закреплённой версией не является,
+    # а вот `unreal-engine-mcp-server@...` вернуло бы мост к npm.
+    _pins = _re.findall(r"[\w./-]+@\d[\w.+-]*", _unreal_src)
+    check(not _pins,
+          f"в лаунчере Unreal не закреплён ни один npm-пакет: {_pins}")
+    check("subprocess" not in _unreal_src and "os.system" not in _unreal_src,
+          "и он вообще ничего не запускает: ни npx, ни процесс-мост, ни os.system")
+    check("Настроить автоматически" in _unreal_src,
+          "а прямо говорит, что нажать вместо старой команды")
+    check("localhost:3000/mcp" in _unreal_src,
+          "и называет адрес, по которому подключаются")
+
     check(common.TIKTOK_PACKAGE == "@getmcpads/tiktok-ads-mcp-server@2.0.1",
           "TikTok остался на закреплённой версии")
     for label, module in (("Unity", unity), ("Unreal", unreal), ("TikTok", tiktok)):

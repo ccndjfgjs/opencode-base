@@ -23,6 +23,15 @@ def check(ok: bool, text: str) -> None:
         raise SystemExit(1)
 
 
+def engine_setup_port(root: Path) -> int:
+    """Порт из настроек моста.
+
+    Отдельная функция, чтобы проверка читала ровно то, что читает программа
+    при сборке адреса, а не то, что записала минуту назад.
+    """
+    return setup.read_unreal_port(root)
+
+
 def main() -> None:
     root = Path(tempfile.mkdtemp(prefix="engine-setup-"))
     project = root / "MyGame"
@@ -39,9 +48,31 @@ def main() -> None:
     check(not (root / setup.UNREAL_NAME).exists(), "файл при отказе не появляется")
 
     ok, note = setup.save_unreal(root, str(project / "MyGame.uproject"))
-    check(ok and "токен" in note.lower(), "путь .uproject записан, токен не обещан")
+    # Обещание в заметке изменилось вместе с мостом: отдельной версии
+    # сервера и capability-токена больше нет — сервер живёт внутри плагина.
+    # Значит и обещание другое: мост работает, пока открыт редактор.
+    check(ok and "редактор" in note.lower(),
+          f"путь .uproject записан, ограничение названо: {note}")
     text = (root / setup.UNREAL_NAME).read_text(encoding="utf-8")
     check(f"project={project}" in text, "в файле папка проекта, не файл .uproject")
+    check("token" not in text.lower() and "secret" not in text.lower(),
+          "и в файле нет ни токена, ни секрета: там только путь проекта")
+
+    # Порт сервера: названный принимается, битый и вылезающий — нет.
+    ok_port, note_port = setup.save_unreal_port(root, "3210")
+    check(ok_port and engine_setup_port(root) == 3210,
+          f"названный порт читается обратно: {note_port}")
+    bad_port, note_bad = setup.save_unreal_port(root, "не число")
+    check(not bad_port and "не число" in note_bad,
+          f"битый порт отвергнут словами: {note_bad}")
+    far_port, note_far = setup.save_unreal_port(root, "70000")
+    check(not far_port and "65535" in note_far,
+          f"порт за пределами сети отвергнут: {note_far}")
+    blank_port, note_blank = setup.save_unreal_port(root, "")
+    check(blank_port and not note_blank,
+          f"пустой порт — это «оставить как есть», а не ошибка: {note_blank}")
+    check(engine_setup_port(root) == 3210,
+          "и после пустого значения остался прежний порт")
 
     ok, note = setup.save_godot(root, "{\"command\": [\"uvx\", \"godot-ai\"]}")
     check(not ok and "attach" in note, "Godot без attach отвергается")

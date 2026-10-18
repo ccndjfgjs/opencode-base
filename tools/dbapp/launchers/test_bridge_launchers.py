@@ -26,9 +26,10 @@ def main() -> None:
     check(common.parse_version("v24.19.0") == (24, 19, 0), "версия node разбирается")
     check(common.version_at_least((22, 12, 0), common.TIKTOK_NODE), "22.12 годится TikTok")
     check(not common.version_at_least((22, 11, 9), common.TIKTOK_NODE), "22.11 TikTok не берёт")
-    check(common.version_at_least((20, 19, 0), common.UNREAL_NODE), "20.19 годится Unreal")
-    check(not common.version_at_least((20, 18, 9), common.UNREAL_NODE), "20.18 Unreal не берёт")
-    check(not common.version_at_least((), common.UNREAL_NODE), "пустая версия не годится")
+    check(not hasattr(common, "UNREAL_NODE"),
+          "мосту Unreal Node не нужен, и минимальной версии для него нет")
+    check(not hasattr(common, "UNREAL_PACKAGE"),
+          "и npm-пакета в коде нет: сервер внутри плагина EngineWire")
 
     kv = common.parse_kv("# секрет\nTIKTOK_APP_ID=abc\nTIKTOK_ACCESS_TOKEN=\"tok en\"\n\n")
     check(kv["TIKTOK_APP_ID"] == "abc", "ключ без комментария")

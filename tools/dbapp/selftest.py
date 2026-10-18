@@ -1170,10 +1170,16 @@ def main() -> int:
             _sync_body = _sync_src.read_bytes()
             _reg_copy = _sync_base / "mcp-registry.json"
             _reg_copy.write_bytes(_sync_body)
-            # второй файл программы тоже кладём заранее: иначе первый
-            # вызов скопирует его, и проверка «молчит» искала бы не то
-            (_sync_base / "THIRD-PARTY-NOTICES.md").write_bytes(
-                core.program_file("THIRD-PARTY-NOTICES.md").read_bytes())
+            # Остальные файлы программы тоже кладём заранее: иначе первый
+            # вызов скопирует их, и проверка «молчит» искала бы не то.
+            # Список берётся у программы, а не пишется здесь: иначе каждый
+            # новый файл программы ломал бы проверку, и чинить пришлось бы
+            # дописыванием строк вместо правды.
+            for _name in core.BASE_DATA_FILES:
+                if _name == "mcp-registry.json":
+                    continue
+                (_sync_base / _name).write_bytes(
+                    core.program_file(_name).read_bytes())
             check(core.sync_base_data(_sync_base) == [],
                   "совпадающий с программой реестр синхронизация не трогает")
 
@@ -13211,12 +13217,15 @@ def main() -> int:
     # ---- 8с. Плагины мостов: указатели, выбор по версии, кнопки ----
     echo("\n--- 8с. Плагины мостов: указатели и кнопки докачки ---")
     try:
+        import bridge_versions as _bvmod
         import editor_plugins
         import plugin_index as _pi
     except ImportError:
         editor_plugins = None
+        _bvmod = None
         _pi = None
-        check(False, "модули editor_plugins и plugin_index импортируются")
+        check(False, "модули editor_plugins, plugin_index и bridge_versions "
+                     "импортируются")
     if editor_plugins is not None and _pi is not None:
         check(True, "модули editor_plugins и plugin_index импортируются")
 
@@ -13311,9 +13320,10 @@ def main() -> int:
         check(not _rx.get("plugin"),
               "у Roblox блока плагина нет — ставить нечего, кнопка была бы враньём")
         _rx_req = [r for r in ((_by_id.get("roblox-studio") or {}).get("requires") or [])
-                   if str(r.get("type")) == "plugin"]
+                   if str(r.get("type")) == "plugin"
+                   and "включ" in str(r.get("what") or "").lower()]
         check(bool(_rx_req) and str(_rx_req[0].get("check")) == "roblox-studio-server",
-              "а требование проверяется живо по файлу mcp.bat")
+              "а включение сервера проверяется живо по файлу mcp.bat")
 
         # Unity теперь ставится кнопкой: метод winget и живой идентификатор.
         _up = (_by_id.get("unity") or {}).get("program_install") or {}
@@ -13377,6 +13387,26 @@ def main() -> int:
         ok_x, note_x = editor_plugins.auto_setup("такого-моста")
         check(not ok_x and bool(note_x), "неизвестный мост отказывает словами")
 
+        # Roblox: «студия стоит» и «сервер включён» — разные вещи. Когда обе
+        # проверки были одной строкой, программа писала «проверяется вручную»
+        # про студию, даже когда она стояла, и человек думал, что настройка
+        # не сработала.
+        _present, _note_app = editor_plugins.roblox_app_state()
+        check(isinstance(_present, bool) and bool(_note_app),
+              f"проверка студии Roblox отвечает сама: {_present} — {_note_app[:46]}")
+        check("roblox-studio-app" in _mcp_registry._PLUGIN_CHECKS,
+              "реестр умеет проверять установку Roblox Studio")
+        _rx_raw = _mcp_registry.load_registry(_base)
+        _rx_srv = next((s for s in _rx_raw.get("servers", [])
+                        if s.get("id") == "roblox-studio"), {})
+        _rx_reqs = [r for r in (_rx_srv.get("requires") or [])
+                    if str(r.get("what") or "").strip() == "Roblox Studio"]
+        check(bool(_rx_reqs) and str(_rx_reqs[0].get("type")) == "plugin"
+              and str(_rx_reqs[0].get("check")) == "roblox-studio-app",
+              "требование «Roblox Studio» проверяется живо, а не вручную")
+        check("ПЛАГИНА У ROBLOX НЕТ" in json.dumps(_rx_srv, ensure_ascii=False),
+              "и в реестре прямо сказано, что плагина нет и ставить нечего")
+
         _job_txt = ""
         _main_file = core.program_root() / "tools" / "dbapp" / "main.py"
         if _main_file.is_file():
@@ -13389,6 +13419,425 @@ def main() -> int:
         check("editor_plugins.auto_setup" in _job_txt,
               "кнопка «Настроить автоматически» ведёт мост с плагином в свой "
               "маршрут, а не в эмуляторный")
+
+    # ---- 8у. Кнопка «Настроить автоматически» нажимается по-настоящему ----
+    echo("\n--- 8у. Кнопка автонастройки: нажатие без падения ---")
+    # Модуль editor_plugins использовался в main.py в четырёх местах, но не был
+    # импортирован ни разу. У Roblox кнопка доходила до последней строки
+    # и падала с NameError прямо внутри обработчика нажатия: Qt такое
+    # исключение не показывает, окно просто умирает. Проверка по кускам текста
+    # тут не годилась — она стояла рядом и молчала. Поэтому кнопку надо
+    # нажать по-настоящему.
+    _main_file_u = core.program_root() / "tools" / "dbapp" / "main.py"
+    if _main_file_u.is_file():
+        _head_u = _main_file_u.read_text(encoding="utf-8", errors="replace")
+        _head_u = _head_u.split("from PyQt6", 1)[0]
+        check("import editor_plugins" in _head_u,
+              "main.py импортирует модуль плагинов мостов")
+
+    _tab = getattr(locals().get("window"), "caps_tab", None)
+    if _tab is None:
+        unverified.append("окно не собралось — кнопку автонастройки не нажимали")
+    else:
+        from PyQt6.QtWidgets import QDialog as _QD
+
+        _saved: dict = {}
+        _crashed: dict = {}
+        _plugin_calls: list = []
+        _logged: list = []
+
+        class _StubDialog:
+            """Окно настройки движка, согласившееся сразу.
+
+            Настоящее окно ждёт человека, а проверке нужно дойти до конца
+            пути. Все методы-поля пустые: проверяем маршрут, а не содержимое.
+            """
+
+            def __init__(self, server_id, server_name, note, can_write, parent=None):
+                self.server_id = server_id
+
+            def exec(self):
+                return _QD.DialogCode.Accepted
+
+            def project_path(self):
+                return ""
+
+            def plugin_path(self):
+                return ""
+
+            def port_value(self):
+                # Порт спрашивается у Unreal: в линии 0.6 сервер встроен в
+                # плагин, и адрес собирается из названного человеком порта.
+                # Забытый метод заглушки ронял окно на кнопке — ровно тот
+                # случай, ради которого заглушка и нужна.
+                return ""
+
+            def command_text(self):
+                return ""
+
+            def token_value(self):
+                return ""
+
+            def app_id_value(self):
+                return ""
+
+            def url_value(self):
+                return ""
+
+            def model_value(self):
+                return ""
+
+        def _stub_ready(*args, **kwargs):
+            return True, "проверка пройдена"
+
+        def _stub_save(*args, **kwargs):
+            return True, "записано"
+
+        def _stub_mirror(*args, **kwargs):
+            return ""
+
+        # Готовность и запись подменены: иначе результат зависел бы от того,
+        # что стоит на машине, и проверка молча проходила бы там, где кнопка
+        # честно отказывает. Настоящий код обработчика при этом не меняется.
+        for _name in ("unity_ready", "roblox_ready", "claude_ready",
+                      "codex_ready", "cursor_ready"):
+            _saved[_name] = getattr(_es, _name)
+            setattr(_es, _name, _stub_ready)
+        # Эта возвращает строку, а не пару: подмена по образцу остальных
+        # роняла Unreal и Godot на склейке строк. Настоящий код тут прав.
+        _saved["mirror_for_launcher"] = _es.mirror_for_launcher
+        _es.mirror_for_launcher = _stub_mirror
+        for _name in ("save_unreal", "save_godot", "save_project", "save_tiktok",
+                      "save_capcut", "save_spotify", "save_chatgpt", "save_cursor"):
+            _saved[_name] = getattr(_es, _name)
+            setattr(_es, _name, _stub_save)
+        _saved["EngineSetupDialog"] = app_main.EngineSetupDialog
+        app_main.EngineSetupDialog = _StubDialog
+        # Настоящий поток установки плагина не запускаем: он полез бы в
+        # чужую папку проекта на этой машине. Отмечаем только сам вызов —
+        # это и есть то, что надо проверить.
+        _saved["_start_plugin_setup"] = _tab._start_plugin_setup
+        # Два аргумента: сервер и папка настроек. Подпорка с одним
+        # аргументом роняла обработчик — ровно так же, как роняет его
+        # неверный вызов в самой программе.
+        _tab._start_plugin_setup = lambda srv, dest=None: _plugin_calls.append(srv.id)
+        # Фоновый запуск тоже подменяем: он пишет в настоящие настройки
+        # opencode, а проверка не имеет права этого делать. Записываем
+        # только сам факт и что именно запустили.
+        _started: dict = {}
+        _last_started: list = []
+        _saved["_start"] = _tab._start
+        _tab._start = lambda job, what: _last_started.append(what)
+        _saved["_warn"] = _tab._warn
+        _tab._warn = lambda text: _logged.append(("warn", str(text)))
+        _saved["log.add"] = _tab.log.add
+        _tab.log.add = lambda text, kind="info": (
+            _logged.append((str(kind), str(text))), _saved["log.add"](text, kind),
+        )[1]
+
+        try:
+            for _row, _srv in enumerate(_tab.reg_servers):
+                if _srv.id not in _es.IDS:
+                    continue
+                _tab.reg_table.setCurrentCell(_row, 0)
+                _crashed[_srv.id] = ""
+                _last_started.clear()
+                try:
+                    _tab._reg_auto()
+                    _app_u = locals().get("app")
+                    if _app_u is not None:
+                        _app_u.processEvents()
+                except BaseException as _exc:  # noqa: BLE001 — падение здесь
+                    _crashed[_srv.id] = f"{type(_exc).__name__}: {_exc}"
+                _started[_srv.id] = list(_last_started)
+            _dead = {k: v for k, v in _crashed.items() if v}
+            check(not _dead,
+                  "кнопка «Настроить автоматически» не роняет окно ни у одного "
+                  f"моста движков ({len(_crashed)} шт.)"
+                  + (f" — падение: {list(_dead.items())[:2]}" if _dead else ""))
+            check(all(v == "" for v in _crashed.values()) and len(_crashed) >= 4,
+                  f"проверены все мосты движков: {', '.join(sorted(_crashed))}")
+            check(set(_plugin_calls) >= {"unity", "unreal", "godot"},
+                  "у мостов с плагином кнопка доходит до его установки: "
+                  + ", ".join(sorted(set(_plugin_calls))))
+
+            # Контракт мостов движков: сервер и плагин из одного релиза.
+            # Проверяется по всем указателям сразу — добавим новый мост и
+            # забудем про версии, проверка должна сказать сама.
+            if _pi is not None:
+                _families = ("enginewire", "godot-ai", "unity-mcp", "ghidra-mcp")
+                _drift = []
+                for _family in _families:
+                    _idx, _why = _pi.load(_family)
+                    if _idx is None:
+                        _drift.append(f"{_family}: указатель не читается ({_why})")
+                        continue
+                    for _build in _idx.get("builds") or []:
+                        _got, _why2 = _pi.pick(_idx, str(_build.get("since") or "1.0"))
+                        if _got is None:
+                            _drift.append(f"{_family}: {_why2}")
+                            continue
+                        _same, _note = _pi.server_matches(_got)
+                        if not _same:
+                            _drift.append(f"{_family}: {_note}")
+                check(not _drift,
+                      f"во всех указателях сервер и плагин одного релиза "
+                      f"({len(_families)} семейства)"
+                      + (f" — расхождения: {_drift[:2]}" if _drift else ""))
+                # Мост Unreal не запускает npm: сервер встроен в плагин, и в
+                # реестре у него адрес, а не команда. Проверяем и то, и другое:
+                # вернуться к npm-мосту нельзя молча.
+                _unreal = next((s for s in _tab.reg_servers if s.id == "unreal"), None)
+                _uconn = (_unreal.raw.get("connection") if _unreal is not None else {}) or {}
+                check(not _uconn.get("command"),
+                      "мост Unreal подключается адресом, а не командой")
+                check("127.0.0.1" in str(_uconn.get("url") or "")
+                      and "{PORT}" in str(_uconn.get("url") or ""),
+                      f"и адрес с портом от человека: {_uconn.get('url')}")
+                _unreal_launcher = (core.program_root() / "tools" / "dbapp"
+                                    / "launchers" / "unreal_bridge_launcher.py")
+                if _unreal_launcher.is_file():
+                    _usrc = _unreal_launcher.read_text(encoding="utf-8", errors="replace")
+                    check("npx" not in _usrc,
+                          "лаунчер Unreal не запускает npx")
+                    # Закреплённый пакет — это `пакет@версия`. Голое число в
+                    # пояснении («последний в npm 0.5.30») версией сервера
+                    # не является, а вот адрес 127.0.0.1 к версии отношения
+                    # не имеет вовсе — искать надо по форме, а не по цифрам.
+                    _pins = re.findall(r"[\w./-]+@\d[\w.+-]*", _usrc)
+                    check(not _pins,
+                          f"и в лаунчере не закреплён ни один npm-пакет: {_pins}")
+
+                # Пункт «новый мост проверяется сам»: сверка идёт по всему
+                # реестру, а мост с расхождением нельзя включить — блок в
+                # настройки не попадает вовсе.
+                _pairs_ok, _pairs_note = _mcp_registry.check_registry_pairs(_base)
+                check(_pairs_ok,
+                      "по всему реестру версии сервера и плагина совпадают: "
+                      f"{_pairs_note}")
+                _need_ok, _need_note = _bvmod.audit(_base)
+                check(_need_ok, f"таблица версий согласована: {_need_note}")
+                _need_rows = [str(s.id) for s in _tab.reg_servers
+                              if not _bvmod.for_bridge(str(s.id)).known]
+                check(not _need_rows,
+                      f"у каждого из {len(_tab.reg_servers)} мостов есть запись о "
+                      f"версиях" + (f" — нет: {_need_rows[:4]}" if _need_rows else ""))
+                _probe_dir = Path(_tf.gettempdir()) / "opencode" / "проверка-включения"
+                if _probe_dir.exists():
+                    __import__("shutil").rmtree(_probe_dir, ignore_errors=True)
+                _probe_dir.mkdir(parents=True, exist_ok=True)
+                (_probe_dir / "opencode.jsonc").write_text(
+                    '{"$schema": "https://opencode.ai/config.json", "mcp": {}}\n',
+                    encoding="utf-8")
+                _probe = _mcp_registry.Server(
+                    id="проба-моста", name="Проба моста",
+                    raw={"connection": {"kind": "local", "command": ["проба"]}},
+                    requirements=[], has_connection=True,
+                )
+                # С блоком плагина в самой записи: без него проверка версий
+                # плагина и не начинается, и проба проходит мимо нужного слоя.
+                _probe_known = _mcp_registry.Server(
+                    id="unity", name="Unity",
+                    raw={
+                        "connection": {"kind": "local", "command": ["проба"]},
+                        "program_install": {
+                            "program": "Unity", "method": "winget",
+                            "winget_id": "Unity.UnityHub",
+                            "plugin": {"finder": "unity", "name": "MCP for Unity",
+                                       "button": "Прописать пакет MCP for Unity"},
+                        },
+                    },
+                    requirements=[], has_connection=True,
+                )
+                _bv_saved = editor_plugins.bridge_versions
+                try:
+                    # Моста нет в таблице версий — включать нельзя: программа
+                    # не знает, что ему нужно. Так ловится забытый мост.
+                    _msgs, _errs = _mcp_registry.enable(_probe_dir, _probe)
+                    check(bool(_errs) and "таблице версий" in _errs[0],
+                          f"мост без записи о версиях не включается: {_errs}")
+                    _after = (_probe_dir / "opencode.jsonc").read_text(encoding="utf-8")
+                    check("проба" not in _after,
+                          "и в настройки opencode ничего не попало")
+                    # Запись есть, но версии разошлись — тоже отказ.
+                    editor_plugins.bridge_versions = (
+                        lambda srv, *a, **kw: (
+                            False, "тест: расхождение версий — сервер 1.0, плагин 2.0"))
+                    _msgs2, _errs2 = _mcp_registry.enable(_probe_dir, _probe_known)
+                    check(bool(_errs2) and "расхождение" in _errs2[0],
+                          f"мост с расхождением версий не включается: {_errs2}")
+                    _after2 = (_probe_dir / "opencode.jsonc").read_text(encoding="utf-8")
+                    check("проба" not in _after2,
+                          "и при расхождении в настройки ничего не попало")
+                    editor_plugins.bridge_versions = _bv_saved
+                    _msgs3, _errs3 = _mcp_registry.enable(_probe_dir, _probe_known)
+                    check(not _errs3,
+                          f"а согласованный мост включается: {_errs3 or 'без замечаний'}")
+                finally:
+                    editor_plugins.bridge_versions = _bv_saved
+            check(any("проверка пройдена" in str(text) for _k, text in _logged),
+                  "кнопка доходит до конца пути, а не отказывается на середине")
+            # У Roblox настраивать нечего, поэтому кнопка обязана сама
+            # вписать мост в настройки: иначе она выглядит работающей, а
+            # мост так и не поднимается.
+            check(_started.get("roblox-studio") == ["registry"],
+                  "кнопка у Roblox не только проверяет, но и вписывает мост: "
+                  f"{_started.get('roblox-studio')}")
+            check(not _started.get("unity") and not _started.get("godot"),
+                  "а у мостов с плагином вписывание идёт своим путём — через "
+                  "установку плагина, а не отдельным вызовом: "
+                  f"{_started.get('unity')}")
+
+            # Мост с плагином обязан довести дело до конца своей кнопкой:
+            # поставить плагин И вписать блок. Раздельно это читалось как
+            # «настроил, а мост не поднялся» — и человек решал, что кнопка
+            # сломалась.
+            _dest_u = Path(_tf.gettempdir()) / "opencode" / "проверка-моста"
+            _dest_u.mkdir(parents=True, exist_ok=True)
+            _unity_srv = next((s for s in _tab.reg_servers if s.id == "unity"), None)
+            _auto_saved = editor_plugins.auto_setup
+            _enable_saved = app_main.mcp_registry.enable
+            _enable_calls: list = []
+            app_main.mcp_registry.enable = (
+                lambda d, s, progress=None: (_enable_calls.append(s.id),
+                                            (["мост вписан"], []))[1])
+            try:
+                editor_plugins.auto_setup = lambda sid, progress=None: (
+                    True, "плагин поставлен")
+                _result_u = _tab._plugin_setup_job(_unity_srv, _dest_u)(None)
+                _ok_u, _note_u = _result_u[0]
+                check(_ok_u and _enable_calls == ["unity"],
+                      f"плагин поставлен — и мост сразу вписан: {_enable_calls}")
+                check(len(_result_u) == 3 and _result_u[1] == ["мост вписан"],
+                      f"результат работы вернулся целиком: {_result_u[1]}")
+                _enable_calls.clear()
+                editor_plugins.auto_setup = lambda sid, progress=None: (
+                    False, "плагин не поставился")
+                _fail_u = _tab._plugin_setup_job(_unity_srv, _dest_u)(None)
+                check(not _fail_u[0][0] and not _enable_calls,
+                      "а при отказе плагина мост не включается — включать нечего")
+            finally:
+                editor_plugins.auto_setup = _auto_saved
+                app_main.mcp_registry.enable = _enable_saved
+
+            # Окно Unity собирается по-настоящему: список найденных проектов
+            # должен появиться и отдать выбранный путь. Ошибка здесь
+            # означала бы падение окна у человека, поэтому на заглушке
+            # (как нажатия кнопок выше) её не поймать.
+            _proj_win = _dest_u / "игра"
+            (_proj_win / "Assets").mkdir(parents=True, exist_ok=True)
+            (_proj_win / "ProjectSettings").mkdir(parents=True, exist_ok=True)
+            (_proj_win / "ProjectSettings" / "ProjectVersion.txt").write_text(
+                "m_EditorVersion: 6000.6.6f1\n", encoding="utf-8")
+            _roots_saved = editor_plugins.unity_project_roots
+            try:
+                editor_plugins.unity_project_roots = lambda: [_dest_u]
+                _dlg = _saved["EngineSetupDialog"](
+                    "unity", "Unity", "проверка окна", True, None)
+                check(_dlg.projects is not None and _dlg.projects.count() == 1,
+                      "в окне Unity появился список найденных проектов: "
+                      + str(_dlg.projects.count() if _dlg.projects else 0))
+                _dlg.projects.setCurrentRow(0)
+                check(_dlg.project_path() == str(_proj_win),
+                      f"выбранный проект и есть выбранный путь: {_dlg.project_path()}")
+                _dlg.project.setText("C:\\вписано руками")
+                check(_dlg.project_path() == "C:\\вписано руками",
+                      "а вписанное руками не подменяется найденным")
+                # Выбор в списке сам по себе — тоже выбор: окно обязано его
+                # принять, даже если поле ввода пустое.
+                _dlg.project.setText("")
+                _dlg._accept()
+                check(bool(_dlg.result()),
+                      f"а проект, выбранный в списке, окно принимает: {_dlg.result()}")
+                _dlg.close()
+                # А вот когда не выбрано ничего — окно не пропускает.
+                _dlg_empty = _saved["EngineSetupDialog"](
+                    "unity", "Unity", "проверка окна", True, None)
+                _dlg_empty.project.setText("")
+                _dlg_empty.projects.clearSelection()
+                _dlg_empty._accept()
+                check(not _dlg_empty.result(),
+                      "и пустой выбор окно не пропускает — мост без проекта "
+                      "бесполезен")
+                _dlg_empty.close()
+            finally:
+                editor_plugins.unity_project_roots = _roots_saved
+        finally:
+            for _name, _value in _saved.items():
+                if _name == "log.add":
+                    _tab.log.add = _value
+                elif _name == "EngineSetupDialog":
+                    app_main.EngineSetupDialog = _value
+                elif _name.startswith("_"):
+                    setattr(_tab, _name, _value)
+                else:
+                    setattr(_es, _name, _value)
+
+    # ---- 8ф. Карточки разложены по группам, и у каждой есть причина
+    # Проверка строится на настоящей вкладке, а не на чтении кода: группа,
+    # выбранная молча, не проверяется вообще. Здесь три вещи: заголовки
+    # групп видны в окне, у каждой карточки написано почему она там, и
+    # «Прочее» на настоящем реестре пуста — потерявшийся мост обязан быть
+    # виден сразу, а не всплывать через месяц.
+    echo("\n--- 8ф. Карточки по группам ---")
+    try:
+        import program_groups as _pg
+    except ImportError as _exc:
+        check(False, f"модуль раскладки по группам на месте: {_exc}")
+    else:
+        import program_cards as _pcards  # noqa: PLC0415 — тяжёлый модуль
+
+        _servers = _mcp_registry.load_servers(_base)
+        _placed = _pg.by_bridge(_servers)
+        _items = list(_placed.values())
+        check(len(_items) == len(_servers),
+              f"у каждого из {len(_servers)} мостов есть место "
+              f"({len(_items)})")
+        _no_rule = [item.bridge for item in _items if not item.rule.strip()]
+        check(not _no_rule, "и у каждого есть объяснение"
+              + (f" — нет: {_no_rule[:4]}" if _no_rule else ""))
+        _other = [item.bridge for item in _items if item.group == "other"]
+        check(not _other, "«Прочее» на настоящем реестре пуста"
+              + (f" — неопознанные: {_other}" if _other else ""))
+        _known_titles = set(_pg.GROUP_TITLES.values())
+        check(all(item.title in _known_titles for item in _items),
+              "и у каждой группы есть человеческое название")
+        # Группа, которой нет в списке, обязана быть видна как «Прочее»:
+        # молчаливый заголовок был бы хуже, чем никакого.
+        _ghost = _pg.place_card(
+            type("К", (), {"key": "мост-призрак",
+                           "servers": ["такого-моста"]})(), _placed)
+        check(_ghost.group == "other" and "нет мостов" in _ghost.rule,
+              f"программа без мостов попадает в «Прочее» с причиной: {_ghost.rule}")
+        # А карточка без мостов вовсе (обход блокицок) — не в «Прочее»,
+        # а туда, куда она по смыслу: иначе она молча терялась бы в общей
+        # куче, а человек её ищет.
+        _xray = _pg.place_card(
+            type("К", (), {"key": "xray-core", "servers": []})(), _placed)
+        check(_xray.group != "other" and _xray.rule,
+              f"карточка без мостов в реестре получила свою группу: "
+              f"{_xray.group} — {_xray.rule}")
+        # Настоящая вкладка: заголовки групп и подписи у карточек.
+        _prog_tab = app_main.ProgramsTab()
+        _heads, _card_rules = [], 0
+        _index = 0
+        while _index < _prog_tab.cards_box.count():
+            _widget = _prog_tab.cards_box.itemAt(_index).widget()
+            if _widget is not None:
+                _text = getattr(_widget, "text", lambda: "")()
+                if " — " in _text and _text.rsplit(" — ", 1)[-1].strip().isdigit():
+                    _heads.append(_text)
+            _index += 1
+        for _label in _prog_tab.findChildren(QLabel):
+            if _label.text().startswith("Группа: "):
+                _card_rules += 1
+        _card_count = len(_pcards.cards(_base))
+        check(len(_heads) >= 2,
+              f"во вкладке видны заголовки групп: {_heads}")
+        check(_card_rules >= _card_count,
+              f"у каждой карточки написано, почему она в своей группе "
+              f"({_card_rules} из {_card_count})")
+        _prog_tab.deleteLater()
 
     # ---- итог
     failed = [text for good, text in results if not good]

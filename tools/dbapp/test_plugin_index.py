@@ -129,6 +129,83 @@ def main() -> int:
     check(SAMPLE.get("server") == "server-mcp@1.2.3",
           "указатель хранит и закреплённую версию сервера")
 
+    # === 6б. Сервер и плагин обязаны быть из одного релиза ===
+    # При расхождении Unreal отвечает на каждый вызов `versionMismatch`,
+    # и это выглядит как «мост сломан», хотя сломан не мост.
+    # У пробного указателя полосы разные: 5.0–5.4 → плагин 1.0.0, а сервер
+    # заявлен 1.2.3. Это и есть расхождение, которое обязано быть видно.
+    sample_plugin, why_s = pi.pick(SAMPLE, "5.2")
+    if sample_plugin is None:
+        check(False, f"плагин подходящей версии выбран: {why_s}")
+    else:
+        check(sample_plugin.version == "1.0.0",
+              f"под 5.2 выбран плагин своей полосы: {sample_plugin.version}")
+        same, note_same = pi.server_matches(sample_plugin)
+        check(not same and "версии не совпадают" in note_same,
+              f"расхождение версий называется прямо: {note_same}")
+        same_aligned, why_al = pi.pick(SAMPLE, "5.6")
+        if same_aligned is None:
+            check(False, f"плагин второй полосы выбран: {why_al}")
+        else:
+            check(pi.server_package(same_aligned) == "server-mcp@1.2.3",
+                  f"пакет сервера собран из указателя: "
+                  f"{pi.server_package(same_aligned)}")
+            check(pi.server_version(same_aligned) == "1.2.3",
+                  f"версия сервера снята из строки: {pi.server_version(same_aligned)}")
+            same_ok, note_ok = pi.server_matches(same_aligned)
+            check(same_ok, f"совпадение версий подтверждено: {note_ok}")
+            eq_style = pi.Plugin(name="Y", version="4.3.0", server="godot-ai==4.3.0")
+            check(pi.server_package(eq_style) == "godot-ai==4.3.0",
+                  f"и формат со знаком == тоже разбирается: "
+                  f"{pi.server_package(eq_style)}")
+            check(pi.server_package(pi.Plugin(name="Z", version="1.0", server="")) == "",
+                  "а без версии сервера в указателе не выдумывается")
+        aligned = pi.Plugin(name="X", version="1.2.3", server="server-mcp@1.2.3")
+        same_ok, note_ok = pi.server_matches(aligned)
+        check(same_ok, f"совпадение версий подтверждено: {note_ok}")
+        eq_style = pi.Plugin(name="Y", version="4.3.0", server="godot-ai==4.3.0")
+        check(pi.server_package(eq_style) == "godot-ai==4.3.0",
+              f"и формат со знаком == тоже разбирается: {pi.server_package(eq_style)}")
+        check(pi.server_package(pi.Plugin(name="Z", version="1.0", server="")) == "",
+              "а без версии сервера в указателе не выдумывается")
+
+    # === 6г. Свежая полоса, когда версия программы ещё не измерена ===
+    # Пустая строка в требовании — это «пока неизвестно», а не «версия 9999»:
+    # выдуманная версия выпадает из всех полос, и мост отказывается на пустом
+    # месте. Берётся самая свежая полоса.
+    newest, why_new = pi.latest(SAMPLE)
+    check(newest is not None and newest.version == "1.2.3",
+          f"без версии программы взята самая свежая полоса: "
+          f"{newest.version if newest else why_new}")
+    newest_real, why_real = pi.latest_for("enginewire")
+    check(newest_real is not None and newest_real.version == "0.6.0-beta-f",
+          f"и по настоящему указателю тоже: "
+          f"{newest_real.version if newest_real else why_real}")
+    pair_ok, note_pair = pi.family_pair("enginewire", "5.7")
+    check(pair_ok is not None and bool(note_pair),
+          f"вызов «плагин плюс сверка» работает: {note_pair}")
+    pair_bad, note_bad_pair = pi.family_pair("enginewire", "4.27")
+    check(pair_bad is None and "не попадает" in note_bad_pair,
+          f"а неподходящая версия отказывает до сети: {note_bad_pair}")
+
+    # === 6в. Инвариант по всем настоящим указателям ===
+    # Проверяется не на выдуманном примере, а на всех семействах программы:
+    # добавим мост и забудем про версии — проверка сразу скажет.
+    for family in ("enginewire", "godot-ai", "unity-mcp", "ghidra-mcp"):
+        idx, why_f = pi.load(family)
+        if idx is None:
+            check(False, f"указатель {family} читается: {why_f}")
+            continue
+        for build in idx.get("builds") or []:
+            got, why_b = pi.pick(idx, str(build.get("since") or "1.0"))
+            if got is None:
+                check(False, f"{family}: полоса {build.get('since')} не выбралась: {why_b}")
+                continue
+            same_b, note_b = pi.server_matches(got)
+            check(same_b,
+                  f"{family} {got.version}: сервер и плагин из одного релиза"
+                  + (f" — {note_b}" if not same_b else ""))
+
     # === 7. Настоящие указатели программы читаются и попадают в полосы ===
     real_cases = [
         ("enginewire", "5.7", True),
