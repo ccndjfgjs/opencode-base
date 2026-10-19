@@ -524,6 +524,16 @@ def remove_entry(text: str, obj_key: str, name: str) -> str:
     return re.sub(r",(\s*[}\]])", r"\1", cleaned)
 
 
+def remove_entry_by_name(text: str, obj_key: str, name: str) -> str:
+    """Убирает запись по имени, даже если меток программы в ней нет.
+
+    Нужна там, где блок мог написать человек или другая копия программы:
+    remove_entry смотрит на метки «== OpenCode_Base: ... ==» и такой блок
+    не видит, а молчание здесь выглядело бы как успех.
+    """
+    return _remove_entry_by_name(text, obj_key, name)
+
+
 def fix_trailing_commas(text: str) -> str:
     """Убирает висячие запятые перед } и ]: наши вставки всегда кончаются
     запятой, а если запись оказалась последней в объекте — это ошибка JSON."""

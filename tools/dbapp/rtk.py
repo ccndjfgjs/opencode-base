@@ -39,6 +39,26 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+def _hidden_startupinfo():
+    """Окно консоли не показывать. Подробности — в core.hidden_startupinfo.
+
+    Отдельная функция с ленивым импортом, а не `import core` наверху:
+    модуль читают и лаунчеры, и проверки, и лишняя связь между ними
+    лишний раз ломается.
+
+    Зачем это. 19.10.2026 человек нажал кнопку у моста OBS, и у него
+    открылось чёрное окно консоли. Программа работает на pythonw — у
+    неё самой консоли нет, и Windows на каждый запуск внешней
+    программы без этой просьбы создаёт новое окно.
+    """
+    try:
+        from core import hidden_startupinfo
+
+        return hidden_startupinfo()
+    except Exception:  # noqa: BLE001 — без этого просто откроется окно
+        return None
+
 # Под pythonw (оконный Python, без консоли) sys.stdout равен None:
 # .reconfigure() на нём роняет импорт модуля, а модуль импортирует
 # main.py при старте — программа не открывалась совсем. Найдено живьём.
@@ -246,7 +266,7 @@ def _run(args: list[str], timeout: int) -> tuple[int, str, str]:
     try:
         done = subprocess.run(
             args, capture_output=True, text=True, encoding="utf-8",
-            errors="replace", timeout=timeout,
+            errors="replace", timeout=timeout, startupinfo=_hidden_startupinfo(),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return 1, "", str(exc)

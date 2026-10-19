@@ -40,6 +40,26 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+def _hidden_startupinfo():
+    """Окно консоли не показывать. Подробности — в core.hidden_startupinfo.
+
+    Отдельная функция с ленивым импортом, а не `import core` наверху:
+    модуль читают и лаунчеры, и проверки, и лишняя связь между ними
+    лишний раз ломается.
+
+    Зачем это. 19.10.2026 человек нажал кнопку у моста OBS, и у него
+    открылось чёрное окно консоли. Программа работает на pythonw — у
+    неё самой консоли нет, и Windows на каждый запуск внешней
+    программы без этой просьбы создаёт новое окно.
+    """
+    try:
+        from core import hidden_startupinfo
+
+        return hidden_startupinfo()
+    except Exception:  # noqa: BLE001 — без этого просто откроется окно
+        return None
+
+
 #: Файл подключений рядом с настройками opencode.
 TOML_NAME = "mcp-dbhub.toml"
 
@@ -420,7 +440,7 @@ def probe(dest: Path, timeout: int = PROBE_TIMEOUT,
         proc = subprocess.Popen(
             argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, env=env, cwd=str(dest),
-            text=True, encoding="utf-8", errors="replace", bufsize=1,
+            text=True, encoding="utf-8", errors="replace", bufsize=1, startupinfo=_hidden_startupinfo(),
         )
     except OSError as exc:
         return False, f"Мост не запустился: {exc}"

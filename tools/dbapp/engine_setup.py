@@ -75,9 +75,9 @@ def save_unreal(dest: Path, project: str, plugin: str = "") -> tuple[bool, str]:
         return False, "Укажи существующую папку проекта или файл .uproject."
     if not common.enginewire_present(folder, plugin.strip()):
         return False, (
-            f"В {folder} нет Plugins/EngineWire. Сервер закреплён на "
-            "0.6.0-beta-e, старый плагин McpAutomationBridge не подходит. "
-            "Путь не записан: лаунчер всё равно отказал бы."
+            f"В {folder} нет Plugins/EngineWire. В линии 0.6 сервер живёт внутри "
+            "плагина, а старый McpAutomationBridge не подходит. "
+            "Путь не записан: подключаться всё равно не к чему."
         )
     lines = [f"project={folder}"]
     if plugin.strip():
@@ -88,9 +88,51 @@ def save_unreal(dest: Path, project: str, plugin: str = "") -> tuple[bool, str]:
     if error:
         return False, error
     return True, (
-        f"Путь проекта записан: {path}. Токен capability в файл не входит, "
-        "его читает сам сервер. Редактор ещё не отвечал — готовым мост не считается."
+        f"Путь проекта записан: {path}. Мост отвечает, только пока открыт "
+        "редактор с плагином: сервер поднимает сам плагин."
     )
+
+
+#: Порт сервера в плагине. 3000 — значение по документации автора, на живой
+#: машине НЕ проверено: Unreal здесь не установлен. Поэтому порт всегда
+#: спрашивается, а это число живёт только как подсказка в поле ввода.
+UNREAL_PORT_DEFAULT = 3000
+UNREAL_PORT_NAME = "mcp-unreal-port.txt"
+
+
+def unreal_port_path(dest: Path) -> Path:
+    return settings_file(dest, UNREAL_PORT_NAME)
+
+
+def read_unreal_port(dest: Path) -> int:
+    """Порт из файла настроек. Битое значение — значение по умолчанию."""
+    path = unreal_port_path(dest)
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return UNREAL_PORT_DEFAULT
+    if not raw.isdigit():
+        return UNREAL_PORT_DEFAULT
+    value = int(raw)
+    return value if 1 <= value <= 65535 else UNREAL_PORT_DEFAULT
+
+
+def save_unreal_port(dest: Path, port: str) -> tuple[bool, str]:
+    """Записать порт, который человек назвал. Пустое — оставить как есть."""
+    raw = str(port or "").strip()
+    if not raw:
+        return True, ""
+    if not raw.isdigit():
+        return False, (f"Порт «{raw}» — не число. Оставь пустым, чтобы взять "
+                       f"{UNREAL_PORT_DEFAULT}.")
+    value = int(raw)
+    if not 1 <= value <= 65535:
+        return False, f"Порт {value} — за пределами 1…65535."
+    path = unreal_port_path(dest)
+    error = _write(path, f"{value}\n")
+    if error:
+        return False, error
+    return True, f"Порт записан: {value}. Адрес: http://127.0.0.1:{value}/mcp"
 
 
 def save_godot(dest: Path, text: str) -> tuple[bool, str]:

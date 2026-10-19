@@ -6,11 +6,28 @@
 лежит в %LOCALAPPDATA%\\Android\\Sdk\\platform-tools, а у LDPlayer свой,
 в его папке. Без лаунчера мост падал бы с «adb is not installed».
 
-Значит лаунчер делает две вещи:
+Значит лаунчер делает три вещи:
 
     1. Находит adb — сначала свой у эмулятора, потом системный — и
        добавляет его папку в PATH процесса.
-    2. Запускает мост и передаёт ему stdio.
+    2. Проверяет окружение моста.
+    3. Запускает мост и передаёт ему stdio.
+
+Про окружение — важное. 19.10.2026 мост отвечал «ModuleNotFoundError: No
+module named 'mcp'». Причина была не в мосте: папки `.venv` рядом с ним
+нет, и лаунчер ТИХО брал системный Python, где пакета `mcp` нет и
+никогда не будет. То есть отказ выглядел как «сервер молчит», хотя на
+самом деле мосту не было чем работать.
+
+Поэтому тихого отката на чужой Python здесь больше нет: окружение либо
+готово, либо лаунчер отказывается словами и называет причину.
+
+Почему лаунчер не ставит окружение сам при старте. opencode даёт серверу
+30 секунд на запуск, а установка окружения — дело на минуту и дольше.
+Попытка впихнуть её в эти 30 секунд кончилась бы сообщением «Operation
+timed out», которое ничего не объясняет. Поэтому долгую установку
+делает кнопка «Настроить автоматически» — там есть и время, и
+progress-бар; лаунчер только проверяет готовость.
 
 Второй важный момент: у эмулятора может быть несколько устройств, и
 мост без config.yaml возьмёт единственное. Если устройств несколько, он
@@ -31,17 +48,39 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
 from core import hidden_startupinfo  # noqa: E402 — путь задаётся строкой выше
+from python_envs import ensure_venv, venv_python, venv_ready  # noqa: E402
+
 SERVER_DIR = HERE.parent.parent / "thirdparty" / "android-mcp-server"
 ENTRY = SERVER_DIR / "server.py"
-VENV_PYTHON = SERVER_DIR / ".venv" / "Scripts" / "python.exe"
 
-#: Где искать adb. Свой у эмулятора важнее системного: он заведомо той
+#: Куда искать adb. Свой у эмулятора важнее системного: он заведомо той
 #: же версии, что и сам эмулятор.
 ADB_CANDIDATES = (
     Path("C:/LDPlayer/LDPlayer9/adb.exe"),
     Path(os.environ.get("LOCALAPPDATA", "")) / "Android/Sdk/platform-tools/adb.exe",
     Path("C:/Program Files/BlueStacks_nxt/HD-Player.exe"),
 )
+
+
+def _force_utf8() -> None:
+    """Журнал должен быть в UTF-8, а не в кодировке консоли.
+
+    Ошибки моста читает человек, и по этому тексту он понимает, почему
+    мост не запустился. В кодировке консоли русский превращается в
+    кракозябры, и объяснение теряется вместе с причиной. Под pythonw
+    потоков может не быть вовсе — тогда и перенастраивать нечего.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            pass
+
+
+_force_utf8()
 
 
 def say(text: str) -> None:
@@ -59,10 +98,17 @@ def main() -> int:
     if not ENTRY.is_file():
         say(f"Мост не найден: {ENTRY}")
         return 1
-    python = VENV_PYTHON if VENV_PYTHON.is_file() else Path(sys.executable)
-    if not Path(python).is_file():
-        say(f"Python не найден: {python}")
+
+    # Окружение ставит кнопка «Настроить автоматически» — там на это есть
+    # время. Здесь только проверяем: молча брать чужой Python нельзя,
+    # мост на нём не запустится, а человек увидит «сервер молчит».
+    if not venv_ready(SERVER_DIR):
+        say("У моста нет окружения — запускать нечем.")
+        say("Открой программу, вкладка opencode, блок «6. Серверы MCP», "
+            "выбери Android-эмулятор и нажми «Настроить автоматически»: "
+            "программа поставит окружение сама.")
         return 1
+    python = venv_python(SERVER_DIR)
 
     env = dict(os.environ)
     adb = find_adb()

@@ -751,3 +751,29 @@ def column(*widgets, spacing: int = 8) -> QWidget:
     for widget in widgets:
         layout.addWidget(widget)
     return holder
+
+
+def open_link(url: str) -> bool:
+    """Открыть адрес в браузере по умолчанию. True — браузер принял.
+
+    Живёт здесь, а не в модулях мостов, потому что это действие вида:
+    им пользуются и главное окно, и панель трея, и второе место не
+    должно заводить свою копию.
+
+    Почему `QDesktopServices`, а не `webbrowser.open`. Программа
+    работает на pythonw — у неё самой консоли нет, и Windows на каждый
+    запуск внешней программы открывает чёрное окно. `webbrowser.open`
+    запускает процесс; `QDesktopServices` обращается к системе и
+    окна не создаёт. Разница видна была прямо на экране 19.10.2026.
+
+    Адрес проверяется ДО передачи: `QDesktopServices` откроет что
+    угодно, включая `file://` и `javascript:`. Здесь нужны только
+    `http` и `https` — локальная панель моста и обычные сайты.
+    """
+    from PyQt6.QtCore import QUrl
+    from PyQt6.QtGui import QDesktopServices
+
+    text = str(url or "").strip()
+    if not text.lower().startswith(("http://", "https://")):
+        return False
+    return bool(QDesktopServices.openUrl(QUrl(text)))

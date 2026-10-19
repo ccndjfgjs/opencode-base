@@ -19,10 +19,12 @@ if __package__ in (None, ""):
     import mcp_registry  # type: ignore[import-not-found]
     import opencode_caps  # type: ignore[import-not-found]
     import android_studio  # type: ignore[import-not-found]
+    import bridge_versions  # type: ignore[import-not-found]
     import bridges  # type: ignore[import-not-found]
     import browsers  # type: ignore[import-not-found]
     import caveman  # type: ignore[import-not-found]
     import dbhub  # type: ignore[import-not-found]
+    import editor_plugins  # type: ignore[import-not-found]
     import engine_setup  # type: ignore[import-not-found]
     import lmarena  # type: ignore[import-not-found]
     import auto_improve  # type: ignore[import-not-found]
@@ -32,11 +34,13 @@ if __package__ in (None, ""):
     import pxpipe  # type: ignore[import-not-found]
     import rtk  # type: ignore[import-not-found]
     import program_cards  # type: ignore[import-not-found]
+    import program_groups  # type: ignore[import-not-found]
     import winget_install  # type: ignore[import-not-found]
 else:  # запуск как модуль
     from . import (core, ui, mcp_registry, opencode_caps, android_studio,
-                   auto_improve, bridges, browsers, caveman, dbhub, engine_setup,
-                   greenlight, lmarena, omniroute, program_cards, pxpipe,
+                   auto_improve, bridge_versions, bridges, browsers, caveman,
+                   dbhub, editor_plugins, engine_setup, greenlight, lmarena,
+                   omniroute, program_cards, program_groups, pxpipe,
                    qwen_review, rtk, winget_install)
 
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
@@ -2408,6 +2412,14 @@ class EngineSetupDialog(QDialog):
         # окно падало бы с AttributeError на третьей секунде. Сделано
         # здесь и проверено — тихо это оставлять нельзя.
         self.model = QLineEdit()
+        # Список найденных проектов. Заполняется только там, где проект
+        # можно выбрать из найденных; иначе остаётся None, и окно работает
+        # как раньше — с одним полем ввода.
+        self.projects = None
+        # Порт встроенного сервера плагина. Спрашивается всегда: значение
+        # по умолчанию взято из документации автора и на живой машине не
+        # проверено, а молчаливый неверный адрес хуже явного вопроса.
+        self.port = QLineEdit()
 
         box = QVBoxLayout(self)
         box.setSpacing(8)
@@ -2444,6 +2456,23 @@ class EngineSetupDialog(QDialog):
             plug.clicked.connect(self._browse_plugin)
             row2.addWidget(plug)
             box.addLayout(row2)
+            box.addWidget(ui.label(
+                "В линии 0.6 сервер MCP встроен в плагин, поэтому подключение "
+                "идёт по адресу, а не через Node.js и npm. Мост отвечает, "
+                "ПОКА ОТКРЫТ редактор с плагином: закрыл Unreal — адрес не "
+                "слушается, и это не поломка.", wrap=True,
+            ))
+            row_p = QHBoxLayout()
+            self.port.setPlaceholderText(str(engine_setup.UNREAL_PORT_DEFAULT))
+            self.port.setToolTip(
+                "Порт из документации автора, на этой машине не проверен. "
+                "Если в настройках плагина стоит другой — впиши его.")
+            row_p.addWidget(ui.label("Порт сервера:", kind="title"))
+            row_p.addWidget(self.port, 1)
+            row_p.addWidget(ui.label(
+                f"по умолчанию {engine_setup.UNREAL_PORT_DEFAULT}, не проверено",
+                kind="dim", wrap=True))
+            box.addLayout(row_p)
         elif server_id == "godot":
             box.addWidget(ui.label(
                 "Вставь JSON из дока Godot AI, кнопку «Run this manually». "
@@ -2481,12 +2510,43 @@ class EngineSetupDialog(QDialog):
                 wrap=True,
             ))
             row_u = QHBoxLayout()
-            self.project.setPlaceholderText("папка проекта с папкой Assets")
+            self.project.setPlaceholderText("или впиши папку проекта")
             row_u.addWidget(self.project, 1)
             browse_u = QPushButton("Папка:")
             browse_u.clicked.connect(self._browse_project)
             row_u.addWidget(browse_u)
             box.addLayout(row_u)
+            # Проекты ищет программа, а не человек: набирать путь руками —
+            # это работа, которую можно сделать один раз и ошибиться. Выбор
+            # остаётся за человеком, но из списка, а не по памяти.
+            scan = editor_plugins.scan_unity_projects()
+            if scan.items:
+                box.addWidget(ui.label(
+                    f"Найдено проектов Unity: {len(scan.items)}. Выбери нужный: "
+                    "программа не угадывает за тебя.", kind="title", wrap=True,
+                ))
+                self.projects = QListWidget()
+                for project_path, project_version in scan.items:
+                    shown = project_version or "версия не записана"
+                    entry = QListWidgetItem(f"{project_path.name} — {shown}")
+                    entry.setData(Qt.ItemDataRole.UserRole, str(project_path))
+                    entry.setToolTip(str(project_path))
+                    self.projects.addItem(entry)
+                self.projects.setMinimumHeight(min(140, 20 + 34 * len(scan.items)))
+                box.addWidget(self.projects)
+                if scan.truncated:
+                    box.addWidget(ui.label(
+                        f"Поиск остановлен на {scan.visited} папках — возможно, "
+                        "проект лежит глубже. Укажи папку руками.", kind="dim",
+                        wrap=True,
+                    ))
+            else:
+                box.addWidget(ui.label(
+                    "Проектов Unity на диске не нашлось. Их ещё нет или они "
+                    "лежат не в папках пользователя и не в папках Projects, "
+                    "Games, Unity на дисках — укажи нужную папку руками.",
+                    kind="dim", wrap=True,
+                ))
         elif server_id == "tiktok":
             box.addWidget(ui.label(
                 "Access token и App ID из своего кабинета TikTok Business. "
@@ -2613,6 +2673,12 @@ class EngineSetupDialog(QDialog):
         if self.server_id == "unreal" and not self.project.text().strip():
             self.status.setText("Укажи папку проекта или файл .uproject.")
             return
+        if self.server_id == "unity" and not self.project_path():
+            # Раньше Unity отвечал словами «Папка проекта не указана»
+            # уже после нажатия. Теперь окно не закрывается, пока проект
+            # не выбран: пустой мост бесполезен, и человек видит это сразу.
+            self.status.setText("Выбери проект из списка или укажи его папку.")
+            return
         if self.server_id == "godot" and not self.command.toPlainText().strip():
             self.status.setText("Вставь команду из дока. Пустую не записываю.")
             return
@@ -2633,10 +2699,25 @@ class EngineSetupDialog(QDialog):
         self.accept()
 
     def project_path(self) -> str:
-        return self.project.text().strip()
+        """Папка проекта: что вписано руками или что выбрано из списка.
+
+        Ручной ввод важнее списка: человек мог указать проект, которого
+        программа не нашла, — молча заменить его найденным нельзя.
+        """
+        text = self.project.text().strip()
+        if text:
+            return text
+        if self.projects is not None:
+            entry = self.projects.currentItem()
+            if entry is not None:
+                return str(entry.data(Qt.ItemDataRole.UserRole) or "")
+        return ""
 
     def plugin_path(self) -> str:
         return self.plugin.text().strip()
+
+    def port_value(self) -> str:
+        return self.port.text().strip()
 
     def command_text(self) -> str:
         return self.command.toPlainText()
@@ -4087,6 +4168,18 @@ class CapsTab(ScrollPage):
             "ответе нет"
         )
         self.btn_or_status.setEnabled(False)
+        # Кнопка «Открыть панель». OmniRoute поднимает локальный веб-сайт,
+        # а открыть его из программы было нечем: человек шёл искать адрес
+        # вручную, хотя программа знает его лучше него. Открывает вид,
+        # а не модуль моста, поэтому одна функция на окно и на трей.
+        self.btn_or_open = QPushButton("Открыть панель")
+        self.btn_or_open.setToolTip(
+            "OmniRoute: открыть локальную панель в браузере по адресу "
+            "http://127.0.0.1:20128. Сначала живая проверка: при "
+            "выключенном сервере кнопка скажет, что делать, а не "
+            "откроет страницу с ошибкой"
+        )
+        self.btn_or_open.setEnabled(False)
         # Кнопки моста LMArena. Своя строка и своя работа: развернуть
         # окружение форка, поднять мост, перезапустить его, показать
         # состояние и положить токен арены. В opencode ничего из этого не
@@ -4145,6 +4238,16 @@ class CapsTab(ScrollPage):
             "идемпотентна"
         )
         row_mcp.addWidget(self.btn_reg_all)
+        self.btn_reg_off_all = QPushButton("Отключить все мосты")
+        self.btn_reg_off_all.setToolTip(
+            "Убрать из настроек opencode ВСЕ блоки серверов разом — вместе с "
+            "мостами памяти базы ncp и pc. После этого память, навыки, агенты "
+            "и чтение компьютера работать перестанут, пока их не включат "
+            "заново. Нужен, чтобы взять чистую листку и оставить только "
+            "нужное. Перед записью делается копия настроек, после — нужен "
+            "перезапуск opencode"
+        )
+        row_mcp.addWidget(self.btn_reg_off_all)
         row_mcp.addWidget(self.btn_reg_off)
         row_mcp2.addWidget(self.btn_reg_auto)
         row_mcp2.addWidget(self.btn_reg_src)
@@ -4157,7 +4260,8 @@ class CapsTab(ScrollPage):
             ("DBHub", (self.btn_db_add, self.btn_db_check)),
             ("Браузеры", (self.btn_br_choose, self.btn_br_check)),
             ("OmniRoute", (self.btn_or_deploy, self.btn_or_start,
-                           self.btn_or_restart, self.btn_or_status)),
+                           self.btn_or_restart, self.btn_or_open,
+                           self.btn_or_status)),
             ("LMArena", (self.btn_lm_deploy, self.btn_lm_start,
                          self.btn_lm_restart, self.btn_lm_status,
                          self.btn_lm_token)),
@@ -4216,6 +4320,7 @@ class CapsTab(ScrollPage):
         self.btn_reg_check.clicked.connect(self._reg_check_all)
         self.btn_reg_all.clicked.connect(self._reg_enable_all)
         self.btn_reg_on.clicked.connect(self._reg_enable)
+        self.btn_reg_off_all.clicked.connect(self._reg_disable_all)
         self.btn_reg_auto.clicked.connect(self._reg_auto)
         self.btn_reg_off.clicked.connect(self._reg_disable)
         self.btn_reg_src.clicked.connect(self._reg_open_source)
@@ -4227,6 +4332,7 @@ class CapsTab(ScrollPage):
         self.btn_or_start.clicked.connect(self._or_start)
         self.btn_or_restart.clicked.connect(self._or_restart)
         self.btn_or_status.clicked.connect(self._or_status)
+        self.btn_or_open.clicked.connect(self._or_open_panel)
         self.btn_lm_deploy.clicked.connect(self._lm_deploy)
         self.btn_lm_start.clicked.connect(self._lm_start)
         self.btn_lm_restart.clicked.connect(self._lm_restart)
@@ -4421,19 +4527,26 @@ class CapsTab(ScrollPage):
                 "мост. Не ответила — в настройки не пишется ничего."
             ),
             "unity": (
-                "Проверить uvx и вписать команду. Пакет в редактор не ставит "
-                "и живой ответ не обещает."
+                "Выбрать проект из найденных, прописать в него пакет "
+                "MCP for Unity и вписать мост в настройки opencode. "
+                "Сам пакет скачает редактор при открытии проекта: он "
+                "должен быть закрыт. Редактор программа не открывает."
             ),
             "unreal": (
-                "Спросить путь проекта, записать mcp-unreal.txt, если есть "
-                "EngineWire, и вписать команду. Редактор не открывает."
+                "Спросить проект и порт, поставить EngineWire и вписать адрес "
+                "его сервера. Node.js и npm не нужны: сервер внутри плагина. "
+                "Проверяет адрес живым запросом. Редактор не открывает — без "
+                "открытого Unreal с плагином мост молчит."
             ),
             "roblox-studio": (
-                "Проверить mcp.bat. Если его нет, откажется. Студию не открывает."
+                "Проверить mcp.bat и вписать мост в настройки opencode. "
+                "Плагина нет: сервер встроенный, включается галочкой в самой "
+                "студии. Студию программа не открывает."
             ),
             "godot": (
-                "Принять команду attach и записать mcp-godot-attach.json. "
-                "Редактор не открывает."
+                "Принять команду attach, поставить аддон в проект и вписать "
+                "мост в настройки opencode. Включение аддона — галочкой в "
+                "самом Godot. Редактор не открывает."
             ),
             "tiktok": (
                 "Записать токен в mcp-tiktok.txt, не в журнал и не в "
@@ -4502,6 +4615,11 @@ class CapsTab(ScrollPage):
             ok, note = engine_setup.save_unreal(
                 dest, dialog.project_path(), dialog.plugin_path()
             )
+            port_ok, port_note = engine_setup.save_unreal_port(dest, dialog.port_value())
+            if ok and not port_ok:
+                ok, note = False, port_note
+            elif ok and port_note:
+                note = f"{note} {port_note}"
             mirror = engine_setup.UNREAL_NAME
         elif server.id == "unity":
             ok, note = engine_setup.save_project(
@@ -4555,34 +4673,83 @@ class CapsTab(ScrollPage):
         # Плагин ставится отдельно и в фоне: это распаковка архива и правка
         # файлов чужой программы, а модальное окно на это время замерзает.
         if server.id in editor_plugins.HANDLERS:
-            self._start_plugin_setup(server)
+            self._start_plugin_setup(server, dest)
+        # Roblox — единственный мост, у которого настраивать нечего: файл
+        # запуска создаёт сама студия, команда задана в реестре, отдельного
+        # файла настроек нет. Кнопка проверяла, писала одну строку в журнал —
+        # и всё, а человек видел «ничего не поднялось».
+        elif server.id == "roblox-studio":
+            self._start_enable(server, dest)
 
-    def _start_plugin_setup(self, server: mcp_registry.Server) -> None:
-        """Поставить плагин моста в фоне и сказать результат.
+    def _start_enable(self, server: mcp_registry.Server, dest: Path) -> None:
+        """Вписать мост в настройки opencode — последний шаг своей кнопки.
 
-        Отдельный поток нужен по двум причинам: распаковка архива и запись в
-        чужую папку занимают секунды, а модальное окно на это время не
-        отвечает. Второе — результат может быть отказом, и отказ должен
-        попасть в журнал текстом, а не уронить окно.
+        Отдельный метод, а не повтор в двух местах: и Roblox, и мосты с
+        плагином в конце делают одно и то же.
         """
-        worker = Worker(
-            lambda progress: editor_plugins.auto_setup(server.id, progress=progress),
-            self,
+        self._start(
+            lambda progress: mcp_registry.enable(dest, server, progress=progress),
+            "registry",
         )
+
+    def _start_plugin_setup(self, server: mcp_registry.Server, dest: Path) -> None:
+        """Поставить плагин моста и вписать сам мост — в фоне, одной кнопкой.
+
+        Отдельный поток нужен по трём причинам: распаковка архива и запись в
+        чужую папку занимают секунды, а модальное окно на это время не
+        отвечает; результат может быть отказом, и отказ должен попасть в
+        журнал текстом, а не уронить окно; и мост записывается после
+        плагина, а не отдельной кнопкой — плагин без моста бесполезен, а
+        мост без плагина не поднимется, и человек решал, что сломалось.
+        """
+        worker = Worker(self._plugin_setup_job(server, dest), self)
         worker.line.connect(lambda text, kind: self.log.add(text, kind))
         worker.finished.connect(lambda w=worker: self._plugin_setup_done(w))
         self._worker = worker
         worker.start()
 
+    @staticmethod
+    def _plugin_setup_job(server: mcp_registry.Server, dest: Path):
+        """Работа для фонового потока: плагин, потом запись моста.
+
+        Отдельным методом и без Qt — чтобы проверка могла вызвать её сама и
+        убедиться, что мост действительно вписывается, а не только плагин
+        ставится. Мост записывается лишь после успеха: нечего включать
+        то, что не установилось.
+        """
+        def job(progress):
+            ok, note = editor_plugins.auto_setup(server.id, progress=progress)
+            messages, errors = ([], [])
+            if ok:
+                messages, errors = mcp_registry.enable(dest, server, progress=progress)
+            return (ok, note), messages, errors
+        return job
+
     def _plugin_setup_done(self, worker) -> None:
-        """Что вышло после установки плагина. Правды больше, чем кажется."""
+        """Что вышло после установки плагина и записи моста."""
         result = getattr(worker, "result", None)
-        if isinstance(result, tuple) and len(result) == 2:
-            ok, note = result
-            self.log.add(str(note), "ok" if ok else "warn")
+        if not (isinstance(result, tuple) and len(result) == 3):
+            self.log.add("Установка плагина закончилась, подробности в журнале.",
+                         "ok")
             return
-        self.log.add("Установка плагина закончилась, подробности в журнале.",
-                     "ok")
+        (ok, note), messages, errors = result
+        self.log.add(str(note), "ok" if ok else "warn")
+        for line in messages:
+            self.log.add(line, "ok")
+        for line in errors:
+            self.log.add(line, "error")
+        if not ok:
+            return
+        if errors:
+            self.log.add(
+                "Плагин поставлен, но мост в настройки вписан не полностью — "
+                "смотри строки выше.", "warn",
+            )
+        else:
+            self.log.add(
+                "Мост вписан в настройки opencode. Перезапусти opencode — "
+                "серверы читаются при старте.", "ok",
+            )
 
     def _reg_state_text(self, server: mcp_registry.Server) -> str:
         """Состояние для колонки. Короткое - иначе таблица разъезжается.
@@ -4769,6 +4936,7 @@ class CapsTab(ScrollPage):
         self.btn_or_start.setEnabled(is_or)
         self.btn_or_restart.setEnabled(is_or)
         self.btn_or_status.setEnabled(is_or)
+        self.btn_or_open.setEnabled(is_or)
         # Кнопки LMArena — только у своей строки: у остальных серверов нет
         # ни окружения форка, ни токена арены.
         is_lm = server is not None and server.id == "lmarena"
@@ -4824,9 +4992,12 @@ class CapsTab(ScrollPage):
             self.reg_hint.setText(
                 "Порядок: «Развернуть» (пакет из npm в папку моста), "
                 "«Запустить» (панель и API на http://127.0.0.1:20128), "
-                "«Показать статус», затем «Настроить автоматически»: она "
-                "подключит бесплатных провайдеров без ключа и впишет мост "
-                "в настройки opencode. Что-то зависнет — «Перезапустить»."
+                "«Открыть панель» (тот же адрес в браузере — только при "
+                "живом сервере), «Показать статус», затем «Настроить "
+                "автоматически»: она подключит бесплатных провайдеров без "
+                "ключа и впишет мост в настройки opencode. Что-то зависнет "
+                "— «Перезапустить». Обновить версию — во вкладке "
+                "«Обновление», блок «Мост OmniRoute»."
             )
         else:
             self.reg_hint.clear()
@@ -4851,6 +5022,18 @@ class CapsTab(ScrollPage):
             lines.append("Запуск: " + " ".join(browsers.command(dest, choice)))
             lines.append(f"Профиль: {browsers.profile_dir(dest, br.key)}")
             lines.append(browsers.hint(br.key, choice))
+        # Нужные версии сервера и плагина — прямо здесь, а не внутри кода:
+        # расхождение между ними выглядит как «мост сломан», и человек
+        # должен видеть, какие версии задуманы, ещё до установки.
+        _need = bridge_versions.for_bridge(server.id)
+        if _need.known:
+            lines.append("")
+            lines.append("Что нужно этому мосту:")
+            for _line in _need.lines():
+                lines.append(f"  {_line}")
+        else:
+            lines.append("")
+            lines.append(_need.note)
         if server.id == "omniroute":
             # Состояние моста словами: развёрнут ли, отвечает ли API,
             # какая версия и сколько провайдеров. Здесь же адрес панели:
@@ -4973,6 +5156,41 @@ class CapsTab(ScrollPage):
             return ("нужен токен арены и ответ модели: выбери его строку "
                     "и нажми «Настроить автоматически»")
         return ""
+
+    def _reg_disable_all(self) -> None:
+        """Отключает все мосты разом, вместе с мостами памяти базы.
+
+        Действие общее и необратимое без копии, поэтому сначала вопрос с
+        прямым перечислением того, что пропадёт. Молча отключить память
+        было бы хуже, чем не отключать вовсе: человек узнал бы об этом
+        по тому, что его забыло.
+        """
+        dest = self._reg_dest()
+        if dest is None:
+            self._warn("Не выбрана папка настроек opencode.")
+            return
+        question = (
+            "Из настроек opencode уйдут ВСЕ серверы — вместе с мостами "
+            "памяти базы ncp и pc.\n\n"
+            "Пока их не включат заново, перестанут работать: память базы, "
+            "навыки, агенты и чтение компьютера.\n\n"
+            "Копия настроек будет сделана до записи, вернуть можно из неё. "
+            "Отключить?"
+        )
+        answer = QMessageBox.question(
+            self,
+            "Отключить все мосты?",
+            question,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        def job(progress):
+            return mcp_registry.disable_all(dest)
+
+        self._start(job, "registry")
 
     def _reg_enable_all(self) -> None:
         """Включает вместе все серверы, где для этого не надо ничего спрашивать."""
@@ -5276,6 +5494,32 @@ class CapsTab(ScrollPage):
         self.log.add(text, "ok" if "отвечает" in text else "warn")
         # Подробности под таблицей обновляются тем же текстом: там его
         # видно, не открывая журнал.
+        self._reg_show_detail()
+
+    def _or_open_panel(self) -> None:
+        """Открывает локальную панель OmniRoute в браузере.
+
+        Сначала живая проверка, и только потом открытие: при выключенном
+        сервере человек увидел бы страницу с ошибкой подключения и
+        решил, что программа сломалась. Открывает `ui.open_link`, а не
+        `webbrowser.open` — тот запускает внешнюю программу, а программа
+        работает на pythonw, и на экране появилось бы чёрное окно.
+        """
+        dest = self._or_target()
+        if dest is None:
+            return
+        ok, note = omniroute.panel_ready(dest)
+        if not ok:
+            self.log.clear_log()
+            self.log.add(note, "warn")
+            return
+        url = omniroute.panel_url()
+        opened = ui.open_link(url)
+        self.log.clear_log()
+        self.log.add(note, "ok")
+        if not opened:
+            self.log.add(
+                "Браузер не взял адрес — открой его сам: " + url, "warn")
         self._reg_show_detail()
 
     def _lm_target(self) -> Path | None:
@@ -6101,8 +6345,19 @@ class CapsTab(ScrollPage):
             self._notify(f"{self._what}: прервано", str(result)[:90])
             return
         messages, errors = result
+        # Строки, которые работа уже выдала в журнал через `progress`,
+        # повторно не добавляем. Иначе всё, что печаталось по ходу
+        # дела, дублируется в конце: кнопка «Развернуть» у OmniRoute
+        # показывала «Ставлю OmniRoute…» и «развёрнут» по два раза
+        # (измерено 19.10.2026). Работа при этом выполнялась один раз —
+        # дублировался только текст, и человек решал, что программа
+        # ставит пакет дважды.
+        shown = self.log.toPlainText() if hasattr(self.log, "toPlainText") else ""
         for line in messages:
+            if not line or line in shown:
+                continue
             self.log.add(line, "ok")
+            shown += line + "\n"
         if errors:
             self.log.add("Готово, но с замечаниями:", "warn")
             for line in errors:
@@ -6719,10 +6974,44 @@ class ProgramsTab(ScrollPage):
                          kind="warn", wrap=True)
             )
             return
+        # Карточки разложены по группам, и у каждой группы заголовок с
+        # правилом. Правило видно потому: группа, выбранная молча, не
+        # проверяется — а проверить её должен человек, а не автор кода.
+        placed = self._placements(base)
+        buckets: dict[str, list] = {}
         for card in cards:
-            self.cards_box.addWidget(self._build_card(card, names))
+            item = program_groups.place_card(card, placed)
+            buckets.setdefault(item.group, []).append((card, item))
+        order = {key: index for index, (key, _t) in enumerate(program_groups.GROUPS)}
+        titles = program_groups.GROUP_TITLES
+        for key, _title in sorted(program_groups.GROUPS, key=lambda p: order[p[0]]):
+            rows = buckets.get(key)
+            if not rows:
+                continue
+            self.cards_box.addWidget(
+                ui.label(f"{titles[key]} — {len(rows)}", kind="title")
+            )
+            for card, item in rows:
+                self.cards_box.addWidget(self._build_card(card, names, item))
+        # Мост, которого нет ни в одной группе, не должен исчезнуть молча.
+        for key, rows in buckets.items():
+            if key in titles:
+                continue
+            for card, _item in rows:
+                self.cards_box.addWidget(self._build_card(card, names, None))
 
-    def _build_card(self, card: program_cards.Card, names: dict[str, str]) -> QWidget:
+    def _placements(self, base: Path) -> dict:
+        """Разложение мостов по группам. Пусто — виноват реестр, а не окно."""
+        try:
+            servers = mcp_registry.load_servers(base)
+        except Exception:  # noqa: BLE001 — вкладка не должна падать из-за групп
+            return {}
+        if not servers:
+            return {}
+        return program_groups.by_bridge(servers)
+
+    def _build_card(self, card: program_cards.Card, names: dict[str, str],
+                    item: program_groups.Placement | None = None) -> QWidget:
         """Одна карточка. Виджеты запоминаются: их надо гасить на время
         установки и заполнять заново по ходу дела."""
         box = QGroupBox(card.name)
@@ -6736,6 +7025,12 @@ class ProgramsTab(ScrollPage):
         head.layout().addWidget(self.status)
         head.layout().addStretch(1)
         layout.addWidget(head)
+
+        # Почему карточка в этой группе. Правило видно словами: раскладку,
+        # выбранную молча, нельзя ни проверить, ни оспорить.
+        if item is not None and item.rule:
+            layout.addWidget(ui.label("Группа: " + item.title + ". " + item.rule,
+                                      kind="dim", wrap=True))
 
         needed = program_cards.needed_by_text(card, names)
         if needed:
@@ -7464,7 +7759,13 @@ class HelpTab(ScrollPage):
             "«Проверить обновление» смотрит, есть ли новое. Пока не нажали, "
             "«Скачать и применить» выключена: неизвестно, что качать.\n"
             "Перед применением делается бэкап. «Вернуть из бэкапа» откатывает "
-            "последнее обновление."
+            "последнее обновление.\n"
+            "Отдельным блоком ниже — мост OmniRoute. Версию программа "
+            "спрашивает у официального GitHub проекта "
+            "(https://github.com/diegosouzapw/OmniRoute), а сам пакет ставит "
+            "из npm ровно той версией, которую назвал GitHub. Пока не нажали "
+            "«Проверить», «Обновить мост» выключена: неизвестно, есть ли "
+            "что ставить."
         ))
 
         outer.addWidget(self._section("11. Перенос на другой компьютер"))

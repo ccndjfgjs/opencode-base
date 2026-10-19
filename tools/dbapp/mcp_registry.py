@@ -635,11 +635,19 @@ def _check_editor_plugin(name: str) -> tuple[bool, str]:
         "godot-ai-addon": editor_plugins.godot_state,
         "ghidra-mcp-extension": editor_plugins.ghidra_state,
         "roblox-studio-server": editor_plugins.roblox_state,
+        "roblox-studio-app": editor_plugins.roblox_app_state,
     }.get(name.strip().lower())
     if handler is None:
         return False, f"плагин «{name}» программа не умеет проверять"
-    present, _can_write, note = handler()
-    return present, note
+    # Обработчики отвечают двумя или тремя значениями: (есть, текст) либо
+    # (есть, можно-поставить, текст). Раньше третье значение читалось как
+    # текст, и в карточке вместо причины показывалось False.
+    result = handler()
+    if len(result) == 2:
+        present, note = result
+        return bool(present), str(note)
+    present, _can_write, note = result
+    return bool(present), str(note)
 
 
 #: Чем проверяется требование типа `plugin`. Ключ — то, что написано в
@@ -651,7 +659,8 @@ _PLUGIN_CHECKS = {"obs-websocket": _check_obs_websocket,
                    "enginewire-plugin": _check_editor_plugin,
                    "godot-ai-addon": _check_editor_plugin,
                    "ghidra-mcp-extension": _check_editor_plugin,
-                   "roblox-studio-server": _check_editor_plugin}
+                   "roblox-studio-server": _check_editor_plugin,
+                   "roblox-studio-app": _check_editor_plugin}
 
 
 def check_requirement(spec: dict) -> Requirement:
@@ -989,7 +998,37 @@ def quiet_command(command: list[str]) -> list[str]:
     return [runner, str(launcher), *command]
 
 
-def build_block(server: Server, manual: dict | None = None) -> str:
+def expand_url(url: str, server: Server | None = None,
+               dest: Path | None = None) -> str:
+    """Подставить в адрес то, что знает только машина человека.
+
+    У моста Unreal в адресе стоит `{PORT}`: порт задаёт сам плагин, и
+    значение по умолчанию из документации не проверено. Программа спрашивает
+    порт у человека и пишет его рядом с настройками — отсюда он и берётся.
+    Выдумывать порт по умолчанию нельзя: молчаливый неверный адрес хуже
+    явного отказа.
+    """
+    text = str(url or "")
+    if "{PORT}" not in text or server is None:
+        return text
+    port = 0
+    default = 0
+    if isinstance(server.raw.get("connection"), dict):
+        default = int(server.raw["connection"].get("port_default") or 0)
+    if dest is not None:
+        import engine_setup  # noqa: PLC0415 — настройки мостов живут там
+
+        try:
+            port = engine_setup.read_unreal_port(Path(dest))
+        except Exception:  # noqa: BLE001 — нет файла или нет модуля
+            port = 0
+    if not port:
+        port = default
+    return text.replace("{PORT}", str(port) if port else "ПОРТ-НЕ-ЗАДАН")
+
+
+def build_block(server: Server, manual: dict | None = None,
+                dest: Path | None = None) -> str:
     """Кусок JSONC для секции mcp в opencode.jsonc. Пусто, если нечего.
 
     Формат ровно как у ncp_server_block: insert_entry ждёт готовую
@@ -1006,7 +1045,8 @@ def build_block(server: Server, manual: dict | None = None) -> str:
         url = str(manual.get("url") or url).strip()
         headers = manual.get("headers") or {}
     if url:
-        body = {"type": "remote", "url": url, "enabled": True}
+        body = {"type": "remote", "url": expand_url(url, server, dest),
+                "enabled": True}
         if headers:
             body["headers"] = headers
     else:
@@ -1107,7 +1147,7 @@ def warm_up(server: Server, progress=None) -> str:
         proc = subprocess.Popen(
             argv, stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, encoding="utf-8", errors="replace",
+            text=True, encoding="utf-8", errors="replace", startupinfo=_hidden_startupinfo(),
         )
     except OSError as exc:
         return f"Прогрев не запустился: {exc}"
@@ -1258,6 +1298,79 @@ def quiet_migrate(dest: Path, servers: list[Server]) -> tuple[list[str], str]:
     return messages, "restart"
 
 
+def bridge_versions(server: Server) -> tuple[bool, str]:
+    """Что нужно этому мосту: программа, версия сервера, версия плагина.
+
+    Сначала таблица `данные/bridge-versions.json` — она знает все мосты,
+    включая те, у которых плагина нет. Раньше проверка касалась только
+    мостов с плагином, и мост с неверно закреплённым сервером проходил
+    мимо: а ведь рассинхронизация видна именно там.
+
+    Второй слой — указатели плагинов: сервер и плагин обязаны быть из
+    одного релиза. Мосты без указателя по существу (OBS, Blender, Roblox)
+    проходят честно: сверять нечего, и молчать об этом не нужно.
+    """
+    import bridge_versions as need_table  # noqa: PLC0415 — модуль программы
+
+    need = need_table.for_bridge(server.id)
+    if not need.known:
+        return False, need.note
+    install = server.program_install
+    finder = install.plugin.finder if (install is not None and install.plugin) else ""
+    if finder:
+        try:
+            import editor_plugins  # noqa: PLC0415 — тяжёлый модуль, нужен здесь
+        except ImportError as exc:
+            return True, (f"указатели плагинов не читаются ({exc}) — "
+                          f"сверка версий плагина не выполнена")
+        ok_plugin, note_plugin = editor_plugins.bridge_versions(finder)
+        if not ok_plugin:
+            return False, note_plugin
+    return True, "; ".join(need.lines())
+
+
+def check_registry_pairs(base: Path) -> tuple[bool, str]:
+    """Все мосты реестра: сервер и плагин из одного релиза, запись на месте.
+
+    Это проверка «при добавлении моста»: новый мост без записи о версиях
+    или с расхождением должен быть виден сразу, а не после первого
+    упавшего вызова.
+    """
+    data = load_registry(base)
+    if not isinstance(data, dict) or not data.get("servers"):
+        return False, "реестр мостов не читается — сверять нечего"
+    problems: list[str] = []
+    try:
+        import bridge_versions as need_table  # noqa: PLC0415 — модуль программы
+        import editor_plugins  # noqa: PLC0415 — тяжёлый модуль, нужен здесь
+    except ImportError as exc:
+        return True, f"модули программы не импортируются ({exc}) — проверка не выполнена"
+    for entry in (data.get("servers") or []):
+        server_id = str(entry.get("id") or "")
+        need = need_table.for_bridge(server_id, base)
+        if not need.known:
+            problems.append(need.note)
+            continue
+        install = entry.get("program_install") or {}
+        plugin = install.get("plugin")
+        if not isinstance(plugin, dict):
+            continue
+        finder = str(plugin.get("finder") or "")
+        if editor_plugins.without_pointer(finder):
+            continue
+        if not editor_plugins.family_for(finder):
+            problems.append(f"{server_id}: finder «{finder}» не знаком программе — "
+                            f"версии плагина никто не сверяет")
+            continue
+        ok, note_plugin = editor_plugins.bridge_versions(finder)
+        if not ok:
+            problems.append(f"{server_id}: {note_plugin}")
+    if problems:
+        return False, ("; ".join(problems[:3])
+                       + (f" (ещё {len(problems) - 3})" if len(problems) > 3 else ""))
+    return True, "у всех мостов с плагином версии сервера и плагина совпадают"
+
+
 def enable(dest: Path, server: Server, progress=None) -> tuple[list[str], list[str]]:
     """Включает сервер. Возвращает (сообщения, ошибки).
 
@@ -1287,6 +1400,13 @@ def enable(dest: Path, server: Server, progress=None) -> tuple[list[str], list[s
     missing = server.missing
     if missing:
         return ([], [f"Не хватает: {', '.join(r.what for r in missing)}"])
+
+    # Версии сервера и плагина обязаны совпадать. Мост с расхождением
+    # в настройки не попадает: он поднимется, но каждый вызов будет
+    # падать с versionMismatch, и это выглядит как «мост сломан».
+    ok_versions, note_versions = bridge_versions(server)
+    if not ok_versions:
+        return ([], [f"{server.name}: {note_versions}"])
 
     # Сервер, который настраивается руками: конфигурация лежит
     # рядом с opencode.jsonc. Если её нет - писать нечего: блок
@@ -1331,7 +1451,7 @@ def enable(dest: Path, server: Server, progress=None) -> tuple[list[str], list[s
                 + ", ".join(_left)
             ])
 
-    block = build_block(server, manual=manual)
+    block = build_block(server, manual=manual, dest=dest)
     if not block:
         return ([], ["Команда подключения пустая — проверь реестр."])
 
@@ -1434,6 +1554,86 @@ def disable(dest: Path, server: Server) -> tuple[list[str], list[str]]:
                 "Файл с токеном не удалился: "
                 f"{manual_config_path(dest, server.id)}"
             )
+    return messages, errors
+
+
+def _mcp_names(text: str) -> list[str] | None:
+    """Имена серверов из настроек или None, если файл не читается."""
+    from opencode_caps import strip_jsonc
+
+    try:
+        data = json.loads(strip_jsonc(text))
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return list(data.get("mcp") or {})
+
+
+def disable_all(dest: Path) -> tuple[list[str], list[str]]:
+    """Отключает ВСЕ серверы разом, включая мосты памяти базы.
+
+    Решение человека: полная чистая листка, после которой остаётся
+    включить ровно нужное. Поэтому снимаются и `ncp`, и `pc` — без них
+    программа не помнит и не читает компьютер, и об этом сказано словами,
+    а не остаётся сюрпризом.
+
+    Список берётся из самих настроек, а не из реестра: мосты памяти в
+    реестре не значатся, и обход по реестру тихо оставил бы их включёнными
+    при кнопке, которая обещает «все».
+
+    Способ — заменить содержимое раздела `mcp` пустым объектом, а не
+    вырезать блоки по одному. Вырезание по одному опирается на метки
+    программы, а блок может быть написан руками: такой молча не
+    вырезался, и кнопка рапортовала об успехе, ничего не сделав. Здесь
+    результат не зависит от того, чьей рукой написан блок, — и он
+    проверяется: после записи раздел `mcp` обязан быть пустым.
+
+    Копия настроек делается одна, до записи, а не по одной на сервер:
+    иначе на диске остаётся десяток почти одинаковых копий.
+
+    Настоящие настройки эта функция не проверяет и не трогает — вызывающий
+    код обязан передать копию, если проверяет.
+    """
+    from opencode_caps import check_jsonc, find_key_object
+
+    messages: list[str] = []
+    errors: list[str] = []
+    cfg = Path(dest) / "opencode.jsonc"
+    try:
+        text = cfg.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return ([], [f"Настройки не прочитались: {exc}"])
+    names = _mcp_names(text)
+    if names is None:
+        return ([], ["Настройки не читаются — правь вручную, я их не трогал."])
+    if not names:
+        return (["В настройках нет ни одного сервера — отключать нечего."],
+                [])
+
+    bounds = find_key_object(text, "mcp")
+    if bounds is None:
+        return ([], ["Раздел mcp в настройках не найден — не трогал."])
+    # Границы — это индексы САМИХ скобок, а ключ "mcp" стоит перед ними.
+    # Поэтому меняется только содержимое, иначе ключ продублировался бы.
+    updated = text[:bounds[0]] + "{}" + text[bounds[1] + 1:]
+    if not check_jsonc(updated):
+        return ([], ["После отключения файл перестал читаться — не пишу его."])
+    if _mcp_names(updated):
+        return ([], ["Раздел mcp не опустел — не пишу настройки."])
+    try:
+        backup = _write_config(dest, updated)
+    except OSError as exc:
+        return ([], [f"Не записались настройки: {exc}"])
+    messages.append(f"Отключено серверов: {len(names)} — " + ", ".join(names))
+    memory = [name for name in names if name in ("ncp", "pc")]
+    if memory:
+        messages.append(
+            f"Сняты и мосты памяти базы ({', '.join(memory)}): навыки, "
+            f"агенты и чтение компьютера перестанут работать, пока их не "
+            f"включат заново.")
+    messages.append(f"Копия настроек: {backup}")
+    messages.append("Перезапусти opencode: серверы читаются при старте.")
     return messages, errors
 
 

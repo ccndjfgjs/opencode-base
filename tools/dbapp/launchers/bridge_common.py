@@ -19,17 +19,65 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+def _hidden_startupinfo():
+    """Окно консоли не показывать. Подробности — в core.hidden_startupinfo.
+
+    Отдельная функция с ленивым импортом, а не `import core` наверху:
+    модуль читают и лаунчеры, и проверки, и лишняя связь между ними
+    лишний раз ломается.
+
+    Зачем это. 19.10.2026 человек нажал кнопку у моста OBS, и у него
+    открылось чёрное окно консоли. Программа работает на pythonw — у
+    неё самой консоли нет, и Windows на каждый запуск внешней
+    программы без этой просьбы создаёт новое окно.
+    """
+    try:
+        from core import hidden_startupinfo
+
+        return hidden_startupinfo()
+    except Exception:  # noqa: BLE001 — без этого просто откроется окно
+        return None
+
+
 #: Версии, которые реально лежали в каталогах на 2026-10-14.
 #: Не «последняя навсегда»: закрепили, чтобы молча не приехала несовместимая.
 UNITY_FROM = "mcpforunityserver==10.3.0"
-UNREAL_PACKAGE = "unreal-engine-mcp-server@0.6.0-beta-e"
+#: Unreal здесь больше не нужен: в линии 0.6 сервер живёт внутри плагина
+#: EngineWire, и npm не участвует. Константы UNREAL_PACKAGE нет намеренно —
+#: она была причиной рассинхрона между кодом и указателем плагинов: в коде
+#: стоял один релиз, в указателе другой, и мост падал бы на каждом вызове.
+#: Проверка «мосту Unreal не нужен Node» стоит в test_bridge_regression.
 TIKTOK_PACKAGE = "@getmcpads/tiktok-ads-mcp-server@2.0.1"
 #: Пакет Godot на PyPI в тот же день. В команду его не подставляем:
 #: док редактора сам пишет argv с портами и capability, чужой пин сломает вход.
 GODOT_PYPI = "godot-ai==4.3.0"
 
-UNREAL_NODE = (20, 19, 0)
+#: Мосту Unreal Node не нужен, поэтому и минимальной версии Node для него
+#: тут нет: в линии 0.6 сервер живёт внутри плагина EngineWire.
 TIKTOK_NODE = (22, 12, 0)
+
+
+def _force_utf8() -> None:
+    """Журнал должен быть в UTF-8, а не в кодировке консоли.
+
+    Мост объясняет человеку, почему не работает, — и именно этот текст
+    читает смотритель мостов, разбирая причину отказа. В кодировке
+    консоли русский превращается в кракозябры, и объяснение теряется
+    вместе с причиной: 19.10.2026 так и вышло — «нет ключа» доехало
+    как «�������� �� ������». Под pythonw потоков может не быть вовсе,
+    тогда и перенастраивать нечего.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            pass
+
+
+_force_utf8()
 
 
 def say(prefix: str, text: str) -> None:
@@ -99,7 +147,7 @@ def exec_stdio(argv: list[str], env: dict[str, str] | None = None,
             env=env,
             stdin=sys.stdin,
             stdout=sys.stdout,
-            stderr=sys.stderr,
+            stderr=sys.stderr, startupinfo=_hidden_startupinfo(),
         )
     except OSError as exc:
         print(f"не запустилось: {exc}", file=sys.stderr, flush=True)
@@ -601,7 +649,7 @@ def probe_candidate(path: str, allow_batch: bool = False) -> tuple[bool, bool, s
             text=True,
             timeout=PROBE_TIMEOUT,
             encoding="utf-8",
-            errors="replace",
+            errors="replace", startupinfo=_hidden_startupinfo(),
         )
     except subprocess.TimeoutExpired:
         return False, True, (

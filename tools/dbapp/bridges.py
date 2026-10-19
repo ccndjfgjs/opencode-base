@@ -40,6 +40,26 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
+def _hidden_startupinfo():
+    """Окно консоли не показывать. Подробности — в core.hidden_startupinfo.
+
+    Отдельная функция с ленивым импортом, а не `import core` наверху:
+    модуль читают и лаунчеры, и проверки, и лишняя связь между ними
+    лишний раз ломается.
+
+    Зачем это. 19.10.2026 человек нажал кнопку у моста OBS, и у него
+    открылось чёрное окно консоли. Программа работает на pythonw — у
+    неё самой консоли нет, и Windows на каждый запуск внешней
+    программы без этой просьбы создаёт новое окно.
+    """
+    try:
+        from core import hidden_startupinfo
+
+        return hidden_startupinfo()
+    except Exception:  # noqa: BLE001 — без этого просто откроется окно
+        return None
+
+
 #: Порт и путь, на которых OBS поднимает свой WebSocket-сервер.
 OBS_PORT = 4455
 OBS_CONFIG_RELATIVE = Path(
@@ -258,7 +278,7 @@ def obs_running() -> bool:
     try:
         out = subprocess.run(
             ["tasklist", "/FI", "IMAGENAME eq obs64.exe", "/NH"],
-            capture_output=True, text=True, errors="replace", timeout=15,
+            capture_output=True, text=True, errors="replace", timeout=15, startupinfo=_hidden_startupinfo(),
         ).stdout or ""
     except (OSError, subprocess.SubprocessError):
         return False
@@ -523,7 +543,7 @@ def adb_devices(adb: Path | None = None) -> list[str]:
     try:
         out = subprocess.run(
             [str(tool), "devices"], capture_output=True, text=True,
-            errors="replace", timeout=30,
+            errors="replace", timeout=30, startupinfo=_hidden_startupinfo(),
         ).stdout or ""
     except (OSError, subprocess.SubprocessError):
         return []
@@ -546,7 +566,7 @@ def emulator_instances(spec: dict) -> list[dict]:
     try:
         out = subprocess.run(
             [str(console), "list2"], capture_output=True, text=True,
-            errors="replace", timeout=30,
+            errors="replace", timeout=30, startupinfo=_hidden_startupinfo(),
         ).stdout or ""
     except (OSError, subprocess.SubprocessError):
         return []
@@ -583,7 +603,7 @@ def probe_emulator(adb: Path | None = None) -> tuple[bool, str]:
         out = subprocess.run(
             [str(tool), "-s", devices[0], "shell", "getprop",
              "ro.product.model"],
-            capture_output=True, text=True, errors="replace", timeout=30,
+            capture_output=True, text=True, errors="replace", timeout=30, startupinfo=_hidden_startupinfo(),
         ).stdout or ""
     except (OSError, subprocess.SubprocessError) as exc:
         return False, f"Устройство {devices[0]} не отвечает: {exc}"
@@ -683,7 +703,7 @@ def connect_emulator(adb: Path | None = None,
         try:
             out = subprocess.run(
                 [str(tool), "connect", f"127.0.0.1:{port}"],
-                capture_output=True, text=True, errors="replace", timeout=30,
+                capture_output=True, text=True, errors="replace", timeout=30, startupinfo=_hidden_startupinfo(),
             ).stdout or ""
         except (OSError, subprocess.SubprocessError):
             continue
@@ -1301,6 +1321,27 @@ def auto_setup_emulator(dest: Path, server, progress=None
     def fail(text: str) -> None:
         errors.append(text)
 
+    # Окружение моста — первым делом. 19.10.2026 мост отвечал
+    # «No module named 'mcp'»: папки `.venv` рядом с ним нет, и
+    # лаунчер молча брал системный Python, где этого пакета нет.
+    # Долгая установка идёт здесь, а не при старте сервера: opencode
+    # даёт мосту 30 секунд, а uv нужно больше, и «Operation timed out»
+    # ничего бы не объяснил.
+    server_dir = HERE / "thirdparty" / "android-mcp-server"
+    say("Готовлю окружение моста…")
+    from python_envs import ensure_venv  # noqa: PLC0415 — рядом лежит
+
+    python, notes = ensure_venv(server_dir, progress=say)
+    for note in notes:
+        if note not in messages:
+            say(note)
+    if python is None:
+        fail(
+            "Окружение моста поставить не удалось — подробности выше. "
+            "Без него мост не запустится."
+        )
+        return messages, errors
+
     adb = find_adb()
     say("Проверяю adb…")
     if adb is None:
@@ -1355,7 +1396,6 @@ def auto_setup_emulator(dest: Path, server, progress=None
     if not serial:
         fail("adb не видит ни одного устройства.")
         return messages, errors
-    server_dir = HERE / "thirdparty" / "android-mcp-server"
     ok, note = write_device_config(server_dir, serial)
     if not ok:
         fail(note)

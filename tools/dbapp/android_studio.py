@@ -34,6 +34,26 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
+def _hidden_startupinfo():
+    """Окно консоли не показывать. Подробности — в core.hidden_startupinfo.
+
+    Отдельная функция с ленивым импортом, а не `import core` наверху:
+    модуль читают и лаунчеры, и проверки, и лишняя связь между ними
+    лишний раз ломается.
+
+    Зачем это. 19.10.2026 человек нажал кнопку у моста OBS, и у него
+    открылось чёрное окно консоли. Программа работает на pythonw — у
+    неё самой консоли нет, и Windows на каждый запуск внешней
+    программы без этой просьбы создаёт новое окно.
+    """
+    try:
+        from core import hidden_startupinfo
+
+        return hidden_startupinfo()
+    except Exception:  # noqa: BLE001 — без этого просто откроется окно
+        return None
+
+
 # Общие правила для версий и сборок. Импорт двойной: при плоском запуске
 # папка лежит в sys.path, при запуске как пакет нужен относительный.
 try:
@@ -158,7 +178,7 @@ def is_running() -> bool:
     try:
         out = subprocess.run(
             ["tasklist", "/FI", "IMAGENAME eq studio64.exe", "/NH"],
-            capture_output=True, text=True, errors="replace", timeout=15,
+            capture_output=True, text=True, errors="replace", timeout=15, startupinfo=_hidden_startupinfo(),
         ).stdout or ""
     except (OSError, subprocess.SubprocessError):
         return False

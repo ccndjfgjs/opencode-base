@@ -79,11 +79,38 @@ def hidden_startupinfo():
     return info
 
 
+def resolve_command(argv: list[str]) -> list[str]:
+    """Найти исполняемый файл, когда в команде нет расширения.
+
+    В реестре команда записана как `npx` или `uvx` — без `.cmd`. На
+    Windows такие программы лежат пакетными файлами, и `CreateProcess`
+    их не запускает: выходило `WinError 2`, то есть «системе не удаётся
+    найти указанный файл», хотя `npx` есть и работает. Проверка ниже на
+    расширение это не ловила — там `.cmd` должен быть уже написан.
+
+    Здесь имя дополняется через PATH, и уже потом решается, запускать
+    ли его через `cmd`. Работает для любого моста: OBS, Unity, Roblox,
+    Unreal — везде, где команда начинается с `npx`, `uvx` или подобного.
+    """
+    if not argv:
+        return argv
+    head = argv[0]
+    if os.path.isfile(head):
+        return argv
+    import shutil
+
+    found = shutil.which(head)
+    if not found:
+        return argv
+    return [found, *argv[1:]]
+
+
 def main(argv: list[str]) -> int:
     args = argv[1:]
     if not args:
         return 2
     _restore_streams()
+    args = resolve_command(args)
     # Команда из реестра может начинаться с .cmd или .bat — такие файлы
     # Windows исполняет только через cmd, и без этого окно появится.
     if args[0].lower().endswith((".cmd", ".bat")):
