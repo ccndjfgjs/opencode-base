@@ -37,6 +37,26 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+def _hidden_startupinfo():
+    """Окно консоли не показывать. Подробности — в core.hidden_startupinfo.
+
+    Отдельная функция с ленивым импортом, а не `import core` наверху:
+    модуль читают и лаунчеры, и проверки, и лишняя связь между ними
+    лишний раз ломается.
+
+    Зачем это. 19.10.2026 человек нажал кнопку у моста OBS, и у него
+    открылось чёрное окно консоли. Программа работает на pythonw — у
+    неё самой консоли нет, и Windows на каждый запуск внешней
+    программы без этой просьбы создаёт новое окно.
+    """
+    try:
+        from core import hidden_startupinfo
+
+        return hidden_startupinfo()
+    except Exception:  # noqa: BLE001 — без этого просто откроется окно
+        return None
+
+
 WIN = os.name == "nt"
 
 #: Куда класть найденные пути. Не рядом с программой: программа может
@@ -221,7 +241,7 @@ def java_major(java_exe: Path) -> int:
     """Главная версия Java по её собственному ответу, а не по имени папки."""
     try:
         res = subprocess.run([str(java_exe), "-version"], capture_output=True,
-                             text=True, timeout=20)
+                             text=True, timeout=20, startupinfo=_hidden_startupinfo())
     except (OSError, subprocess.SubprocessError):
         return 0
     blob = (res.stderr or "") + (res.stdout or "")

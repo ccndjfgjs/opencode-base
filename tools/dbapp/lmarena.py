@@ -217,6 +217,22 @@ def _tail(text: str, limit: int = 400) -> str:
     return "…" + text[-limit:]
 
 
+def _hidden_startupinfo():
+    """Окно консоли не показывать. Подробности — в core.hidden_startupinfo.
+
+    Та же причина, что и в мосте OmniRoute 19.10.2026: программа работает
+    на pythonw, у неё самой консоли нет, поэтому Windows на каждый запуск
+    форка открывал чёрное окно. Человек видел это как «программа что-то
+    запустила», а не как «вот окно команды».
+    """
+    try:
+        from core import hidden_startupinfo
+
+        return hidden_startupinfo()
+    except Exception:  # noqa: BLE001 — без этого просто откроется окно
+        return None
+
+
 def _run(argv: list[str], timeout: int = INSTALL_TIMEOUT, cwd: Path | None = None,
          progress=None) -> tuple[int, str, str]:
     """Запускает внешнюю команду и возвращает (код, stdout, stderr)."""
@@ -224,6 +240,7 @@ def _run(argv: list[str], timeout: int = INSTALL_TIMEOUT, cwd: Path | None = Non
         proc = subprocess.run(
             argv, cwd=str(cwd or SERVER_DIR), capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=timeout,
+            startupinfo=_hidden_startupinfo(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return 1, "", str(exc)

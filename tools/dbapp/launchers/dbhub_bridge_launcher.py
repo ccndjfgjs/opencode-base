@@ -36,6 +36,26 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
 from core import hidden_startupinfo  # noqa: E402 — путь задаётся строкой выше
+
+def _hidden_startupinfo():
+    """Окно консоли не показывать. Подробности — в core.hidden_startupinfo.
+
+    Отдельная функция с ленивым импортом, а не `import core` наверху:
+    модуль читают и лаунчеры, и проверки, и лишняя связь между ними
+    лишний раз ломается.
+
+    Зачем это. 19.10.2026 человек нажал кнопку у моста OBS, и у него
+    открылось чёрное окно консоли. Программа работает на pythonw — у
+    неё самой консоли нет, и Windows на каждый запуск внешней
+    программы без этой просьбы создаёт новое окно.
+    """
+    try:
+        from core import hidden_startupinfo
+
+        return hidden_startupinfo()
+    except Exception:  # noqa: BLE001 — без этого просто откроется окно
+        return None
+
 #: Своего кода у DBHub в репозитории нет — сервер скачивает npx. Папка всё
 #: равно нужна: это рабочая папка запуска и место для пояснения.
 SERVER_DIR = HERE.parent.parent / "thirdparty" / "dbhub"
@@ -134,7 +154,7 @@ def warm_cache(npx: str) -> None:
         subprocess.run(
             argv, stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            timeout=WARM_TIMEOUT, check=False,
+            timeout=WARM_TIMEOUT, check=False, startupinfo=_hidden_startupinfo(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         say(f"прогрев не удался: {exc}. Пакет скачается при первом запуске")

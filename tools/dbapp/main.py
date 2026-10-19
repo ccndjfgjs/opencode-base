@@ -4168,6 +4168,18 @@ class CapsTab(ScrollPage):
             "ответе нет"
         )
         self.btn_or_status.setEnabled(False)
+        # Кнопка «Открыть панель». OmniRoute поднимает локальный веб-сайт,
+        # а открыть его из программы было нечем: человек шёл искать адрес
+        # вручную, хотя программа знает его лучше него. Открывает вид,
+        # а не модуль моста, поэтому одна функция на окно и на трей.
+        self.btn_or_open = QPushButton("Открыть панель")
+        self.btn_or_open.setToolTip(
+            "OmniRoute: открыть локальную панель в браузере по адресу "
+            "http://127.0.0.1:20128. Сначала живая проверка: при "
+            "выключенном сервере кнопка скажет, что делать, а не "
+            "откроет страницу с ошибкой"
+        )
+        self.btn_or_open.setEnabled(False)
         # Кнопки моста LMArena. Своя строка и своя работа: развернуть
         # окружение форка, поднять мост, перезапустить его, показать
         # состояние и положить токен арены. В opencode ничего из этого не
@@ -4226,6 +4238,16 @@ class CapsTab(ScrollPage):
             "идемпотентна"
         )
         row_mcp.addWidget(self.btn_reg_all)
+        self.btn_reg_off_all = QPushButton("Отключить все мосты")
+        self.btn_reg_off_all.setToolTip(
+            "Убрать из настроек opencode ВСЕ блоки серверов разом — вместе с "
+            "мостами памяти базы ncp и pc. После этого память, навыки, агенты "
+            "и чтение компьютера работать перестанут, пока их не включат "
+            "заново. Нужен, чтобы взять чистую листку и оставить только "
+            "нужное. Перед записью делается копия настроек, после — нужен "
+            "перезапуск opencode"
+        )
+        row_mcp.addWidget(self.btn_reg_off_all)
         row_mcp.addWidget(self.btn_reg_off)
         row_mcp2.addWidget(self.btn_reg_auto)
         row_mcp2.addWidget(self.btn_reg_src)
@@ -4238,7 +4260,8 @@ class CapsTab(ScrollPage):
             ("DBHub", (self.btn_db_add, self.btn_db_check)),
             ("Браузеры", (self.btn_br_choose, self.btn_br_check)),
             ("OmniRoute", (self.btn_or_deploy, self.btn_or_start,
-                           self.btn_or_restart, self.btn_or_status)),
+                           self.btn_or_restart, self.btn_or_open,
+                           self.btn_or_status)),
             ("LMArena", (self.btn_lm_deploy, self.btn_lm_start,
                          self.btn_lm_restart, self.btn_lm_status,
                          self.btn_lm_token)),
@@ -4297,6 +4320,7 @@ class CapsTab(ScrollPage):
         self.btn_reg_check.clicked.connect(self._reg_check_all)
         self.btn_reg_all.clicked.connect(self._reg_enable_all)
         self.btn_reg_on.clicked.connect(self._reg_enable)
+        self.btn_reg_off_all.clicked.connect(self._reg_disable_all)
         self.btn_reg_auto.clicked.connect(self._reg_auto)
         self.btn_reg_off.clicked.connect(self._reg_disable)
         self.btn_reg_src.clicked.connect(self._reg_open_source)
@@ -4308,6 +4332,7 @@ class CapsTab(ScrollPage):
         self.btn_or_start.clicked.connect(self._or_start)
         self.btn_or_restart.clicked.connect(self._or_restart)
         self.btn_or_status.clicked.connect(self._or_status)
+        self.btn_or_open.clicked.connect(self._or_open_panel)
         self.btn_lm_deploy.clicked.connect(self._lm_deploy)
         self.btn_lm_start.clicked.connect(self._lm_start)
         self.btn_lm_restart.clicked.connect(self._lm_restart)
@@ -4911,6 +4936,7 @@ class CapsTab(ScrollPage):
         self.btn_or_start.setEnabled(is_or)
         self.btn_or_restart.setEnabled(is_or)
         self.btn_or_status.setEnabled(is_or)
+        self.btn_or_open.setEnabled(is_or)
         # Кнопки LMArena — только у своей строки: у остальных серверов нет
         # ни окружения форка, ни токена арены.
         is_lm = server is not None and server.id == "lmarena"
@@ -4966,9 +4992,12 @@ class CapsTab(ScrollPage):
             self.reg_hint.setText(
                 "Порядок: «Развернуть» (пакет из npm в папку моста), "
                 "«Запустить» (панель и API на http://127.0.0.1:20128), "
-                "«Показать статус», затем «Настроить автоматически»: она "
-                "подключит бесплатных провайдеров без ключа и впишет мост "
-                "в настройки opencode. Что-то зависнет — «Перезапустить»."
+                "«Открыть панель» (тот же адрес в браузере — только при "
+                "живом сервере), «Показать статус», затем «Настроить "
+                "автоматически»: она подключит бесплатных провайдеров без "
+                "ключа и впишет мост в настройки opencode. Что-то зависнет "
+                "— «Перезапустить». Обновить версию — во вкладке "
+                "«Обновление», блок «Мост OmniRoute»."
             )
         else:
             self.reg_hint.clear()
@@ -5127,6 +5156,41 @@ class CapsTab(ScrollPage):
             return ("нужен токен арены и ответ модели: выбери его строку "
                     "и нажми «Настроить автоматически»")
         return ""
+
+    def _reg_disable_all(self) -> None:
+        """Отключает все мосты разом, вместе с мостами памяти базы.
+
+        Действие общее и необратимое без копии, поэтому сначала вопрос с
+        прямым перечислением того, что пропадёт. Молча отключить память
+        было бы хуже, чем не отключать вовсе: человек узнал бы об этом
+        по тому, что его забыло.
+        """
+        dest = self._reg_dest()
+        if dest is None:
+            self._warn("Не выбрана папка настроек opencode.")
+            return
+        question = (
+            "Из настроек opencode уйдут ВСЕ серверы — вместе с мостами "
+            "памяти базы ncp и pc.\n\n"
+            "Пока их не включат заново, перестанут работать: память базы, "
+            "навыки, агенты и чтение компьютера.\n\n"
+            "Копия настроек будет сделана до записи, вернуть можно из неё. "
+            "Отключить?"
+        )
+        answer = QMessageBox.question(
+            self,
+            "Отключить все мосты?",
+            question,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        def job(progress):
+            return mcp_registry.disable_all(dest)
+
+        self._start(job, "registry")
 
     def _reg_enable_all(self) -> None:
         """Включает вместе все серверы, где для этого не надо ничего спрашивать."""
@@ -5430,6 +5494,32 @@ class CapsTab(ScrollPage):
         self.log.add(text, "ok" if "отвечает" in text else "warn")
         # Подробности под таблицей обновляются тем же текстом: там его
         # видно, не открывая журнал.
+        self._reg_show_detail()
+
+    def _or_open_panel(self) -> None:
+        """Открывает локальную панель OmniRoute в браузере.
+
+        Сначала живая проверка, и только потом открытие: при выключенном
+        сервере человек увидел бы страницу с ошибкой подключения и
+        решил, что программа сломалась. Открывает `ui.open_link`, а не
+        `webbrowser.open` — тот запускает внешнюю программу, а программа
+        работает на pythonw, и на экране появилось бы чёрное окно.
+        """
+        dest = self._or_target()
+        if dest is None:
+            return
+        ok, note = omniroute.panel_ready(dest)
+        if not ok:
+            self.log.clear_log()
+            self.log.add(note, "warn")
+            return
+        url = omniroute.panel_url()
+        opened = ui.open_link(url)
+        self.log.clear_log()
+        self.log.add(note, "ok")
+        if not opened:
+            self.log.add(
+                "Браузер не взял адрес — открой его сам: " + url, "warn")
         self._reg_show_detail()
 
     def _lm_target(self) -> Path | None:
@@ -6255,8 +6345,19 @@ class CapsTab(ScrollPage):
             self._notify(f"{self._what}: прервано", str(result)[:90])
             return
         messages, errors = result
+        # Строки, которые работа уже выдала в журнал через `progress`,
+        # повторно не добавляем. Иначе всё, что печаталось по ходу
+        # дела, дублируется в конце: кнопка «Развернуть» у OmniRoute
+        # показывала «Ставлю OmniRoute…» и «развёрнут» по два раза
+        # (измерено 19.10.2026). Работа при этом выполнялась один раз —
+        # дублировался только текст, и человек решал, что программа
+        # ставит пакет дважды.
+        shown = self.log.toPlainText() if hasattr(self.log, "toPlainText") else ""
         for line in messages:
+            if not line or line in shown:
+                continue
             self.log.add(line, "ok")
+            shown += line + "\n"
         if errors:
             self.log.add("Готово, но с замечаниями:", "warn")
             for line in errors:
@@ -7658,7 +7759,13 @@ class HelpTab(ScrollPage):
             "«Проверить обновление» смотрит, есть ли новое. Пока не нажали, "
             "«Скачать и применить» выключена: неизвестно, что качать.\n"
             "Перед применением делается бэкап. «Вернуть из бэкапа» откатывает "
-            "последнее обновление."
+            "последнее обновление.\n"
+            "Отдельным блоком ниже — мост OmniRoute. Версию программа "
+            "спрашивает у официального GitHub проекта "
+            "(https://github.com/diegosouzapw/OmniRoute), а сам пакет ставит "
+            "из npm ровно той версией, которую назвал GitHub. Пока не нажали "
+            "«Проверить», «Обновить мост» выключена: неизвестно, есть ли "
+            "что ставить."
         ))
 
         outer.addWidget(self._section("11. Перенос на другой компьютер"))

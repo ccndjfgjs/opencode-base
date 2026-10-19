@@ -9,158 +9,361 @@
   "checked": "2026-10-18",
   "bridges": {
     "windows-admin": {
-      "program": {"any": true, "text": "Node.js 18+ и права администратора"},
-      "mcp_server": {"spec": "windows-admin-mcp", "pinned": false,
-                     "pinned_in": "", "note": "npx -y без метки: приедет последняя на момент запуска"},
+      "program": {
+        "any": true,
+        "text": "Node.js 18+ и права администратора"
+      },
+      "mcp_server": {
+        "spec": "windows-admin-mcp",
+        "pinned": false,
+        "pinned_in": "",
+        "note": "npx -y без метки: приедет последняя на момент запуска"
+      },
       "plugin": null
     },
     "ghidra-mcp": {
-      "program": {"any": false, "text": "полосы версий в указателе ghidra-mcp"},
-      "mcp_server": {"spec": "bridge-mcp-ghidra", "pinned": true, "pinned_in": "внутри расширения",
-                     "note": "мост лежит внутри плагина, отдельной версии нет"},
-      "plugin": {"family": "ghidra-mcp", "kind": "archive", "version": "7.0.0-rc.3",
-                 "note": "официального хеша нет, сверено с копией, посчитанной на этой машине"}
+      "program": {
+        "any": false,
+        "text": "полосы версий в указателе ghidra-mcp"
+      },
+      "mcp_server": {
+        "spec": "bridge-mcp-ghidra",
+        "pinned": true,
+        "pinned_in": "внутри расширения",
+        "note": "мост лежит внутри плагина, отдельной версии нет"
+      },
+      "plugin": {
+        "family": "ghidra-mcp",
+        "kind": "archive",
+        "version": "7.0.0-rc.3",
+        "note": "официального хеша нет, сверено с копией, посчитанной на этой машине"
+      }
     },
     "excel": {
-      "program": {"any": true, "text": "Excel 2016+ и одноразовое разрешение к VBA"},
-      "mcp_server": {"spec": "@sbroenne/mcp-server-excel", "pinned": false, "pinned_in": "",
-                     "note": "npx -y без метки: приедет последняя на момент запуска"},
+      "program": {
+        "any": true,
+        "text": "Excel 2016+ и одноразовое разрешение к VBA"
+      },
+      "mcp_server": {
+        "spec": "@sbroenne/mcp-server-excel",
+        "pinned": false,
+        "pinned_in": "",
+        "note": "npx -y без метки: приедет последняя на момент запуска"
+      },
       "plugin": null
     },
     "blender": {
-      "program": {"any": false, "text": "Blender 3.0+"},
-      "mcp_server": {"spec": "mcp-for-blender", "pinned": false, "pinned_in": "",
-                     "note": "uvx без метки: приедет последняя на момент запуска"},
-      "plugin": {"family": "", "kind": "manual", "version": null,
-                 "note": "аддон ставится командой uvx, версия аддона не закреплена"}
+      "program": {
+        "any": false,
+        "text": "Blender 3.0+"
+      },
+      "mcp_server": {
+        "spec": "mcp-for-blender",
+        "pinned": false,
+        "pinned_in": "",
+        "note": "uvx без метки: приедет последняя на момент запуска"
+      },
+      "plugin": {
+        "family": "",
+        "kind": "manual",
+        "version": null,
+        "note": "аддон ставится командой uvx, версия аддона не закреплена"
+      }
     },
     "adobe-creativity": {
-      "program": {"any": true, "text": "приложения Adobe и оплаченная подписка"},
-      "mcp_server": {"spec": "удалённый адрес Adobe", "pinned": true,
-                     "pinned_in": "реестр: connection.url",
-                     "note": "версию сервера объявляет Adobe, программа её не выбирает"},
+      "program": {
+        "any": true,
+        "text": "приложения Adobe и оплаченная подписка"
+      },
+      "mcp_server": {
+        "spec": "удалённый адрес Adobe",
+        "pinned": true,
+        "pinned_in": "реестр: connection.url",
+        "note": "версию сервера объявляет Adobe, программа её не выбирает"
+      },
       "plugin": null
     },
     "android-studio": {
-      "program": {"any": false, "text": "девять полос сборок в указателе android-studio"},
-      "mcp_server": {"spec": "встроенный сервер студии", "pinned": true,
-                     "pinned_in": "студия", "note": "сервер внутри IDE, версия идёт вместе со сборкой плагина"},
-      "plugin": {"family": "android-studio", "kind": "archive", "version": null,
-                 "note": "девять сборок на выбор; конкретную выбирает программа по измеренной версии студии"}
+      "program": {
+        "any": false,
+        "text": "девять полос сборок в указателе android-studio"
+      },
+      "mcp_server": {
+        "spec": "встроенный сервер студии",
+        "pinned": true,
+        "pinned_in": "студия",
+        "note": "сервер внутри IDE, версия идёт вместе со сборкой плагина"
+      },
+      "plugin": {
+        "family": "android-studio",
+        "kind": "archive",
+        "version": null,
+        "note": "девять сборок на выбор; конкретную выбирает программа по измеренной версии студии"
+      }
     },
     "obs": {
-      "program": {"any": true, "text": "любая OBS с вебсокетом 5"},
-      "mcp_server": {"spec": "obs-websocket v5", "pinned": true,
-                     "pinned_in": "протокол OBS", "note": "мост говорит на встроенном в OBS сервере"},
-      "plugin": {"family": "", "kind": "built-in", "version": null,
-                 "note": "отдельного плагина нет: это вебсокет самой OBS"}
+      "program": {
+        "any": true,
+        "text": "любая OBS с вебсокетом 5"
+      },
+      "mcp_server": {
+        "spec": "obs-websocket v5",
+        "pinned": true,
+        "pinned_in": "протокол OBS",
+        "note": "мост говорит на встроенном в OBS сервере"
+      },
+      "plugin": {
+        "family": "",
+        "kind": "built-in",
+        "version": null,
+        "note": "отдельного плагина нет: это вебсокет самой OBS"
+      }
     },
     "android-emulator": {
-      "program": {"any": true, "text": "любой эмулятор с adb"},
-      "mcp_server": {"spec": "мост программы поверх adb", "pinned": true,
-                     "pinned_in": "код программы", "note": "стороннего пакета нет, версия не меняется"},
+      "program": {
+        "any": true,
+        "text": "любой эмулятор с adb"
+      },
+      "mcp_server": {
+        "spec": "мост программы поверх adb",
+        "pinned": true,
+        "pinned_in": "код программы",
+        "note": "стороннего пакета нет, версия не меняется"
+      },
       "plugin": null
     },
     "unity": {
-      "program": {"any": true, "text": "плагин выбирается по версии проекта, а не редактора"},
-      "mcp_server": {"spec": "mcpforunityserver==10.3.0", "pinned": true,
-                     "pinned_in": "bridge_common.UNITY_FROM", "note": "без метки ставится 9.x — несовместимо с плагином 10"},
-      "plugin": {"family": "unity-mcp", "kind": "package", "version": "10.3.0",
-                 "note": "метка релиза закреплена: #v10.3.0"}
+      "program": {
+        "any": true,
+        "text": "плагин выбирается по версии проекта, а не редактора"
+      },
+      "mcp_server": {
+        "spec": "mcpforunityserver==10.3.0",
+        "pinned": true,
+        "pinned_in": "bridge_common.UNITY_FROM",
+        "note": "без метки ставится 9.x — несовместимо с плагином 10"
+      },
+      "plugin": {
+        "family": "unity-mcp",
+        "kind": "package",
+        "version": "10.3.0",
+        "note": "метка релиза закреплена: #v10.3.0"
+      }
     },
     "unreal": {
-      "program": {"any": false, "text": "полоса 5.0 — 5.8 в указателе enginewire"},
-      "mcp_server": {"spec": "встроенный сервер плагина EngineWire, адрес http://127.0.0.1:3000/mcp",
-                     "pinned": true, "pinned_in": "сам плагин: релиз v0.6.0-beta-f",
-                     "note": "npm не участвует: автор пишет, что TypeScript-мост, Node.js и npm не нужны; пакета под линию 0.6 в npm нет вообще. Порт по умолчанию 3000 взят из документации и на живой машине не проверен — программа спрашивает его"},
-      "plugin": {"family": "enginewire", "kind": "archive", "version": "0.6.0-beta-f",
-                 "note": "официальный sha256 релиза; сборку плагина делает редактор; сервер MCP внутри плагина, поэтому отдельной версии сервера нет"}
+      "program": {
+        "any": false,
+        "text": "полоса 5.0 — 5.8 в указателе enginewire"
+      },
+      "mcp_server": {
+        "spec": "встроенный сервер плагина EngineWire, адрес http://127.0.0.1:3000/mcp",
+        "pinned": true,
+        "pinned_in": "сам плагин: релиз v0.6.0-beta-f",
+        "note": "npm не участвует: автор пишет, что TypeScript-мост, Node.js и npm не нужны; пакета под линию 0.6 в npm нет вообще. Порт по умолчанию 3000 взят из документации и на живой машине не проверен — программа спрашивает его"
+      },
+      "plugin": {
+        "family": "enginewire",
+        "kind": "archive",
+        "version": "0.6.0-beta-f",
+        "note": "официальный sha256 релиза; сборку плагина делает редактор; сервер MCP внутри плагина, поэтому отдельной версии сервера нет"
+      }
     },
     "roblox-studio": {
-      "program": {"any": true, "text": "студия любой версии, сервер встроенный"},
-      "mcp_server": {"spec": "встроенный сервер студии", "pinned": true,
-                     "pinned_in": "студия", "note": "файл запуска создаёт сама студия (mcp.bat)"},
+      "program": {
+        "any": true,
+        "text": "студия любой версии, сервер встроенный"
+      },
+      "mcp_server": {
+        "spec": "встроенный сервер студии",
+        "pinned": true,
+        "pinned_in": "студия",
+        "note": "файл запуска создаёт сама студия (mcp.bat)"
+      },
       "plugin": null
     },
     "godot": {
-      "program": {"any": false, "text": "полоса 4.7+ в указателе godot-ai"},
-      "mcp_server": {"spec": "godot-ai==4.3.0", "pinned": true,
-                     "pinned_in": "bridge_common.GODOT_PYPI (только проверка)",
-                     "note": "в команду пин не подставляем: док редактора сам пишет argv с портами и capability"},
-      "plugin": {"family": "godot-ai", "kind": "archive", "version": "4.3.0"}
+      "program": {
+        "any": false,
+        "text": "полоса 4.7+ в указателе godot-ai"
+      },
+      "mcp_server": {
+        "spec": "godot-ai==4.3.0",
+        "pinned": true,
+        "pinned_in": "bridge_common.GODOT_PYPI (только проверка)",
+        "note": "в команду пин не подставляем: док редактора сам пишет argv с портами и capability"
+      },
+      "plugin": {
+        "family": "godot-ai",
+        "kind": "archive",
+        "version": "4.3.0"
+      }
     },
     "tiktok": {
-      "program": {"any": true, "text": "Node.js 22.12+ и свой кабинет"},
-      "mcp_server": {"spec": "@getmcpads/tiktok-ads-mcp-server@2.0.1", "pinned": true,
-                     "pinned_in": "bridge_common.TIKTOK_PACKAGE"},
+      "program": {
+        "any": true,
+        "text": "Node.js 22.12+ и свой кабинет"
+      },
+      "mcp_server": {
+        "spec": "@getmcpads/tiktok-ads-mcp-server@2.0.1",
+        "pinned": true,
+        "pinned_in": "bridge_common.TIKTOK_PACKAGE"
+      },
       "plugin": null
     },
     "capcut": {
-      "program": {"any": true, "text": "хост с адресом MCP даёт человек"},
-      "mcp_server": {"spec": "адрес от хоста", "pinned": false, "pinned_in": "",
-                     "note": "программа по этому адресу не ходит, версию не знает"},
+      "program": {
+        "any": true,
+        "text": "хост с адресом MCP даёт человек"
+      },
+      "mcp_server": {
+        "spec": "адрес от хоста",
+        "pinned": false,
+        "pinned_in": "",
+        "note": "программа по этому адресу не ходит, версию не знает"
+      },
       "plugin": null
     },
     "spotify": {
-      "program": {"any": true, "text": "своё приложение Spotify и Premium"},
-      "mcp_server": {"spec": "пакет Spotify закреплён в лаунчере", "pinned": true,
-                     "pinned_in": "launchers/spotify_bridge_launcher.py",
-                     "note": "модель закреплена в том же лаунчере"},
+      "program": {
+        "any": true,
+        "text": "своё приложение Spotify и Premium"
+      },
+      "mcp_server": {
+        "spec": "пакет Spotify закреплён в лаунчере",
+        "pinned": true,
+        "pinned_in": "launchers/spotify_bridge_launcher.py",
+        "note": "модель закреплена в том же лаунчере"
+      },
       "plugin": null
     },
     "chatgpt": {
-      "program": {"any": true, "text": "ключ OpenAI и имя модели"},
-      "mcp_server": {"spec": "api.openai.com", "pinned": true, "pinned_in": "сама услуга",
-                     "note": "своей версии у моста нет"},
+      "program": {
+        "any": true,
+        "text": "ключ OpenAI и имя модели"
+      },
+      "mcp_server": {
+        "spec": "api.openai.com",
+        "pinned": true,
+        "pinned_in": "сама услуга",
+        "note": "своей версии у моста нет"
+      },
       "plugin": null
     },
     "codex": {
-      "program": {"any": true, "text": "Codex CLI и вход в аккаунт"},
-      "mcp_server": {"spec": "мост поверх Codex CLI", "pinned": true,
-                     "pinned_in": "код программы", "note": "версию CLI программа измеряет сама и не закрепляет"},
+      "program": {
+        "any": true,
+        "text": "Codex CLI и вход в аккаунт"
+      },
+      "mcp_server": {
+        "spec": "мост поверх Codex CLI",
+        "pinned": true,
+        "pinned_in": "код программы",
+        "note": "версию CLI программа измеряет сама и не закрепляет"
+      },
       "plugin": null
     },
     "cursor": {
-      "program": {"any": true, "text": "Cursor CLI и вход в аккаунт"},
-      "mcp_server": {"spec": "мост поверх cursor-agent", "pinned": true,
-                     "pinned_in": "код программы", "note": "версия CLI берётся из папки установки"},
+      "program": {
+        "any": true,
+        "text": "Cursor CLI и вход в аккаунт"
+      },
+      "mcp_server": {
+        "spec": "мост поверх cursor-agent",
+        "pinned": true,
+        "pinned_in": "код программы",
+        "note": "версия CLI берётся из папки установки"
+      },
       "plugin": null
     },
     "ldplayer": {
-      "program": {"any": true, "text": "LDPlayer с включённым adb"},
-      "mcp_server": {"spec": "мост поверх adb", "pinned": true, "pinned_in": "код программы",
-                     "note": "стороннего пакета нет"},
+      "program": {
+        "any": true,
+        "text": "LDPlayer с включённым adb"
+      },
+      "mcp_server": {
+        "spec": "мост поверх adb",
+        "pinned": true,
+        "pinned_in": "код программы",
+        "note": "стороннего пакета нет"
+      },
       "plugin": null
     },
     "dbhub": {
-      "program": {"any": true, "text": "Node.js и подключение к базе"},
-      "mcp_server": {"spec": "dbhub-mcp", "pinned": false, "pinned_in": "",
-                     "note": "запуск через npx без метки: приедет последняя"},
+      "program": {
+        "any": true,
+        "text": "Node.js и подключение к базе"
+      },
+      "mcp_server": {
+        "spec": "dbhub-mcp",
+        "pinned": false,
+        "pinned_in": "",
+        "note": "запуск через npx без метки: приедет последняя"
+      },
       "plugin": null
     },
     "browsers": {
-      "program": {"any": true, "text": "любой поддерживаемый браузер"},
-      "mcp_server": {"spec": "мост программы", "pinned": true, "pinned_in": "код программы",
-                     "note": "стороннего пакета нет, версией не управляем"},
+      "program": {
+        "any": true,
+        "text": "любой поддерживаемый браузер"
+      },
+      "mcp_server": {
+        "spec": "мост программы",
+        "pinned": true,
+        "pinned_in": "код программы",
+        "note": "стороннего пакета нет, версией не управляем"
+      },
       "plugin": null
     },
     "omniroute": {
-      "program": {"any": true, "text": "Node.js и ключи провайдеров"},
-      "mcp_server": {"spec": "шлюз программы", "pinned": true, "pinned_in": "код программы",
-                     "note": "пакет шлюза ставится из npm, версия в нём не закреплена"},
+      "program": {
+        "any": true,
+        "text": "Node.js и ключи провайдеров"
+      },
+      "mcp_server": {
+        "spec": "шлюз программы",
+        "pinned": true,
+        "pinned_in": "код программы",
+        "note": "пакет шлюза ставится из npm, версия в нём не закреплена"
+      },
       "plugin": null
     },
     "lmarena": {
-      "program": {"any": true, "text": "токен арены и живой ответ модели"},
-      "mcp_server": {"spec": "наш форк моста арены", "pinned": true,
-                     "pinned_in": "tools/thirdparty/lmarena",
-                     "note": "версию форка держим свою, она не публикуется"},
+      "program": {
+        "any": true,
+        "text": "токен арены и живой ответ модели"
+      },
+      "mcp_server": {
+        "spec": "наш форк моста арены",
+        "pinned": true,
+        "pinned_in": "tools/thirdparty/lmarena",
+        "note": "версию форка держим свою, она не публикуется"
+      },
       "plugin": null
     },
     "claude": {
-      "program": {"any": true, "text": "Claude Code CLI и вход в аккаунт"},
-      "mcp_server": {"spec": "мост поверх Claude Code", "pinned": true,
-                     "pinned_in": "код программы", "note": "версию CLI программа измеряет сама"},
+      "program": {
+        "any": true,
+        "text": "Claude Code CLI и вход в аккаунт"
+      },
+      "mcp_server": {
+        "spec": "мост поверх Claude Code",
+        "pinned": true,
+        "pinned_in": "код программы",
+        "note": "версию CLI программа измеряет сама"
+      },
+      "plugin": null
+    },
+    "mcp-doctor": {
+      "program": {
+        "any": true,
+        "text": "ничего: мост часть программы"
+      },
+      "mcp_server": {
+        "spec": "мост программы",
+        "pinned": true,
+        "pinned_in": "код программы",
+        "note": "стороннего пакета нет, версией не управляем"
+      },
       "plugin": null
     }
   }

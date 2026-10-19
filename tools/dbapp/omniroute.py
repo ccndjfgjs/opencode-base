@@ -87,6 +87,11 @@ READY_TIMEOUT = 180
 #: хватает секунд.
 PROBE_TIMEOUT = 30
 
+#: Сколько ждать ответа API, когда программа спрашивает «сервер уже
+#: работает?». Живой сервер бывает занят — и тогда короткого ожидания
+#: не хватает, а программа решает, что сервера нет, и поднимает второй.
+HEALTH_PROBE_TIMEOUT = 20
+
 #: Сколько ждать установки пакета. Распакованный пакет занимает сотни
 #: мегабайт, на медленной сети это минуты.
 INSTALL_TIMEOUT = 1800
@@ -158,6 +163,32 @@ def _wrap_cmd(argv: list[str]) -> list[str]:
     return argv
 
 
+def run_argv(argv: list[str], cwd: Path | None = None, dest: Path | None = None,
+             timeout: int = CLI_TIMEOUT) -> tuple[int, str, str]:
+    """Запустить готовую команду и вернуть (код, stdout, stderr).
+
+    Отдельная функция, а не ещё один аргумент у `_run`: `_run` сам
+    собирает команду CLI моста из `node` и точки входа, а здесь уже
+    готовая строка — например `npm install`. Смешивать их нельзя:
+    вызов `_run` с чужой командой молча добавил бы к ней
+    `node …/bin/omniroute.mjs`.
+
+    Папка и окружение — те же, что у сервера: npm ставит пакет в папку
+    моста, а не глобально, иначе портились бы чужие проекты на Node.js.
+    Окно консоли скрывается — об этом подробности в
+    `_hidden_startupinfo`.
+    """
+    try:
+        proc = subprocess.run(
+            list(argv), cwd=str(cwd or SERVER_DIR), env=config_env(dest) if dest else None,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=timeout, startupinfo=_hidden_startupinfo(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return 1, "", str(exc)
+    return proc.returncode, proc.stdout or "", proc.stderr or ""
+
+
 def node_exe() -> str | None:
     """Где лежит node. Без него запускать нечего."""
     return shutil.which("node") or shutil.which("node.exe")
@@ -181,6 +212,28 @@ def installed_version() -> str:
 def deployed() -> bool:
     """Стоит ли пакет и на месте ли точка входа."""
     return ENTRY.is_file()
+
+
+def _hidden_startupinfo():
+    """Окно консоли не показывать. Подробности — в core.hidden_startupinfo.
+
+    Отдельная функция с ленивым импортом, а не `import core` наверху:
+    модуль читают и лаунчеры, и проверки, и лишняя связь между ними
+    лишний раз ломается.
+
+    Зачем это здесь. 19.10.2026 человек выбрал строку OmniRoute в
+    списке мостов — и у него открылось четыре чёрных окна консоли.
+    Программа работает на pythonw, у неё самой консоли нет, поэтому
+    Windows на каждый запуск node.exe открывал новую. А запусков на
+    одно нажатие два: `health --json` и `providers list --json` из
+    `status_text()`.
+    """
+    try:
+        from core import hidden_startupinfo
+
+        return hidden_startupinfo()
+    except Exception:  # noqa: BLE001 — без этого просто откроется окно
+        return None
 
 
 def command(args: list[str]) -> list[str]:
@@ -221,6 +274,7 @@ def deploy(progress=None) -> tuple[list[str], list[str]]:
         proc = subprocess.run(
             argv, cwd=str(SERVER_DIR), capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=INSTALL_TIMEOUT,
+            startupinfo=_hidden_startupinfo(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return messages, [f"Установка OmniRoute не удалась: {exc}"]
@@ -257,6 +311,7 @@ def _run(args: list[str], dest: Path, timeout: int = CLI_TIMEOUT,
         proc = subprocess.run(
             argv, cwd=str(SERVER_DIR), env=env, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=timeout,
+            startupinfo=_hidden_startupinfo(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return 1, "", str(exc)
@@ -304,6 +359,38 @@ def _json_from(text: str):
                     except ValueError:
                         break
     return None
+
+
+def panel_url() -> str:
+    """Адрес локальной панели OmniRoute.
+
+    Одна функция на оба места: и кнопка в окне, и кнопка в панели трея.
+    Два адреса, написанные в двух файлах, разъедутся при первом же
+    изменении порта — и одна из кнопок откроет пустую страницу.
+    """
+    return f"http://{DEFAULT_HOST}:{DEFAULT_PORT}"
+
+
+def panel_ready(dest: Path, timeout: int = HEALTH_PROBE_TIMEOUT) -> tuple[bool, str]:
+    """Готова ли панель к открытию. Живой запрос, а не «порт занят».
+
+    Открывать страницу при выключенном сервере бессмысленно: человек
+    увидит ошибку подключения и решит, что программа сломалась. Поэтому
+    сначала `GET /api/health`, и только потом открытие.
+
+    В отказе назван и адрес: человек должен знать, что именно не
+    отвечает, даже если открыть панель нечем.
+    """
+    if not deployed():
+        return False, ("OmniRoute не развёрнут: сначала нажми «Развернуть» "
+                       "у строки моста.")
+    url = panel_url()
+    ok, _data, note = health(dest, timeout=timeout)
+    if not ok:
+        return False, (f"Панель не отвечает: {note}. Открой её, когда сервер "
+                       f"поднят — у строки моста есть «Запустить». "
+                       f"Адрес: {url}")
+    return True, f"Панель отвечает по адресу {url}."
 
 
 def health(dest: Path, timeout: int = PROBE_TIMEOUT,
@@ -361,15 +448,19 @@ def start(dest: Path, progress=None) -> tuple[list[str], list[str]]:
     if not deployed():
         return [], [
             "OmniRoute не развёрнут: нажми «Развернуть» — иначе запускать нечего.",
-            "В настройки opencode ничего не вписано.",
         ]
     if not node_exe():
         return [], [
             "Node.js не найден: OmniRoute запускается на нём.",
-            "В настройки opencode ничего не вписано.",
         ]
 
-    ok, _data, _note = health(dest, timeout=5)
+    # Первый вопрос — «сервер уже отвечает?». Ждать здесь надо с
+    # запасом: 19.10.2026 сервер был живой, но занят, и пяти секунд не
+    # хватило. Программа решила, что сервера нет, и пошла поднимать
+    # второй — а OmniRoute справедливо отказал («another OmniRoute is
+    # most likely already serving there»), и человек увидел отказ при
+    # живом мосте.
+    ok, _data, _note = health(dest, timeout=HEALTH_PROBE_TIMEOUT)
     if ok:
         say("OmniRoute уже отвечает — второй экземпляр не поднимаю.")
     else:
@@ -379,10 +470,26 @@ def start(dest: Path, progress=None) -> tuple[list[str], list[str]]:
             dest, timeout=CLI_TIMEOUT, progress=progress,
         )
         if code != 0:
-            return messages, [
-                f"Запуск OmniRoute не удался (код {code}): {_tail(err or out)}",
-                "В настройки opencode ничего не вписано.",
-            ]
+            # Отказ команды — ещё не отказ моста. Если API отвечает «ok»,
+            # мост живой, и работа продолжается: важно конечное
+            # состояние, а не код возврата. Это и есть тот случай, когда
+            # сервер уже работал, а программа не дождалась его ответа.
+            alive, _data2, note2 = health(dest, timeout=HEALTH_PROBE_TIMEOUT)
+            if alive:
+                say(
+                    "Сервер уже был запущен: OmniRoute отказался поднимать "
+                    "второй экземпляр, а живой запрос к API отвечает «ok». "
+                    "Это нужное состояние, работа продолжаю."
+                )
+            else:
+                # Про настройки здесь не говорим: кнопка «Запустить» в
+                # них и не пишет. Про настройки говорит та, которая
+                # пишет, — «Настроить автоматически».
+                return messages, [
+                    f"Запуск OmniRoute не удался (код {code}): {_tail(err or out)}",
+                    f"И живая проверка API не прошла: {note2}",
+                    "Сервер не поднят, мост работать не будет.",
+                ]
     got, bad = wait_ready(dest, progress=progress)
     messages.extend(got)
     errors.extend(bad)
@@ -483,8 +590,13 @@ def catalog(dest: Path) -> tuple[list[dict], list[dict], str]:
     """
     code, out, err = _run(["providers", "available", "--json"], dest)
     data = _json_from(out)
-    if code != 0 or not isinstance(data, dict):
+    if not isinstance(data, dict):
+        # JSON важнее кода возврата: CLI OmniRoute на Windows падает с
+        # утверждением libuv при выходе (код 3221226505) даже тогда, когда
+        # данные напечатал. Данные есть — значит, каталог прочитан.
         return [], [], f"Каталог провайдеров не прочитался: {_tail(err or out)}"
+    if code != 0:
+        pass  # данные есть — читаем их, код здесь не показатель
     keyless, keyed = _split_free(data.get("providers") or [])
     return keyless, keyed, ""
 
@@ -493,7 +605,7 @@ def configured_providers(dest: Path) -> tuple[set[str], str]:
     """Что уже подключено у работающего OmniRoute. Пустое множество — ничего."""
     code, out, err = _run(["providers", "list", "--json"], dest)
     data = _json_from(out)
-    if code != 0 or not isinstance(data, dict):
+    if not isinstance(data, dict):
         return set(), f"Список подключённых провайдеров не прочитался: {_tail(err or out)}"
     names: set[str] = set()
     for item in data.get("providers") or []:
@@ -502,6 +614,21 @@ def configured_providers(dest: Path) -> tuple[set[str], str]:
             names.add(str(item.get("name") or ""))
     names.discard("")
     return names, ""
+
+
+def _why(reason: str) -> str:
+    """Человеческая причина, почему провайдер не подключился.
+
+    «Invalid provider» — это не поломка программы: так сам OmniRoute
+    отвечает на провайдера, которого в этой версии добавить нельзя.
+    Сказать это прямо лучше, чем выдать за ошибку чужой инструмент.
+    """
+    text = str(reason or "").strip()
+    if "Invalid provider" in text:
+        return "OmniRoute сам отказал: в этой версии провайдер не подключается"
+    if "Assertion failed" in text and "async.c" in text:
+        return "CLI OmniRoute упал при выходе (libuv), но провайдер подключён"
+    return text[:120]
 
 
 def sync_free_providers(dest: Path, progress=None) -> tuple[list[str], list[str]]:
@@ -542,7 +669,7 @@ def sync_free_providers(dest: Path, progress=None) -> tuple[list[str], list[str]
         return messages, [trouble]
 
     added: list[str] = []
-    failed: list[str] = []
+    failed: list[tuple[str, str]] = []
     for item in keyless:
         name = str(item.get("id") or "")
         if not name or name in have:
@@ -554,13 +681,43 @@ def sync_free_providers(dest: Path, progress=None) -> tuple[list[str], list[str]
         if code == 0:
             added.append(name)
         else:
-            failed.append(f"{name} ({_tail(err or out, 120)})")
+            # Причину собираем из обоих потоков: OmniRoute печатает
+            # «Invalid provider» в stdout, а в stderr идут предупреждения
+            # про .env. Раньше брался только stderr, и ответ провайдера
+            # терялся — вместо него человек видел «⚠ PORT in …».
+            failed.append((name, f"{out or ''}\n{err or ''}"))
+
+    # Итог определяется настоящим списком подключённых, а не кодом
+    # возврата. CLI OmniRoute на Windows падает с утверждением libuv
+    # (Assertion failed: src\win\async.c) при выходе — и падает даже
+    # тогда, когда провайдера добавил. 19.10.2026 четыре провайдера
+    # из-за этого считались неудачными, хотя CLI напечатал «Invalid
+    # provider» и упал уже на выходе.
+    now, trouble_now = configured_providers(dest)
+    if not trouble_now:
+        really = [name for name, _reason in failed if name in now]
+        if really:
+            failed = [(n, r) for n, r in failed if n not in now]
+            added.extend(really)
+
     if added:
         say(f"Подключены бесплатные провайдеры без ключа: {', '.join(added)}.")
-    if not added:
+    if not added and not failed:
         say("Бесплатные провайдеры без ключа уже подключены — не трогаю.")
     if failed:
-        errors.append("Не подключились: " + "; ".join(failed))
+        why = "; ".join(f"{name} ({_why(reason)})" for name, reason in failed)
+        # Красная строка — это «ничего не работает». А если провайдеры
+        # без ключа уже подключены и мост отвечает, то отказ одного
+        # провайдера — не поломка, а сведения. 19.10.2026 четыре
+        # провайдера, которых OmniRoute сам не даёт добавить, выглядели
+        # как поломка моста.
+        connected = bool(added) or bool(have & {
+            str(item.get("id") or "") for item in keyless})
+        if connected:
+            say(f"Часть провайдеров OmniRoute добавить не дал: {why}. "
+                "На мост это не влияет.")
+        else:
+            errors.append("Не подключились: " + why)
     if keyed:
         say(
             f"Ещё {len(keyed)} бесплатных провайдеров требуют ключ сервиса: "

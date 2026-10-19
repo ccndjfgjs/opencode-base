@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import copy
 
@@ -143,13 +144,16 @@ def _free_port() -> int:
 #: пропавший сервер — ошибка станет невидимой ровно тогда, когда она опасна.
 #: Значение одно на каждую конфигурацию: мост плеера добавляет свой сервер.
 #: База 23 → 24 16.10.2026: в реестр добавлен ghidra-mcp (мост к Гидре).
+#: База 24 → 25 19.10.2026: добавлен mcp-doctor (смотритель мостов). Это
+#: тоже постоянная запись реестра, а не «мост игрока» на время проверки,
+#: поэтому смещается база.
 #: Это не «мост игрока» на время проверки, а постоянная запись реестра,
 #: поэтому смещается именно база, а число с игроком идёт следом.
 #: Сколько серверов умеет настроить кнопка «Настроить автоматически».
 #: Константа с именем, потому что голое число в проверке не читается.
 AUTO_SERVERS_EXPECTED = 18
-EXPECTED_SERVERS_NO_PLAYER = 24
-EXPECTED_SERVERS_WITH_PLAYER = 25
+EXPECTED_SERVERS_NO_PLAYER = 25
+EXPECTED_SERVERS_WITH_PLAYER = 26
 #: Режим проверки задаётся явно, а не вычисляется из наличия записи.
 EXPECTED_SERVERS = EXPECTED_SERVERS_NO_PLAYER
 
@@ -160,6 +164,7 @@ def main() -> int:
     # сама работает: автоустановка rtk смотрит эту переменную.
     import os as _st_os  # noqa: PLC0415 — нужен здесь и только здесь
     _st_os.environ.setdefault("OPENCODE_NO_AUTO_INSTALL", "1")
+    # И второе: проверка имеет право читать настоящую базу, но не писать в
     echo("=" * 62)
     echo(" Проверка программы управления базой")
     echo("=" * 62)
@@ -188,6 +193,14 @@ def main() -> int:
 
     # ---- 1. окно собирается
     echo("\n--- 1. Окно ---")
+    # Экран программы должен быть настоящим: проверки обрезки текста
+    # меряют ширину подписи и ширину кнопки, а в offscreen окно уже
+    # (740 вместо 880) и четыре подписи навыков «обрезаны» только
+    # потому, что окно узкое. 19.10.2026 на этом споткнулись три
+    # проверки. Окно при этом на экране не появляется — см. WA_DontShowOnScreen
+    # ниже: окно вёрстывается по-настоящему, но не выводится.
+    os.environ.setdefault("QT_QPA_FONTDIR", r"C:\Windows\Fonts")
+
     try:
         from PyQt6.QtWidgets import QApplication
 
@@ -196,6 +209,36 @@ def main() -> int:
         app = QApplication.instance() or QApplication(["selftest"])
         ui.apply_dark_theme(app)
         window = app_main.MainWindow()
+        # Окно вёрстывается по-настоящему — с настоящим шрифтом и
+        # настоящим размером экрана, — но на экран не выводится.
+        # 19.10.2026 прогон открывал окно программы поверх всего, и
+        # человек нажимал в нём кнопки: настройки у этого окна
+        # временные, и нажатия уходили в пустоту.
+        from PyQt6.QtCore import Qt as _Qt  # noqa: PLC0415 — нужен здесь
+
+        window.setAttribute(_Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+
+        # НАСТОЯЩИЕ НАСТРОЙКИ OPENCODE: ПРОВЕРКА ИДЁТ НА КОПИИ
+        # Раздел про кнопки автонастройки нажимает их по-настоящему, а папка
+        # настроек у вкладки — настоящая. Поэтому прогон молча включал и
+        # выключал настоящие серверы: 19.10.2026 в настройках появились chatgpt,
+        # claude, codex, cursor и tiktok, которых человек не включал, а смотритель
+        # мостов исчез. Проверка не имеет права переписывать то, чем человек
+        # пользуется, поэтому вкладке подставляется копия настроек.
+        _selftest_settings = Path(tempfile.mkdtemp(prefix="selftest-settings-"))
+        _real_settings = Path.home() / ".config" / "opencode" / "opencode.jsonc"
+        if not _real_settings.is_file():
+            _env_dest = __import__("os").environ.get(
+            "OPENCODE_CONFIG_DIR", "")
+            _real_settings = (Path(_env_dest) / "opencode.jsonc") if _env_dest else None
+        if _real_settings is not None and _real_settings.is_file():
+            shutil.copy2(_real_settings, _selftest_settings / "opencode.jsonc")
+        else:
+            (_selftest_settings / "opencode.jsonc").write_text(
+                '{"mcp": {}}\n', encoding="utf-8")
+        window.caps_tab.dest_edit.setText(str(_selftest_settings))
+
+
         check(True, f"окно собрано, размер {window.width()}x{window.height()}")
         # Окно обязано помещаться в экран. Раньше стоял жёсткий
         # resize(880, 900), и на экране 1280x720 Windows срезала низ:
@@ -1238,7 +1281,25 @@ def main() -> int:
                              "launchers/test_bridge_launchers.py",
                              "launchers/test_program_find.py",
                              "launchers/test_process_tree.py",
-                             "launchers/test_claude_bridge.py"):
+                             "launchers/test_claude_bridge.py",
+                             # 19.10.2026: карточки мостов, которые ставит
+                             # сама программа, и кнопка «Отключить все
+                             # мосты». Обе проверки работают на копиях и
+                             # ничего на машине не меняют.
+                             "test_bridge_payload_cards.py",
+                             "test_disable_all.py",
+                             # 19.10.2026: запуск OmniRoute и подключение
+                             # бесплатных провайдеров. Там важно отличать
+                             # отказ моста от отказа чужой команды.
+                             "test_omniroute_start.py",
+                             "test_omniroute_providers.py",
+                             # 19.10.2026: окна консоли от мостов, кнопка
+                             # «Открыть панель» и обновление моста с
+                             # официального GitHub.
+                             "test_bridges_no_console.py",
+                             "test_no_console_windows.py",
+                             "test_open_panel.py",
+                             "test_omniroute_update.py"):
             _bt_path = HERE / _bridge_test
             if not _bt_path.is_file():
                 check(False, f"отдельная проверка мостов на месте: {_bridge_test}")
@@ -13838,6 +13899,341 @@ def main() -> int:
               f"у каждой карточки написано, почему она в своей группе "
               f"({_card_rules} из {_card_count})")
         _prog_tab.deleteLater()
+# ---- 8х. Смотритель мостов: он не должен врёть и не должен мешать
+    # Глубокая проверка живёт в tools/dbapp/test_mcp_doctor.py — там
+    # поддельный настоящий сервер, тайминги и параллельность. Здесь то,
+    # что относится к программе: запись в реестре, кнопка «Настроить
+    # автоматически» и живой ответ лаунчера.
+    try:
+        import mcp_doctor as _md  # noqa: PLC0415 — модуль проверяемый
+    except Exception as _exc:  # noqa: BLE001 — причина в сообщении
+        check(False, f"модуль смотрителя импортируется: {_exc}")
+    else:
+        import queue as _queue2  # noqa: PLC0415 — ответы лаунчера
+        import subprocess as _sp2  # noqa: PLC0415 — живой запуск
+        import tempfile as _tf2  # noqa: PLC0415 — настройки во временной папке
+        import threading as _th2  # noqa: PLC0415 — чтение ответа
+
+        # Правило осторожности. Оно важнее удобства: лишний клиент к
+        # редактору может занять единственное место и сломать то, что
+        # проверяют. Поэтому unity и roblox-studio обязаны быть названы
+        # здесь, а не «где-то в коде».
+        check({"unity", "roblox-studio"} <= set(_md.EDITOR_BACKED),
+              "смотритель по умолчанию не трогает серверы внутри "
+              f"редактора: {sorted(_md.EDITOR_BACKED)}")
+        check(_md.PROTOCOL_VERSION and _md.MAIN_CONFIG and _md.EXTRA_CONFIG,
+              "и читать он будет оба файла настроек, а не один")
+
+        # Ловушка, на которой стоял бы весь мост: команда `pythonw
+        # quiet_launcher.py npx ...` — настоящая программа не первая.
+        _parts = _md.command_parts([r"C:\путь\pythonw.exe",
+                                    r"C:\путь\quiet_launcher.py", "npx",
+                                    "-y", "@scope/пакет"])
+        check(_parts[0] == ["npx"],
+              f"настоящая команда найдена за скриптом лаунчера: {_parts[0]}")
+        check(not _md._is_path_part("@scope/пакет"),
+              "имя пакета со слешем не путь — иначе живой сервер объявлялся "
+              "бы сломанным из-за названия пакета")
+
+        # Оба файла настроек и конфликт между ними. Именно второй файл
+        # скрыл мёртвый unityMCP 19.10.2026.
+        with _tf2.TemporaryDirectory(prefix="selftest-doctor-") as _dd:
+            _dest = Path(_dd)
+            (_dest / "opencode.jsonc").write_text(
+                '{"mcp": {"a": {"type": "local", "command": ["a.exe"]}}}',
+                encoding="utf-8")
+            (_dest / "opencode.json").write_text(
+                json.dumps({"mcp": {
+                    "a": {"type": "remote",
+                          "url": "http://127.0.0.1:8080/mcp"},
+                    "b": {"type": "local", "command": ["b.exe"]}}}),
+                encoding="utf-8")
+            _by = {item.name: item for item in _md.read_entries(_dest)}
+            check(set(_by) == {"a", "b"},
+                  f"прочитан оба файла настроек: {sorted(_by)}")
+            check(_by["a"].source == "opencode.jsonc"
+                  and "opencode.json" in (_by["a"].conflict or ""),
+                  "при конфликте главным считается opencode.jsonc, а "
+                  f"противоречие названо: {_by['a'].conflict or 'нет'}")
+
+        # «Не работает» и «не проверено» — разные вещи. Внешний адрес мы
+        # не опрашиваем, и называть его сломанным было бы враньём.
+        _ext = _md.Entry(name="внешний", kind="remote", command=[],
+                         url="https://mcp.example.com/mcp", enabled=True)
+        _res = _md.quick_check(_ext)
+        check(not _res.ok and _res.skipped,
+              "внешний адрес помечен «не проверено», а не «сломано»: "
+              f"{_res.reason}")
+        _report = _md.format_checks([_res])
+        check("не проверено" in _report.splitlines()[0],
+              f"и сводка это различает: {_report.splitlines()[0]}")
+
+        # Запись в реестре и кнопка «Настроить автоматически».
+        _doc = next((s for s in (mcp_registry.load_registry(_base) or {})
+                      .get("servers") or [] if s.get("id") == "mcp-doctor"),
+                    None)
+        check(_doc is not None, "смотритель есть в реестре мостов")
+        if _doc is not None:
+            _conn = _doc.get("connection") or {}
+            check(_conn.get("kind") == "local" and bool(_conn.get("command")),
+                  "подключение локальное, через свой лаунчер")
+            _launcher = Path(str((_conn.get("command") or [""])[-1])
+                              .replace("{PROGRAM}", str(_base)))
+            check(_launcher.is_file(),
+                  f"лаунчер на месте: {_launcher.name}")
+            _srv = mcp_registry.Server(id="mcp-doctor", name="Смотритель",
+                                       raw=_doc)
+            _block = mcp_registry.build_block(_srv)
+            check("mcp-doctor" in _block and "quiet_launcher" in _block,
+                  "кнопка вписывает блок с лаунчером без окна консоли")
+            check(bool(_doc.get("requires")),
+                  "у смотрителя есть требование: пустой список программа "
+                  "показала бы строкой «не проверено»")
+
+        # Живой ответ лаунчера — тем же способом, каким его запустит
+        # opencode: оконный Python, лаунчер без окна, сам лаунчер.
+        _py = core.find_python() or sys.executable
+        _pyw = Path(_py).with_name("pythonw.exe")
+        _quiet = str(_base / "tools" / "dbapp" / "launchers"
+                     / "quiet_launcher.py")
+        _doctor = str(_base / "tools" / "dbapp" / "launchers"
+                      / "mcp_doctor_bridge_launcher.py")
+        try:
+            _proc = _sp2.Popen([str(_pyw), _quiet, _py, _doctor],
+                               stdin=_sp2.PIPE, stdout=_sp2.PIPE,
+                               stderr=_sp2.DEVNULL, text=True,
+                               encoding="utf-8", errors="replace", bufsize=1)
+        except OSError as _exc2:
+            check(False, f"лаунчер смотрителя запускается: {_exc2}")
+        else:
+            _got = _queue2.Queue()
+            _th2.Thread(
+                target=lambda: [_got.put(_ln) for _ln in _proc.stdout],
+                daemon=True).start()
+            _names: list[str] = []
+            try:
+                _proc.stdin.write(json.dumps(
+                    {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                     "params": {"protocolVersion": "2024-11-05",
+                                "capabilities": {},
+                                "clientInfo": {"name": "selftest",
+                                               "version": "1"}}}) + "\n")
+                _proc.stdin.flush()
+                _got.get(timeout=90)
+                _proc.stdin.write(json.dumps(
+                    {"jsonrpc": "2.0",
+                     "method": "notifications/initialized",
+                     "params": {}}) + "\n")
+                _proc.stdin.write(json.dumps(
+                    {"jsonrpc": "2.0", "id": 2, "method": "tools/list",
+                     "params": {}}) + "\n")
+                _proc.stdin.flush()
+                _deadline = 2
+                while _deadline > 0:
+                    _deadline -= 1
+                    try:
+                        _msg = json.loads(_got.get(timeout=60))
+                    except _queue2.Empty:
+                        break
+                    for _tool in ((_msg.get("result") or {})
+                                  .get("tools") or []):
+                        _names.append(str(_tool.get("name")))
+            finally:
+                try:
+                    _proc.stdin.close()
+                    _proc.terminate()
+                except OSError:
+                    pass
+            check({"server_list", "server_check",
+                   "server_check_all"} <= set(_names),
+                  "смотритель отвечает по протоколу и отдаёт свои три "
+                  f"инструмента: {sorted(set(_names))}")
+# ---- 8х-2. Карточка программы: поисковик вместо «нечем проверять»
+        # Состояние программы считалось по требованиям реестра, и только по
+        # двум их видам. Программы, которые ставятся папкой, туда не
+        # попадали и молчали: поисковик для них написан, но карточка его не
+        # спрашивала. Гидра стоит в Загрузки, версия снимается — а карточка
+        # говорила «нечем проверять».
+        import program_cards as _pcards  # noqa: PLC0415
+
+        _cards_by_name = {c.name: c for c in _pcards.cards(_base)}
+        for _program in ("Ghidra", "Godot", "Roblox Studio", "Unity"):
+            _card = _cards_by_name.get(_program)
+            check(_card is not None
+                  and _card.state != _pcards.STATE_UNKNOWN,
+                  f"карточка «{_program}» больше не «нечем проверять»: "
+                  f"{_card.state if _card else 'карточки нет'}"
+                  + (f" / {_card.state_text[:60]}" if _card else ""))
+        # Первое правило: «найдена» и «работает» — разные вещи. У ghidra-mcp
+        # плагин не включён, и он обязан остаться в требованиях моста, а не
+        # зеленеть вместе с карточкой программы.
+        # bridge_pending — список строк, а не объектов: об этом я споткнулся
+        # на первом прогоне и уронил всю самопроверку.
+        _ghidra_card = _cards_by_name.get("Ghidra")
+        check(_ghidra_card is not None
+              and any("плагин" in str(item).lower()
+                      for item in _ghidra_card.bridge_pending),
+              "требование плагина осталось отдельным от состояния программы: "
+              f"{_ghidra_card.bridge_pending if _ghidra_card else ''}")
+        _ghidra_server = next((s for s in mcp_registry.load_servers(_base)
+                               if s.id == "ghidra-mcp"), None)
+        check(_ghidra_server is not None
+              and any("плагин" in str(r.what).lower()
+                      for r in _ghidra_server.requirements),
+              "и оно же осталось требованием моста, а не частью карточки")
+        # Второе правило: у программы без поисковика остаётся честное
+        # «нечем проверять» — выдумывать проверку хуже.
+        check(_pcards.finder_answer("TikTok для бизнеса") is None,
+              "у программы без поисковика проверка не выдумывается")
+        # Третье правило: поисковик не всегда отвечает «найдено».
+        _lying = [name for name, run in _pcards.PROGRAM_FINDERS.items()
+                  if run().ok and not Path(str(run().path)).exists()]
+        check(not _lying,
+              f"поисковик не отвечает «найдено» без файла на диске: "
+              f"{_lying or 'правда'}")
+
+# ---- 8и. Кнопка «Отключить все мосты»
+    # Действие общее и необратимое: снимает ВСЕ блоки из настроек, включая
+    # мосты памяти базы. Проверка идёт на копии настроек во временной папке
+    # — и это не формальность: настоящие настройки принадлежат человеку, и
+    # проверка, которая их чистит, была бы проверкой, которая ломает
+    # машину.
+    from PyQt6.QtWidgets import QMessageBox as _OMBox  # noqa: PLC0415
+
+    _di_dest_real = window.caps_tab._reg_dest()
+    check(_di_dest_real is not None,
+          "вкладка знает папку настроек opencode")
+
+    _di_button = getattr(window.caps_tab, "btn_reg_off_all", None)
+    check(_di_button is not None and "Отключить" in _di_button.text(),
+          "кнопка «Отключить все мосты» есть на вкладке: "
+          f"{_di_button.text() if _di_button else 'нет кнопки'}")
+    check(_di_button is not None and "ncp" in _di_button.toolTip(),
+          "и в подсказке сказано, что снимаются мосты памяти базы")
+
+    _di_real_before = ""
+    if _di_dest_real is not None:
+        _di_cfg_real = Path(_di_dest_real) / "opencode.jsonc"
+        if _di_cfg_real.is_file():
+            _di_real_before = _di_cfg_real.read_text(encoding="utf-8")
+
+    with tempfile.TemporaryDirectory(prefix="selftest-offall-") as _di_tmp:
+        _di_dest = Path(_di_tmp)
+        _di_cfg = _di_dest / "opencode.jsonc"
+        _di_cfg.write_text(
+            '{\n  "mcp": {\n    "ncp": {"type": "local",'
+            ' "command": ["a"], "enabled": true},\n'
+            '    "unity": {"type": "local", "command": ["b"],'
+            ' "enabled": true}\n  }\n}\n', encoding="utf-8")
+        _di_before = _di_cfg.read_text(encoding="utf-8")
+
+        _di_was = _OMBox.question
+        _di_was_start = window.caps_tab._start
+        window.caps_tab._start = lambda job, name: job(None)
+        try:
+            _OMBox.question = staticmethod(
+                lambda *a, **k: _OMBox.StandardButton.No)
+            window.caps_tab._reg_dest = lambda: _di_dest
+            window.caps_tab._reg_disable_all()
+        finally:
+            _OMBox.question = _di_was
+        check(_di_cfg.read_text(encoding="utf-8") == _di_before,
+              "отказ в диалоге не тронул настройки")
+
+        try:
+            _OMBox.question = staticmethod(
+                lambda *a, **k: _OMBox.StandardButton.Yes)
+            window.caps_tab._reg_disable_all()
+        finally:
+            _OMBox.question = _di_was
+        _di_after = _di_cfg.read_text(encoding="utf-8")
+        _di_names = _mcp_registry._mcp_names(_di_after)
+        check(_di_names == [],
+              f"после согласия из настроек ушли все серверы: {_di_names}")
+        check(opencode_caps.check_jsonc(_di_after),
+              "и настройки остались читаемыми")
+        check("ncp" not in _di_after,
+              "включая мост памяти базы — как и обещал вопрос")
+        check(list((_di_dest / "_previous-version").glob("opencode.jsonc-*")),
+              "копия настроек сделана до записи")
+        window.caps_tab._start = _di_was_start
+
+    if _di_real_before:
+        _di_now = (Path(_di_dest_real) / "opencode.jsonc").read_text(
+            encoding="utf-8")
+        check(_di_now == _di_real_before,
+              "настоящие настройки не тронуты: проверка шла на копии")
+
+# ---- 8к. Мост android-emulator: окружение ставится, а не ищется вслепую
+    # 19.10.2026 мост отвечал «ModuleNotFoundError: No module named 'mcp'».
+    # Папки `.venv` рядом с ним не было, и лаунчер ТИХО брал системный
+    # Python, где пакета `mcp` нет. Отказ выглядел как «сервер молчит»,
+    # хотя на самом деле мосту не было чем работать.
+    import python_envs as _penv  # noqa: PLC0415
+
+    check(hasattr(_penv, "ensure_venv") and hasattr(_penv, "venv_ready"),
+          "общий модуль окружений на месте: python_envs")
+    check(callable(getattr(_penv, "find_uv", None)),
+          "и умеет искать uv")
+
+    _and_launcher = Path(__file__).resolve().parent / "launchers" / "android_bridge_launcher.py"
+    _and_src = _and_launcher.read_text(encoding="utf-8")
+    check("Path(sys.executable)" not in _and_src,
+          "лаунчер эмулятора больше не откатывается на системный Python "
+          "(именно этот откат и давал «No module named 'mcp'»)")
+    check("python_envs" in _and_src,
+          "лаунчер берёт окружение из общего модуля, а не из своей копии")
+
+    # Кнопка «Настроить автоматически» обязана сама доводить мост до
+    # готового: окружение ставится там, где есть время и progress-бар.
+    _br_src = (Path(__file__).resolve().parent / "bridges.py").read_text(
+        encoding="utf-8")
+    check("ensure_venv" in _br_src,
+          "кнопка автонастройки ставит окружение моста сама")
+    check(_br_src.count("ensure_venv") >= 1,
+          "и зовёт общий модуль, а не пишет свой uv-вызов")
+
+    # Настоящее окружение моста, если оно поставлено, обязано быть
+    # рабочим: питон есть и пакет mcp в нём есть.
+    _and_dir = Path(__file__).resolve().parent.parent / "thirdparty" / "android-mcp-server"
+    if _and_dir.is_dir():
+        _and_venv = _and_dir / ".venv" / "Scripts" / "python.exe"
+        if _and_venv.is_file():
+            check(_penv.venv_ready(_and_dir),
+                  "окружение моста живое: python есть и пакет mcp в нём есть")
+        else:
+            check(True, "окружение моста пока не поставлено — поставит кнопка "
+                        "«Настроить автоматически»")
+
+# ---- 8л. Русские объяснения мостов должны доезжать читаемыми
+    # 19.10.2026 смотритель показал причину отказа моста chatgpt
+    # кракозябрами: «нет ключа или модели» превратилось в нечитаемый
+    # набор замен. Мост писал свой журнал в кодировку консоли, а
+    # смотритель читал его как UTF-8. Причина терялась — а в ней вся
+    # ценность смотрителя.
+    _bcom_text = (Path(__file__).resolve().parent / "launchers"
+                  / "bridge_common.py").read_text(encoding="utf-8")
+    check("reconfigure" in _bcom_text,
+          "общий модуль мостов переводит свой журнал в UTF-8")
+
+    # Живая проверка: сообщение моста должно доехать до смотрителя
+    # читаемым, а не кракозябрами. Символ U+FFFD «замена» — верный
+    # признак того, что байты прочитаны не той кодировкой.
+    import subprocess as _sp3  # noqa: PLC0415 — запуск настоящего лаунчера
+
+    _chatgpt = (Path(__file__).resolve().parent / "launchers"
+                / "chatgpt_bridge_launcher.py")
+    if _chatgpt.is_file():
+        _proc = _sp3.run(
+            [sys.executable, str(_chatgpt)],
+            capture_output=True, timeout=90, stdin=_sp3.DEVNULL,
+        )
+        _err = (_proc.stderr or b"").decode("utf-8", errors="replace")
+        _first = (_err.strip().splitlines() or [""])[0]
+        check("�" not in _err,
+              f"сообщение моста доехало без кракозябр: {_first[:110]}")
+        check("ключа" in _err,
+              "и в нём читается сама причина: мост chatgpt без ключа")
 
     # ---- итог
     failed = [text for good, text in results if not good]

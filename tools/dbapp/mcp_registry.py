@@ -1147,7 +1147,7 @@ def warm_up(server: Server, progress=None) -> str:
         proc = subprocess.Popen(
             argv, stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, encoding="utf-8", errors="replace",
+            text=True, encoding="utf-8", errors="replace", startupinfo=_hidden_startupinfo(),
         )
     except OSError as exc:
         return f"Прогрев не запустился: {exc}"
@@ -1554,6 +1554,86 @@ def disable(dest: Path, server: Server) -> tuple[list[str], list[str]]:
                 "Файл с токеном не удалился: "
                 f"{manual_config_path(dest, server.id)}"
             )
+    return messages, errors
+
+
+def _mcp_names(text: str) -> list[str] | None:
+    """Имена серверов из настроек или None, если файл не читается."""
+    from opencode_caps import strip_jsonc
+
+    try:
+        data = json.loads(strip_jsonc(text))
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return list(data.get("mcp") or {})
+
+
+def disable_all(dest: Path) -> tuple[list[str], list[str]]:
+    """Отключает ВСЕ серверы разом, включая мосты памяти базы.
+
+    Решение человека: полная чистая листка, после которой остаётся
+    включить ровно нужное. Поэтому снимаются и `ncp`, и `pc` — без них
+    программа не помнит и не читает компьютер, и об этом сказано словами,
+    а не остаётся сюрпризом.
+
+    Список берётся из самих настроек, а не из реестра: мосты памяти в
+    реестре не значатся, и обход по реестру тихо оставил бы их включёнными
+    при кнопке, которая обещает «все».
+
+    Способ — заменить содержимое раздела `mcp` пустым объектом, а не
+    вырезать блоки по одному. Вырезание по одному опирается на метки
+    программы, а блок может быть написан руками: такой молча не
+    вырезался, и кнопка рапортовала об успехе, ничего не сделав. Здесь
+    результат не зависит от того, чьей рукой написан блок, — и он
+    проверяется: после записи раздел `mcp` обязан быть пустым.
+
+    Копия настроек делается одна, до записи, а не по одной на сервер:
+    иначе на диске остаётся десяток почти одинаковых копий.
+
+    Настоящие настройки эта функция не проверяет и не трогает — вызывающий
+    код обязан передать копию, если проверяет.
+    """
+    from opencode_caps import check_jsonc, find_key_object
+
+    messages: list[str] = []
+    errors: list[str] = []
+    cfg = Path(dest) / "opencode.jsonc"
+    try:
+        text = cfg.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return ([], [f"Настройки не прочитались: {exc}"])
+    names = _mcp_names(text)
+    if names is None:
+        return ([], ["Настройки не читаются — правь вручную, я их не трогал."])
+    if not names:
+        return (["В настройках нет ни одного сервера — отключать нечего."],
+                [])
+
+    bounds = find_key_object(text, "mcp")
+    if bounds is None:
+        return ([], ["Раздел mcp в настройках не найден — не трогал."])
+    # Границы — это индексы САМИХ скобок, а ключ "mcp" стоит перед ними.
+    # Поэтому меняется только содержимое, иначе ключ продублировался бы.
+    updated = text[:bounds[0]] + "{}" + text[bounds[1] + 1:]
+    if not check_jsonc(updated):
+        return ([], ["После отключения файл перестал читаться — не пишу его."])
+    if _mcp_names(updated):
+        return ([], ["Раздел mcp не опустел — не пишу настройки."])
+    try:
+        backup = _write_config(dest, updated)
+    except OSError as exc:
+        return ([], [f"Не записались настройки: {exc}"])
+    messages.append(f"Отключено серверов: {len(names)} — " + ", ".join(names))
+    memory = [name for name in names if name in ("ncp", "pc")]
+    if memory:
+        messages.append(
+            f"Сняты и мосты памяти базы ({', '.join(memory)}): навыки, "
+            f"агенты и чтение компьютера перестанут работать, пока их не "
+            f"включат заново.")
+    messages.append(f"Копия настроек: {backup}")
+    messages.append("Перезапусти opencode: серверы читаются при старте.")
     return messages, errors
 
 

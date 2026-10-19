@@ -488,6 +488,156 @@ def _executable(matched) -> str:
     return ""
 
 
+# ------------------------------------------------------- собственные поисковики
+#
+# Состояние программы считалось по требованиям её серверов, и только по
+# двум видам требований — `program` и `command`. Программы, которые ставятся
+# папкой, не имеют ни записи в реестре Windows, ни команды в PATH, и в счёт
+# не попадали: карточка говорила «нечем проверять», хотя поисковик для них
+# написан и отвечает. Гидра 19.10.2026 — показательный случай: она стоит в
+# `Загрузки\Ghidra12`, версия 12.1.4 снимается, а карточка молчала.
+#
+# Что здесь важно: поисковик отвечает ТОЛЬКО на вопрос «лежит ли программа
+# на диске». Работает ли мост — отдельное требование, и оно остаётся в
+# `pending`: зелёная карточка при красном плагине — это враньё, которого
+# здесь быть не должно.
+#
+# Список явный и короткий, как `program_groups.EXPLICIT`: программа без
+# поисковика получает честное «нечем проверять», и выдумывать для неё
+# проверку хуже, чем сказать, что её нет.
+
+def _ghidra_answer():
+    import editor_plugins as plugins  # noqa: PLC0415 — тяжёлый модуль
+
+    install = plugins.ghidra_install()
+    version = plugins.ghidra_version(install) if install else ""
+    return plugins.Found(path=install, version=version,
+                         hint="Ставится распаковкой официального архива: "
+                              "нужна папка с ghidraRun.bat")
+
+
+def _unity_answer():
+    import editor_plugins as plugins  # noqa: PLC0415
+
+    return plugins.unity_editors()
+
+
+def _godot_answer():
+    import editor_plugins as plugins  # noqa: PLC0415
+
+    return plugins.godot_editor()
+
+
+def _omniroute_payload() -> tuple[bool, str]:
+    """Развёрнут ли пакет моста OmniRoute.
+
+    Отдельной программы у OmniRoute нет: это сам мост, и ставит его
+    программа управления базой кнопкой «Развернуть». Поэтому вопрос
+    «установлена ли программа» тут неправильный — правильный вопрос
+    «развёрнут ли пакет», и от ответа зависит, ответит ли мост.
+    """
+    import omniroute  # noqa: PLC0415 — рядом лежит
+
+    if omniroute.deployed():
+        version = omniroute.installed_version() or "версия неизвестна"
+        return True, f"мост развёрнут: OmniRoute {version}"
+    return False, (
+        "мост не развёрнут: пакета нет в папке моста. Нажми «Развернуть» "
+        "у строки OmniRoute — программа поставит его сама"
+    )
+
+
+def _lmarena_payload() -> tuple[bool, str]:
+    """Развёрнут ли форк моста арены."""
+    import lmarena  # noqa: PLC0415 — рядом лежит
+
+    if lmarena.deployed():
+        return True, "мост развёрнут: форк арены на месте"
+    missing = ", ".join(lmarena.missing_files()) or "файлы форка"
+    return False, (
+        f"мост не развёрнут: нет {missing}. Нажми «Развернуть» у строки "
+        "LMArena — программа развернёт форк сама"
+    )
+
+
+#: Мосты, у которых состояние — это «развёрнут ли пакет», а не «есть ли
+#: файл программы». 19.10.2026 карточка OmniRoute молчала об этом: в ней
+#: стояло «программа не ставится», и человек не мог понять, развёрнут
+#: мост или нет, и почему он не разворачивается.
+BRIDGE_PAYLOAD_CHECKS = {
+    "omniroute": _omniroute_payload,
+    "lmarena": _lmarena_payload,
+}
+
+
+def _bridge_payload_answer(draft):
+    """Ответ по пакету моста или None, если у программы такого нет."""
+    for server_id in getattr(draft, "servers", []):
+        run = BRIDGE_PAYLOAD_CHECKS.get(server_id)
+        if run is None:
+            continue
+        try:
+            ok, text = run()
+        except Exception as exc:  # noqa: BLE001 — вкладку ронять нельзя
+            return False, f"проверка пакета моста упала: {exc}"
+        return ok, text
+    return None
+
+
+def _roblox_answer():
+    import editor_plugins as plugins  # noqa: PLC0415
+
+    return plugins.roblox_studio()
+
+
+PROGRAM_FINDERS = {
+    "Ghidra": _ghidra_answer,
+    "Unity": _unity_answer,
+    "Godot": _godot_answer,
+    "Roblox Studio": _roblox_answer,
+}
+
+#: Что поисковик искал на самом деле. У карточек с хабом и редактором
+#: это разные вещи, и молчать об этом нельзя: «Unity не найдена» там, где
+#: стоит хаб, — тоже враньё, только в другую сторону.
+PROGRAM_FINDER_WHAT = {
+    "Unity": "редактор Unity",
+}
+
+
+def finder_answer(name: str, finders: dict | None = None):
+    """Ответ поисковика программы или None, если поисковика нет.
+
+    Таблица берётся аргументом, а не только из кода: проверка подставляет
+    свои ответы и убеждается, что карточка одинаково верно говорит и про
+    найденное, и про ненайденное. Поисковик, всегда отвечающий «найдено»,
+    такую проверку бы не прошёл.
+    """
+    table = PROGRAM_FINDERS if finders is None else finders
+    run = table.get(name)
+    if run is None:
+        return None
+    try:
+        return run()
+    except Exception as exc:  # noqa: BLE001 — вкладку ронять нельзя
+        import editor_plugins as plugins  # noqa: PLC0415
+
+        return plugins.Found(path=None, version='',
+                             attempts=[f'поисковик упал: {exc}'],
+                             hint='Это поломка программы, а не отсутствие '
+                                  'программы. Скажи — разберёмся.')
+
+
+def _finder_text(name: str, answer) -> str:
+    """Человеческая строка по ответу поисковика."""
+    what = PROGRAM_FINDER_WHAT.get(name, name)
+    if answer.ok:
+        version = answer.version or "версия неизвестна"
+        where = str(answer.path) if answer.path else ""
+        return f"найдена: {version}" + (f", {where}" if where else "")
+    return answer.why(what)
+
+
 @dataclass
 class _State:
     """Разобранное состояние программы. Собирать карточку из строк вместо
@@ -501,8 +651,10 @@ class _State:
     exe: str = ""
 
 
-def _state(draft: _Draft, servers_by_id: dict) -> _State:
-    """Состояние программы — по требованиям её серверов."""
+def _state(draft: _Draft, servers_by_id: dict,
+           finders: dict | None = None) -> _State:
+    """Состояние программы — по требованиям её серверов, а если их нет,
+    по собственному поисковику программы."""
     matched: list[tuple[str, object]] = []
     pending: list[str] = []
     blocking: list[str] = []
@@ -536,7 +688,16 @@ def _state(draft: _Draft, servers_by_id: dict) -> _State:
         return out
 
     if not matched:
-        if draft.install.action == programs.ACTION_NONE:
+        # Пакет моста — это и есть состояние для мостов, которые ставит
+        # сама программа. Проверка идёт первее, чем «программа не
+        # ставится»: иначе карточка молчит о том, развёрнут мост или нет.
+        _payload = _bridge_payload_answer(draft)
+        if _payload is not None:
+            _ok, _text = _payload
+            out.state = STATE_OK if _ok else STATE_MISSING
+            out.status = "развёрнут" if _ok else "не развёрнут"
+            out.text = _text
+        elif draft.install.action == programs.ACTION_NONE:
             out.text = draft.install.reason or "программа не ставится и не нужна"
             out.status = "не нужна"
         elif blocking:
@@ -546,9 +707,23 @@ def _state(draft: _Draft, servers_by_id: dict) -> _State:
             out.text = ("проверяет человек, не программа: " + ", ".join(blocking))
             out.status = "проверяет человек"
         else:
-            out.text = ("реестр не описывает, как проверить, стоит ли программа: "
-                        "нечем сказать «установлена» или «нет»")
-            out.status = "нечем проверять"
+            # Поисковик программы — последнее, что может ответить честно.
+            # Он знает только про файл на диске: требования плагина и
+            # сервера отсюда не меняются и остаются в `pending`.
+            _answer = finder_answer(draft.name, finders)
+            if _answer is not None:
+                if _answer.ok:
+                    out.state = STATE_OK
+                    out.status = "установлена"
+                else:
+                    out.state = STATE_MISSING
+                    out.status = "не установлена"
+                out.text = _finder_text(draft.name, _answer)
+                out.exe = str(_answer.path or "")
+            else:
+                out.text = ("реестр не описывает, как проверить, стоит ли "
+                            "программа: нечем сказать «установлена» или «нет»")
+                out.status = "нечем проверять"
         out.pending = pending
         return out
 

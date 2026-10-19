@@ -42,6 +42,26 @@ import time
 import zipfile
 from pathlib import Path
 
+def _hidden_startupinfo():
+    """Окно консоли не показывать. Подробности — в core.hidden_startupinfo.
+
+    Отдельная функция с ленивым импортом, а не `import core` наверху:
+    модуль читают и лаунчеры, и проверки, и лишняя связь между ними
+    лишний раз ломается.
+
+    Зачем это. 19.10.2026 человек нажал кнопку у моста OBS, и у него
+    открылось чёрное окно консоли. Программа работает на pythonw — у
+    неё самой консоли нет, и Windows на каждый запуск внешней
+    программы без этой просьбы создаёт новое окно.
+    """
+    try:
+        from core import hidden_startupinfo
+
+        return hidden_startupinfo()
+    except Exception:  # noqa: BLE001 — без этого просто откроется окно
+        return None
+
+
 #: Имя файла версии в корне программы.
 VERSION_FILE = "ВЕРСИЯ"
 
@@ -85,7 +105,7 @@ def remote_version(repo: Path | str | None = None) -> str:
         done = subprocess.run(
             ["git", "-C", str(_root(repo)), "ls-remote", "--tags", "origin"],
             capture_output=True, text=True, timeout=120,
-            encoding="utf-8", errors="replace")
+            encoding="utf-8", errors="replace", startupinfo=_hidden_startupinfo())
     except (OSError, subprocess.SubprocessError):
         return ""
     if done.returncode != 0:

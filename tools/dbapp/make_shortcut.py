@@ -8,6 +8,26 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+def _hidden_startupinfo():
+    """Окно консоли не показывать. Подробности — в core.hidden_startupinfo.
+
+    Отдельная функция с ленивым импортом, а не `import core` наверху:
+    модуль читают и лаунчеры, и проверки, и лишняя связь между ними
+    лишний раз ломается.
+
+    Зачем это. 19.10.2026 человек нажал кнопку у моста OBS, и у него
+    открылось чёрное окно консоли. Программа работает на pythonw — у
+    неё самой консоли нет, и Windows на каждый запуск внешней
+    программы без этой просьбы создаёт новое окно.
+    """
+    try:
+        from core import hidden_startupinfo
+
+        return hidden_startupinfo()
+    except Exception:  # noqa: BLE001 — без этого просто откроется окно
+        return None
+
+
 HERE = Path(__file__).resolve().parent
 # Корень базы — на две папки выше tools/dbapp. Лаунчер лежит в корне.
 BASE = HERE.parent.parent
@@ -51,7 +71,7 @@ def read_target(link: Path) -> str:
             done = subprocess.run(
                 [exe, "-NoProfile", "-NonInteractive",
                  "-ExecutionPolicy", "Bypass", "-Command", script],
-                capture_output=True, text=True, timeout=60,
+                capture_output=True, text=True, timeout=60, startupinfo=_hidden_startupinfo(),
             )
         except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
             continue
@@ -85,7 +105,7 @@ def make_with_powershell(link: Path) -> bool:
                     "-Command", script,
                 ],
                 capture_output=True,
-                timeout=60,
+                timeout=60, startupinfo=_hidden_startupinfo(),
             )
         except (FileNotFoundError, OSError):
             continue

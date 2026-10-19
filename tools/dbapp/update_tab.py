@@ -42,6 +42,8 @@ from PyQt6.QtWidgets import (
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import selfupdate as _selfupdate  # noqa: E402
+import omniroute as _or  # noqa: E402
+import omniroute_update as _orupd  # noqa: E402
 import update_download as _dl  # noqa: E402
 import update_source as _src  # noqa: E402
 from ui import flow_row, label  # noqa: E402
@@ -75,6 +77,7 @@ class UpdateTab(ScrollPage):
         self._worker = None
         self._cancel = False
         self._found: tuple[str, str] | None = None
+        self._or_remote: str = ""
         self._build(inner)
         self.refresh()
 
@@ -153,6 +156,39 @@ class UpdateTab(ScrollPage):
         b2.addWidget(row2)
         outer.addWidget(box2)
 
+        # --- мост OmniRoute
+        #
+        # Отдельный блок, а не ещё одна строка в общий список: у моста
+        # другой источник версии (официальный GitHub проекта, а не
+        # релиз программы) и другое действие (поставить пакет, а не
+        # заменить файлы программы). Смешаны они были бы в одну кнопку,
+        # и непонятно было бы, что именно обновится.
+        box3 = QGroupBox("Мост OmniRoute")
+        b3 = QVBoxLayout(box3)
+        self.lbl_or = QLabel("—")
+        self.lbl_or.setWordWrap(True)
+        b3.addWidget(label("Версия моста", kind="dim"))
+        b3.addWidget(self.lbl_or)
+        row3 = flow_row()
+        self.btn_or_check = QPushButton("Проверить")
+        self.btn_or_check.setToolTip(
+            "Спросить официальный GitHub проекта "
+            "(https://github.com/diegosouzapw/OmniRoute), какая там версия, "
+            "и сравнить с той, что стоит на диске. Ничего не меняет."
+        )
+        self.btn_or_check.clicked.connect(self._or_check_clicked)
+        self.btn_or_update = QPushButton("Обновить мост")
+        self.btn_or_update.setEnabled(False)
+        self.btn_or_update.setToolTip(
+            "Поставить найденную версию. Пока не нажали «Проверить», "
+            "выключено: неизвестно, есть ли что ставить."
+        )
+        self.btn_or_update.clicked.connect(self._or_update_clicked)
+        row3.add(self.btn_or_check)
+        row3.add(self.btn_or_update)
+        b3.addWidget(row3)
+        outer.addWidget(box3)
+
         outer.addStretch(1)
 
     # -------------------------------------------------------------- состояние
@@ -193,6 +229,26 @@ class UpdateTab(ScrollPage):
             self.btn_apply.setToolTip(
                 "Сначала нажмите «Проверить обновление»: без проверки "
                 "неизвестно, есть ли что качать.")
+
+        # --- мост OmniRoute: что стоит на диске
+        if not _or.deployed():
+            self.lbl_or.setText(
+                "Мост не развёрнут: пакета нет в папке моста. Обновлять "
+                "нечего — нажми «Развернуть» у строки OmniRoute на "
+                "вкладке opencode.")
+            if not self._busy():
+                self.btn_or_update.setEnabled(False)
+        else:
+            here = _or.installed_version() or "версия не названа"
+            self.lbl_or.setText(
+                f"Стоит: OmniRoute {here}\n"
+                f"Источник версии: {_orupd.SOURCE_LABEL}")
+            if not self._busy():
+                # Кнопка обновления живёт по тому же правилу, что и у
+                # программы: выключена, пока не сказано, что ставить.
+                self.btn_or_update.setEnabled(bool(self._or_remote)
+                                              and _orupd.is_newer(
+                                                  here, self._or_remote))
 
     # -------------------------------------------------------------- проверка
 
@@ -401,6 +457,105 @@ class UpdateTab(ScrollPage):
         backup = _selfupdate._backup_path(self.program_dir())
         if backup.is_dir():
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(backup)))
+
+    # -------------------------------------------------------------- мост
+
+    def _or_dest(self) -> Path:
+        """Папка настроек opencode — там лежат данные моста."""
+        return _or.find_settings_dir()
+
+    def _or_check_clicked(self) -> None:
+        """Живой вопрос официальному GitHub и сравнение с диском."""
+        if self._busy():
+            return
+        dest = self._or_dest()
+        self.btn_or_check.setEnabled(False)
+        self.lbl_step.setText("спрашиваю официальный GitHub проекта…")
+
+        def work(progress):
+            messages: list[str] = []
+            errors: list[str] = []
+            try:
+                _tag, remote = _orupd.latest_version()
+            except _orupd.UpdateError as exc:
+                return ([], [str(exc)], "")
+            if not _orupd.is_newer(_or.installed_version() or "", remote):
+                progress(f"В репозитории {remote} — не новее стоящей.")
+            found, bad = _orupd.check(dest, remote=remote, progress=progress)
+            messages.extend(found)
+            errors.extend(bad)
+            return (messages, errors, remote)
+
+        self._worker = Worker(work)
+        self._worker.line.connect(self._step)
+        self._worker.finished.connect(self._or_check_done)
+        self._worker.start()
+
+    def _or_check_done(self) -> None:
+        worker, self._worker = self._worker, None
+        self.btn_or_check.setEnabled(True)
+        if worker is None or not isinstance(worker.result, tuple):
+            return
+        messages, errors, remote = worker.result
+        self._or_remote = remote or ""
+        for text in messages:
+            self.lbl_step.setText(text)
+        for text in errors:
+            self.lbl_step.setText(text)
+        self.refresh()
+
+    def _or_update_clicked(self) -> None:
+        """Поставить найденную версию — после вопроса и живого подтверждения."""
+        if self._busy():
+            return
+        dest = self._or_dest()
+        here = _or.installed_version() or "не названа"
+        there = self._or_remote
+        if not there:
+            self.lbl_step.setText(
+                "Версия в репозитории не названа: нажми «Проверить».")
+            return
+        answer = QMessageBox.question(
+            self, "Обновить мост OmniRoute",
+            f"Сейчас стоит: {here}\n"
+            f"Поставлю: {there}\n"
+            f"Источник версии: {_orupd.SOURCE_LABEL}\n\n"
+            "Установка — это npm install, сотни мегабайт и несколько минут. "
+            "Пакет ставится в папку моста, глобальные папки Node.js "
+            "не трогаются.\n"
+            "Сервер надо будет перезапустить — он работает на старой "
+            "версии до перезапуска.\n\nПродолжить?")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        self._cancel = False
+        self.progress.setVisible(True)
+        self.progress.setRange(0, 0)
+        self.btn_or_update.setEnabled(False)
+
+        def work(progress):
+            return _orupd.install(dest, there, progress=progress)
+
+        self._worker = Worker(work)
+        self._worker.line.connect(self._step)
+        self._worker.finished.connect(self._or_update_done)
+        self._worker.start()
+
+    def _or_update_done(self) -> None:
+        self.progress.setVisible(False)
+        self.progress.setRange(0, 100)
+        self.btn_or_check.setEnabled(True)
+        worker, self._worker = self._worker, None
+        if worker is None or not isinstance(worker.result, tuple):
+            return
+        messages, errors = worker.result
+        for text in messages:
+            self.lbl_step.setText(text)
+        for text in errors:
+            self.lbl_step.setText(text)
+        # На диске могла встать новая версия: состояние читается заново,
+        # а не по тому, что обещала надпись до установки.
+        self.refresh()
 
     # -------------------------------------------------------------- остановка
 

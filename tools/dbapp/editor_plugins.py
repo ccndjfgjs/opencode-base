@@ -163,6 +163,47 @@ def process_running(image: str) -> bool:
     return code == 0 and image.lower() in (out or "").lower()
 
 
+def process_paths(image: str) -> list[str]:
+    """Полные пути запущенных процессов с таким именем файла.
+
+    Одного имени мало, и на этой машине это доказано: у Unity Hub есть
+    помощник `Unity Hub\\resources\\unity.exe serve`, и он называется ровно
+    так же, как редактор. Проверка «работает ли Unity.exe» считала помощник
+    открытым редактором и отказывалась вписывать пакет — при работающем
+    Hub мост не поставился бы никогда.
+    """
+    if not WIN:
+        return []
+    script = (
+        "$ErrorActionPreference='SilentlyContinue';"
+        f"Get-Process -Name '{str(image)}' -ErrorAction SilentlyContinue | "
+        "ForEach-Object { $_.Path }"
+    )
+    code, out = run_capture(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+        timeout=PROBE_TIMEOUT,
+    )
+    if code not in (0, None):
+        return []
+    return [line.strip() for line in (out or "").splitlines() if line.strip()]
+
+
+def unity_editor_running() -> bool:
+    """Открыт ли именно редактор Unity, а не помощник Unity Hub.
+
+    Настоящий редактор лежит в `...\\Editor\\Unity.exe`. Помощник Hub —
+    в `...\\Unity Hub\\resources\\unity.exe`. Имя у них одинаковое, различие
+    только в пути, поэтому и проверять надо путь.
+    """
+    for path in process_paths("Unity.exe"):
+        low = path.lower().replace("/", "\\")
+        if "unity hub" in low:
+            continue
+        if low.endswith("\\editor\\unity.exe") or "\\editor\\" in low:
+            return True
+    return False
+
+
 def process_running_any(images) -> bool:
     """Открыт ли хоть один из процессов.
 
@@ -434,7 +475,7 @@ def install_unity_package(project: Path, plugin: plugin_index.Plugin,
     manifest = project / "Packages" / "manifest.json"
     if not manifest.is_file():
         return False, f"в проекте нет {manifest} — это не проект Unity"
-    if process_running("Unity.exe"):
+    if unity_editor_running():
         return False, ("редактор Unity открыт и перезапишет manifest.json при "
                        "выходе. Закрой проект в редакторе и повтори")
     try:

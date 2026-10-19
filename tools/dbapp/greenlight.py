@@ -43,6 +43,26 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+def _hidden_startupinfo():
+    """Окно консоли не показывать. Подробности — в core.hidden_startupinfo.
+
+    Отдельная функция с ленивым импортом, а не `import core` наверху:
+    модуль читают и лаунчеры, и проверки, и лишняя связь между ними
+    лишний раз ломается.
+
+    Зачем это. 19.10.2026 человек нажал кнопку у моста OBS, и у него
+    открылось чёрное окно консоли. Программа работает на pythonw — у
+    неё самой консоли нет, и Windows на каждый запуск внешней
+    программы без этой просьбы создаёт новое окно.
+    """
+    try:
+        from core import hidden_startupinfo
+
+        return hidden_startupinfo()
+    except Exception:  # noqa: BLE001 — без этого просто откроется окно
+        return None
+
 # Под pythonw (оконный Python, без консоли) sys.stdout равен None:
 # .reconfigure() на нём роняет импорт модуля, а модуль импортирует
 # main.py при старте — программа не открывалась совсем. Найдено живьём.
@@ -189,7 +209,7 @@ def go_version(go: str | None = None) -> str:
         return ""
     try:
         done = subprocess.run(
-            [go, "version"], capture_output=True, text=True, timeout=60,
+            [go, "version"], capture_output=True, text=True, timeout=60, startupinfo=_hidden_startupinfo(),
         )
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -203,7 +223,7 @@ def make_version(make: str | None = None) -> str:
         return ""
     try:
         done = subprocess.run(
-            [make, "--version"], capture_output=True, text=True, timeout=60,
+            [make, "--version"], capture_output=True, text=True, timeout=60, startupinfo=_hidden_startupinfo(),
         )
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -261,7 +281,7 @@ def install_go(progress=None) -> tuple[list[str], list[str]]:
     try:
         done = subprocess.run(
             command, capture_output=True, text=True, encoding="utf-8",
-            errors="replace", timeout=1800,
+            errors="replace", timeout=1800, startupinfo=_hidden_startupinfo(),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return messages, [f"winget не отработал: {exc}. {GO_MANUAL}"]
@@ -352,7 +372,7 @@ def binary_works(binary: Path | None = None) -> tuple[bool, str]:
         return False, f"файла нет: {binary}"
     try:
         done = subprocess.run(
-            [str(binary), "--version"], capture_output=True, text=True, timeout=60,
+            [str(binary), "--version"], capture_output=True, text=True, timeout=60, startupinfo=_hidden_startupinfo(),
         )
     except OSError as exc:
         return False, f"не запустился: {exc}"
@@ -680,7 +700,7 @@ def build(dest: Path, progress=None, command: list[str] | None = None) -> tuple[
         proc = subprocess.Popen(
             cmd, cwd=str(vendor_dir()),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            encoding="utf-8", errors="replace", bufsize=1,
+            encoding="utf-8", errors="replace", bufsize=1, startupinfo=_hidden_startupinfo(),
         )
         assert proc.stdout is not None
         for line in proc.stdout:
@@ -841,7 +861,7 @@ def _write_report(dest: Path, project: Path, ipa: Path | None = None) -> Path | 
         cmd += ["--ipa", str(ipa)]
     try:
         done = subprocess.run(
-            cmd, cwd=str(project), capture_output=True, text=True, timeout=600,
+            cmd, cwd=str(project), capture_output=True, text=True, timeout=600, startupinfo=_hidden_startupinfo(),
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -888,7 +908,7 @@ def _run(dest: Path, cmd: list[str], title: str, cwd: Path, progress=None):
     try:
         proc = subprocess.Popen(
             cmd, cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, encoding="utf-8", errors="replace", bufsize=1,
+            text=True, encoding="utf-8", errors="replace", bufsize=1, startupinfo=_hidden_startupinfo(),
         )
         assert proc.stdout is not None
         for line in proc.stdout:

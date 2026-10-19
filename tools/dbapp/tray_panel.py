@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
 )
 
 import core
+import omniroute
 import qwen_review
 import ui
 
@@ -88,6 +89,11 @@ CATEGORY_BY_ID = {
     "ldplayer": "python",
     "unity": "python",
     "godot": "python",
+    # Смотритель мостов — тоже Python: он лежит в программе и поднимается
+    # её лаунчером. Без этой строки он уезжал в «Прочее», а панель врала
+    # о подключённых мостах — полный прогон самопроверки поймал это
+    # 19.10.2026.
+    "mcp-doctor": "python",
     # Настоящего рантайма нет: плагин внутри IDE или сервер на стороне вендора.
     "android-studio": "ide",
     "roblox-studio": "ide",
@@ -103,6 +109,55 @@ CATEGORY_BY_ID = {
 
 BASE_BRIDGES_TITLE = "Мосты базы"
 REVIEWERS_TITLE = "Ревьюеры"
+
+#: Мосты, у которых поднимается локальная веб-панель, и функция,
+#: отдающая её адрес. Значение вызывается в момент нажатия, а не
+#: хранится строкой: адрес собирается из порта по умолчанию, и
+#: завёрнутая в строку копия разошлась бы с настоящей при первом же
+#: изменении порта.
+#:
+#: Список не выдумывается: сюда попадает только тот мост, который
+#: действительно поднимает веб-панель. У остальных кнопка «Открыть»
+#: была бы враньём — нажатие нечего открывать.
+PANEL_URLS = {
+    "omniroute": lambda: omniroute.panel_url(),
+}
+
+
+def _open_server_panel(window, url: str) -> None:
+    """Открыть панель моста: сначала живая проверка, потом браузер.
+
+    Порядок обязателен. Открыть страницу при выключенном сервере
+    бессмысленно: человек увидит ошибку подключения и решит, что
+    программа сломалась. Поэтому сначала спрашиваем сервер, что он
+    жив, и только потом открываем.
+
+    Открывает `ui.open_link`, а не `webbrowser.open`: тот запускает
+    внешнюю программу, а программа работает на pythonw, и Windows
+    показал бы чёрное окно. Это и случилось 19.10.2026.
+    """
+    ok, note = omniroute.panel_ready(omniroute.find_settings_dir())
+    if not ok:
+        _notify(window, note)
+        return
+    if not ui.open_link(url):
+        _notify(window, "Браузер не взял адрес — открой его сам: " + url)
+
+
+def _notify(window, text: str) -> None:
+    """Показать строку человеку: в журнал вкладки или в панель."""
+    caps = getattr(window, "caps_tab", None)
+    log = getattr(caps, "log", None)
+    if log is not None:
+        try:
+            log.clear_log()
+            log.add(text, "warn")
+            return
+        except Exception:  # noqa: BLE001 — журнала может не быть
+            pass
+    panel = panel_of(window)
+    if panel is not None:
+        panel.show_note(text)
 
 # Значок закрытия. Крестик, а не «×» из другого шрифта: у этого знака
 # оптическая масса больше, чем у буквы, поэтому он на пару пикселей
@@ -224,6 +279,14 @@ def _server_entry(caps, window, server) -> Entry:
     elif server.has_connection:
         actions.append(("Включить",
                         lambda srv=server: _run_server(window, caps, srv, True)))
+    # Мосты, у которых есть локальная веб-панель, получают кнопку
+    # «Открыть». Список не выдумывается: PANEL_URLS задан по одному
+    # на мост, у которых такая панель правда есть.
+    panel = PANEL_URLS.get(server.id)
+    if panel is not None:
+        actions.append(("Открыть",
+                        lambda srv=server, url=panel: _open_server_panel(
+                            window, url)))
     if checked:
         # Требования уже проверены: повторно звать проверку незачем,
         # достаточно открыть подробности.
@@ -509,6 +572,14 @@ class TrayPanel(QWidget):
         outer.addLayout(head)
         outer.addWidget(ui.line())
 
+        # Строка для коротких сообщений. Без неё панель умела только
+        # показывать состояние и ничего не могла сказать: кнопка
+        # «Открыть» при выключенном сервере отказала бы молча, и человек
+        # решил бы, что кнопка не работает.
+        self.lbl_note = ui.label("", kind="warn", wrap=True)
+        self.lbl_note.setVisible(False)
+        outer.addWidget(self.lbl_note)
+
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -751,6 +822,19 @@ class TrayPanel(QWidget):
         if getattr(self, "_checking", False):
             return "идёт проверка…"
         return None
+
+    def show_note(self, text: str, msec: int = 14_000) -> None:
+        """Показать короткое сообщение и убрать его само.
+
+        Отдельный метод, а не надпись в списке: строка сообщения — не
+        состояние моста, и через `refresh()` она бы уехала вместе со
+        списком. Таймер гасит её сама, потому что панель живёт поверх
+        всего и забытая надпись мешала бы читать состояния.
+        """
+        self.lbl_note.setText(str(text or ""))
+        self.lbl_note.setVisible(bool(text))
+        if text:
+            QTimer.singleShot(msec, self.lbl_note.hide)
 
     # ---- показ и скрытие
 

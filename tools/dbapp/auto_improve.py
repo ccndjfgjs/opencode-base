@@ -431,7 +431,7 @@ def _winget_install(packet: str, timeout: int = 1800) -> tuple[bool, str]:
     try:
         done = subprocess.run(
             command, capture_output=True, text=True, encoding="utf-8",
-            errors="replace", timeout=timeout,
+            errors="replace", timeout=timeout, startupinfo=_hidden_startupinfo(),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return False, f"winget не отработал: {exc}"
@@ -479,7 +479,7 @@ def ensure_tools(dest: Path, progress=None) -> tuple[list[str], list[str]]:
             done = subprocess.run(
                 [python, "-m", "pip", "install", "requests"],
                 capture_output=True, text=True, encoding="utf-8",
-                errors="replace", timeout=1800,
+                errors="replace", timeout=1800, startupinfo=_hidden_startupinfo(),
             )
         except (OSError, subprocess.SubprocessError) as exc:
             errors.append(f"requests поставить не удалось: {exc}")
@@ -750,7 +750,7 @@ def launch(
             proc = subprocess.Popen(
                 cmd, cwd=str(repo), env=env, stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT, text=True, encoding="utf-8",
-                errors="replace", bufsize=1,
+                errors="replace", bufsize=1, startupinfo=_hidden_startupinfo(),
             )
         except OSError as exc:
             return [], [f"Скрипт не запустился: {exc}"]
@@ -798,7 +798,7 @@ def history(dest: Path, tag: str, progress=None) -> tuple[list[str], list[str]]:
         done = subprocess.run(
             [find_python(), str(script_path()), "--status", "--tag", str(tag)],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=STATUS_TIMEOUT, env=env,
+            timeout=STATUS_TIMEOUT, env=env, startupinfo=_hidden_startupinfo(),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return [], [f"Ход не прочитался: {exc}"]
