@@ -46,6 +46,7 @@ import omniroute as _or  # noqa: E402
 import omniroute_update as _orupd  # noqa: E402
 import update_download as _dl  # noqa: E402
 import update_source as _src  # noqa: E402
+import bridge_updates as _bupd  # noqa: E402
 from ui import flow_row, label  # noqa: E402
 
 # ScrollPage и Worker живут в main.py, а не в ui.py: `label` — это про вид,
@@ -189,6 +190,85 @@ class UpdateTab(ScrollPage):
         b3.addWidget(row3)
         outer.addWidget(box3)
 
+        # --- скиллы и агенты во всех базах
+        #
+        # Отдельный блок по той же причине, что и OmniRoute выше: у него
+        # другой источник (папка программы — мастер) и другое действие
+        # (доехать до каждой базы, которую программа создала или нашла,
+        # а не скачать файл из сети). Смешивать их с обновлением самой
+        # программы было бы путаницей: обновление программы меняет папку
+        # программы, а это — разносит её содержимое по базам.
+        #
+        # Кто считается базой: то, что нашёл скан по маркеру, плюс список
+        # созданных программой (он переживёт и базу вне рабочего стола).
+        box4 = QGroupBox("Скиллы и агенты во всех базах")
+        b4 = QVBoxLayout(box4)
+        self.lbl_sync_bases = QLabel("—")
+        self.lbl_sync_bases.setWordWrap(True)
+        self.lbl_sync = QLabel("")
+        self.lbl_sync.setWordWrap(True)
+        b4.addWidget(label(
+            "Источник — папка программы (мастер). Копия приезжает в живую "
+            "базу и в каждую созданную базу. Чужие скиллы и папки человека "
+            "не трогаются.", kind="dim", wrap=True))
+        b4.addWidget(self.lbl_sync_bases)
+        row4 = flow_row()
+        self.btn_sync_skills = QPushButton("Обновить скиллы")
+        self.btn_sync_skills.setToolTip(
+            "Скиллы, описание навыков и индекс из папки программы — в живую "
+            "базу и во все найденные базы. Реестр серверов и таблица версий "
+            "мостов едут с ними же (это одна перевозка).")
+        self.btn_sync_skills.clicked.connect(self._sync_skills_clicked)
+        self.btn_sync_agents = QPushButton("Обновить агентов")
+        self.btn_sync_agents.setToolTip(
+            "Папка агентов и реестр агентов (agents-index.json) из папки "
+            "программы — в живую базу и во все найденные базы. Скиллы при "
+            "этом не трогаются.")
+        self.btn_sync_agents.clicked.connect(self._sync_agents_clicked)
+        row4.add(self.btn_sync_skills)
+        row4.add(self.btn_sync_agents)
+        b4.addWidget(row4)
+        b4.addWidget(self.lbl_sync)
+        outer.addWidget(box4)
+
+        # --- версии мостов у авторов
+        #
+        # Третий источник, третий блок: у мостов свои издатели (PyPI и
+        # npm — те же каналы, с которых мосты и ставятся), и своя таблица
+        # (данные/bridge-versions.json). Проверка ничего не меняет; кнопка
+        # обновления разблокируется только после проверки и обновляет
+        # лишь то, что модуль разрешил: закреплённые мосты она отказывается
+        # обновлять словами, потому что их пин живёт в коде программы.
+        box5 = QGroupBox("Версии мостов")
+        b5 = QVBoxLayout(box5)
+        self.lbl_bridge_versions = QLabel("")
+        self.lbl_bridge_versions.setWordWrap(True)
+        b5.addWidget(label(
+            "Что стоит и что вышло у автора — по таблице версий мостов. "
+            "Закреплённые мосты (Unity, Godot, TikTok) не обновляются "
+            "кнопкой: их пин меняется правкой кода с прогоном тестов, "
+            "иначе мост ломается о несовместимую версию.", kind="dim",
+            wrap=True))
+        row5 = flow_row()
+        self.btn_bridge_check = QPushButton("Проверить версии у авторов")
+        self.btn_bridge_check.setToolTip(
+            "Спрашивает последнюю версию у PyPI и npm для мостов, у которых "
+            "пакет назван в таблице версий. Ничего не ставит и не меняет.")
+        self.btn_bridge_check.clicked.connect(self._bridge_check_clicked)
+        self.btn_bridge_update = QPushButton("Обновить, где можно")
+        self.btn_bridge_update.setToolTip(
+            "Ставит названную версию автора в окружение того моста, у "
+            "которого оно есть (сейчас — kinocut) и нет закрепления. "
+            "Закреплённые и npx-мосты честно откажутся. После установки "
+            "версия перечитывается из окружения.")
+        self.btn_bridge_update.setEnabled(False)
+        self.btn_bridge_update.clicked.connect(self._bridge_update_clicked)
+        row5.add(self.btn_bridge_check)
+        row5.add(self.btn_bridge_update)
+        b5.addWidget(row5)
+        b5.addWidget(self.lbl_bridge_versions)
+        outer.addWidget(box5)
+
         outer.addStretch(1)
 
     # -------------------------------------------------------------- состояние
@@ -249,6 +329,27 @@ class UpdateTab(ScrollPage):
                 self.btn_or_update.setEnabled(bool(self._or_remote)
                                               and _orupd.is_newer(
                                                   here, self._or_remote))
+
+        # --- скиллы и агенты: сколько баз затронет кнопка
+        # --- скиллы и агенты: сколько баз затронет кнопка
+        try:
+            bases, skipped = self._bases_for_sync()
+        except Exception:  # noqa: BLE001 — скан не должен ронять вкладку
+            bases, skipped = [], []
+        if bases:
+            names = ", ".join(b.name for b in bases)
+            shown = names if len(names) <= 120 else names[:117] + "..."
+            self.lbl_sync_bases.setText(f"Баз найдено: {len(bases)} — {shown}")
+        else:
+            self.lbl_sync_bases.setText(
+                "Баз не найдено: ни по маркеру, ни в списке созданных. "
+                "Кнопке будет нечего обновлять.")
+        if skipped:
+            self.lbl_sync_bases.setText(
+                f"{self.lbl_sync_bases.text()}\n"
+                f"Пропущены снимки (бэкапы и копии не обновляются): "
+                f"{', '.join(skipped[:4])}"
+                + (f" и ещё {len(skipped) - 4}" if len(skipped) > 4 else ""))
 
     # -------------------------------------------------------------- проверка
 
@@ -556,6 +657,249 @@ class UpdateTab(ScrollPage):
         # На диске могла встать новая версия: состояние читается заново,
         # а не по тому, что обещала надпись до установки.
         self.refresh()
+
+    def _or_update_done(self) -> None:
+        self.progress.setVisible(False)
+        self.progress.setRange(0, 100)
+        self.btn_or_check.setEnabled(True)
+        worker, self._worker = self._worker, None
+        if worker is None or not isinstance(worker.result, tuple):
+            return
+        messages, errors = worker.result
+        for text in messages:
+            self.lbl_step.setText(text)
+        for text in errors:
+            self.lbl_step.setText(text)
+        # На диске могла встать новая версия: состояние читается заново,
+        # а не по тому, что обещала надпись до установки.
+        self.refresh()
+
+    # ------------------------------------------------- скиллы и агенты
+
+    def _bases_for_sync(self) -> tuple[list[Path], list[str]]:
+        """Куда ехать: живая база, найденные по маркеру и созданные.
+
+        Два источника, потому что каждый чего-то не знает: скан видит
+        базы по маркеру на рабочем столе и в DataBases, список созданных
+        помнит и те, что лежат в необычном месте. Дубли снимаются — одна
+        база из двух источников должна обновиться один раз.
+
+        Бэкапы и копии не едут: у снимка тоже есть маркер базы, но
+        обновлять снимок — значит портить его. Пропущенные возвращаются
+        вторым списком, чтобы отчёт назвал их словами.
+        """
+        from core import app_root, read_bases, scan_bases
+
+        found: list[Path] = []
+        skipped: list[str] = []
+        candidates = list(scan_bases())
+        candidates.append(app_root())
+        for item in read_bases():
+            raw = str(item.get("path", "")).strip()
+            if raw:
+                candidates.append(Path(raw))
+        for path in candidates:
+            path = Path(path)
+            if path in found:
+                continue
+            if not (path / "profile.md").is_file():
+                continue
+            name = path.name.lower()
+            if "бэкап" in name or "backup" in name or "копия" in name:
+                skipped.append(path.name)
+                continue
+            found.append(path)
+        return found, skipped
+
+    def _sync_clicked(self, kind: str) -> None:
+        """Разносит скиллы или агентов из программы по всем найденным базам.
+
+        kind: "skills" — скиллы, описание, индекс и копии файлов программы;
+        "agents" — только агенты и их реестр. Ход — в общем Worker вкладки:
+        это копирование папок, не минутная установка, но десяток баз на
+        медленном диске мог бы заморозить окно.
+        """
+        if self._busy():
+            return
+        btn = self.btn_sync_skills if kind == "skills" else self.btn_sync_agents
+        other = self.btn_sync_agents if kind == "skills" else self.btn_sync_skills
+        btn.setEnabled(False)
+        other.setEnabled(False)
+        self.lbl_step.setText("обновляю во всех базах…")
+
+        def work(progress):
+            from core import refresh_agents, refresh_skills
+
+            bases, skipped = self._bases_for_sync()
+            if not bases:
+                return (["Баз не найдено: ни по маркеру, ни в списке "
+                         "созданных. Обновлять нечего."], [])
+            progress(f"баз найдено: {len(bases)}"
+                     + (f", снимки пропущены: {len(skipped)}" if skipped
+                        else ""))
+            messages: list[str] = []
+            errors: list[str] = []
+            for base in bases:
+                progress(base.name)
+                try:
+                    if kind == "skills":
+                        msgs = refresh_skills(base)
+                    else:
+                        msgs = refresh_agents(base)
+                except Exception as exc:  # noqa: BLE001 — база с бедой не
+                    # должна обрывать остальные: доедем до каждой.
+                    errors.append(f"{base.name}: не удалось ({exc})")
+                    continue
+                tail = "; ".join(msgs) if msgs else "уже свежее"
+                messages.append(f"{base.name}: {tail}")
+            return (messages, errors)
+
+        self._worker = Worker(work)
+        self._worker.line.connect(self._step)
+        self._worker.finished.connect(self._sync_done)
+        self._worker.start()
+
+    def _sync_skills_clicked(self) -> None:
+        self._sync_clicked("skills")
+
+    def _sync_agents_clicked(self) -> None:
+        self._sync_clicked("agents")
+
+    def _sync_done(self) -> None:
+        worker, self._worker = self._worker, None
+        self.btn_sync_skills.setEnabled(True)
+        self.btn_sync_agents.setEnabled(True)
+        if worker is None:
+            return
+        result = worker.result
+        if isinstance(result, Exception):
+            self.lbl_sync.setText(f"не вышло: {result}")
+        elif isinstance(result, tuple):
+            messages, errors = result
+            report = list(messages) + list(errors)
+            self.lbl_sync.setText("\n".join(report) if report else "готово")
+        else:
+            self.lbl_sync.setText(str(result))
+
+    # ------------------------------------------------------- версии мостов
+
+    def _bridge_check_clicked(self) -> None:
+        """Спрашивает у издателей последнюю версию каждого моста.
+
+        Проверка — только чтение: PyPI и npm отдают номер, программа
+        сравнивает с таблицей и пишет словами. Ничего не ставится.
+        """
+        if self._busy():
+            return
+        self.btn_bridge_check.setEnabled(False)
+        self.btn_bridge_update.setEnabled(False)
+        self.lbl_step.setText("спрашиваю у издателей пакетов…")
+
+        def work(progress):
+            progress("PyPI и npm…")
+            return _bupd.check_all(self._settings_dir())
+
+        self._worker = Worker(work)
+        self._worker.line.connect(self._step)
+        self._worker.finished.connect(self._bridge_check_done)
+        self._worker.start()
+
+    def _bridge_check_done(self) -> None:
+        worker, self._worker = self._worker, None
+        self.btn_bridge_check.setEnabled(True)
+        if worker is None:
+            return
+        result = worker.result
+        if isinstance(result, Exception):
+            self.lbl_bridge_versions.setText(f"не вышло: {result}")
+            return
+        rows, errors = result if isinstance(result, tuple) else ([], [])
+        if errors:
+            self.lbl_bridge_versions.setText("\n".join(errors))
+            return
+        self._bridge_rows = rows
+        report = []
+        updatable = 0
+        for row in rows:
+            report.append(
+                f"{row['bridge']}: стоит {row['installed'] or '—'} | "
+                f"у автора {row['latest'] or 'не ответил'} — {row['verdict']}")
+            if row["verdict"] == "можно обновить":
+                updatable += 1
+        self.btn_bridge_update.setEnabled(updatable > 0 and not self._busy())
+        self.lbl_bridge_versions.setText("\n".join(report) or "нет данных")
+
+    def _bridge_update_clicked(self) -> None:
+        """Обновляет то, что проверка назвала обновляемым.
+
+        Кнопка живёт по правилу вкладки: выключена, пока проверка не
+        назвала, что именно можно ставить. Сама установка ещё раз
+        спросит у модуля — закреплённый мост откажется словами, даже
+        если вердикт устарел.
+        """
+        if self._busy():
+            return
+        rows = list(getattr(self, "_bridge_rows", []))
+        updatable = [row for row in rows
+                     if row["verdict"] == "можно обновить"]
+        if not updatable:
+            self.lbl_bridge_versions.setText(
+                "Обновлять нечего: ни один мост не назван «можно обновить».")
+            return
+        names = "\n".join(
+            f"{row['bridge']} → {row['latest']}" for row in updatable)
+        answer = QMessageBox.question(
+            self, "Обновить мосты",
+            "Поставить названную версию в окружение этих мостов?\n\n"
+            + names + "\n\nЗакреплённые мосты не тронутся — откажутся "
+            "сами, словами.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.btn_bridge_check.setEnabled(False)
+        self.btn_bridge_update.setEnabled(False)
+        self.lbl_step.setText("обновляю окружения мостов…")
+
+        def work(progress):
+            settings = self._settings_dir()
+            messages: list[str] = []
+            errors: list[str] = []
+            for row in updatable:
+                progress(row["bridge"])
+                done, failed = _bupd.install(
+                    row["bridge"], str(row["latest"]), settings,
+                    progress=progress)
+                messages.extend(done)
+                errors.extend(failed)
+            return (messages, errors)
+
+        self._worker = Worker(work)
+        self._worker.line.connect(self._step)
+        self._worker.finished.connect(self._bridge_update_done)
+        self._worker.start()
+
+    def _bridge_update_done(self) -> None:
+        worker, self._worker = self._worker, None
+        self.btn_bridge_check.setEnabled(True)
+        if worker is None:
+            return
+        result = worker.result
+        lines: list[str] = []
+        if isinstance(result, Exception):
+            lines.append(f"не вышло: {result}")
+        elif isinstance(result, tuple):
+            messages, errors = result
+            lines = list(messages) + list(errors)
+        self.lbl_bridge_versions.setText("\n".join(lines) or "готово")
+        # Свежий отчёт вместо вчерашнего: то, что поставилось, должно
+        # пройти проверку ещё раз — это и есть пост-проверка.
+        self._bridge_check_clicked()
+
+    def _settings_dir(self) -> Path:
+        from core import PROGRAMS_BY_ID
+
+        return PROGRAMS_BY_ID["opencode"].config_dir()
 
     # -------------------------------------------------------------- остановка
 

@@ -128,6 +128,36 @@ def main() -> None:
 
     check(common.TIKTOK_PACKAGE == "@getmcpads/tiktok-ads-mcp-server@2.0.1",
           "TikTok остался на закреплённой версии")
+
+    # === 7в. Постоянное окружение Unity: готовое берётся, неготовое честно ===
+    # Проверено 21.10.2026: холодный uvx качает пакет 74+ секунд при лимите
+    # opencode 30 секунд — из-за этого мост таймаутил, и opencode перезапускал
+    # его общим таймером вместе со всеми мостами. Теперь первый путь — .venv
+    # рядом с мостом. Подмена SERVER_DIR/VENV_* делает проверку независимой
+    # от того, стоит ли окружение на этой машине: оба случая меряются сами.
+    check(unity.VENV_EXE == unity.SERVER_DIR / ".venv" / "Scripts" / "mcp-for-unity.exe",
+          "Unity: окружение ищется рядом с мостом, а не по личному пути")
+    saved_unity = (unity.SERVER_DIR, unity.VENV_EXE, unity.VENV_PYTHON)
+    try:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as empty:
+            empty_dir = Path(empty)
+            unity.SERVER_DIR = empty_dir
+            unity.VENV_PYTHON = empty_dir / ".venv" / "Scripts" / "python.exe"
+            unity.VENV_EXE = empty_dir / ".venv" / "Scripts" / "mcp-for-unity.exe"
+            check(unity._venv_exe() is None,
+                  "Unity: неготовое окружение честно даёт None — лаунчер уходит на путь uvx")
+    finally:
+        unity.SERVER_DIR, unity.VENV_EXE, unity.VENV_PYTHON = saved_unity
+    real_venv_exe = saved_unity[0] / ".venv" / "Scripts" / "mcp-for-unity.exe"
+    if real_venv_exe.is_file():
+        check(unity._venv_exe() == unity.VENV_EXE,
+              "Unity: готовое окружение выбирается первым")
+    else:
+        check(unity._venv_exe() is None,
+              "Unity: на машине окружения нет — проверка не врёт про готовность")
+
     for label, module in (("Unity", unity), ("Unreal", unreal), ("TikTok", tiktok)):
         check(callable(getattr(module, "main", None)),
               f"лаунчер {label} на месте и запускаем")

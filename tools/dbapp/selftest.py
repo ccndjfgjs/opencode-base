@@ -147,13 +147,12 @@ def _free_port() -> int:
 #: База 24 → 25 19.10.2026: добавлен mcp-doctor (смотритель мостов). Это
 #: тоже постоянная запись реестра, а не «мост игрока» на время проверки,
 #: поэтому смещается база.
-#: Это не «мост игрока» на время проверки, а постоянная запись реестра,
-#: поэтому смещается именно база, а число с игроком идёт следом.
+#: База 25 → 26 21.10.2026: добавлен kinocut (мост монтажа видео).
 #: Сколько серверов умеет настроить кнопка «Настроить автоматически».
 #: Константа с именем, потому что голое число в проверке не читается.
 AUTO_SERVERS_EXPECTED = 18
-EXPECTED_SERVERS_NO_PLAYER = 25
-EXPECTED_SERVERS_WITH_PLAYER = 26
+EXPECTED_SERVERS_NO_PLAYER = 26
+EXPECTED_SERVERS_WITH_PLAYER = 27
 #: Режим проверки задаётся явно, а не вычисляется из наличия записи.
 EXPECTED_SERVERS = EXPECTED_SERVERS_NO_PLAYER
 
@@ -1299,7 +1298,16 @@ def main() -> int:
                              "test_bridges_no_console.py",
                              "test_no_console_windows.py",
                              "test_open_panel.py",
-                             "test_omniroute_update.py"):
+                             "test_omniroute_update.py",
+                             # 21.10.2026: версии мостов у авторов (PyPI/npm)
+                             # и отказ обновлять закреплённые. Сеть не ходит.
+                             "test_bridge_updates.py",
+                             # 21.10.2026: пароль панели OmniRoute — читается
+                             # из его базы read-only, хэш отказывает словами.
+                             "test_omniroute_password.py",
+                             # 21.10.2026: установка kinocut — поиск по трём
+                             # местам и версия из окружения, без сети.
+                             "test_kinocut_install.py"):
             _bt_path = HERE / _bridge_test
             if not _bt_path.is_file():
                 check(False, f"отдельная проверка мостов на месте: {_bridge_test}")
@@ -1670,6 +1678,29 @@ def main() -> int:
             if not (_ag_dst / f"{a}.md").is_file()
         ]
         check(not _missing_ag, f"все 13 агентов на месте (нет: {_missing_ag})")
+        # ---- refresh_agents: отдельная точка входа для вкладки «Обновление»
+        # Появилась 21.10.2026: у агентов своя кнопка, и ей нужен свой вход.
+        # Проверка не надеется на вчерашнее состояние: портит файл агента,
+        # зовёт ТОЛЬКО агентов и видит, что файл восстановлен, а реестр доехал.
+        _ag_probe = _ag_dst / "dokop.md"
+        _ag_orig = None
+        if _ag_probe.is_file():
+            _ag_orig = _ag_probe.read_bytes()
+            _ag_probe.write_text("# устаревший агент\n", encoding="utf-8")
+        _ag_msgs = core.refresh_agents(target)
+        _ag_index = target / "agents-index.json"
+        check(_ag_probe.read_bytes() == _ag_orig,
+              "refresh_agents восстановил устаревшего агента из конструктора")
+        check(_ag_index.is_file()
+              and _ag_index.read_bytes() == core.program_file(
+                  "agents-index.json").read_bytes(),
+              "реестр агентов (agents-index.json) доехал до базы")
+        _ag_again = core.refresh_agents(target)
+        check(not any("обновлён" in m for m in _ag_again),
+              f"повторный вызов агентов молчит, когда всё свежее: {_ag_again}")
+        _ag_again = core.refresh_agents(target)
+        check(not any("обновлён" in m for m in _ag_again),
+              f"повторный вызов агентов молчит, когда всё свежее: {_ag_again}")
         # каждый агент упомянут в инструкциях, иначе нейросеть о нём не узнает
         _inst_all = "\n".join(
             (target / t).read_text(encoding="utf-8")
@@ -13204,6 +13235,21 @@ def main() -> int:
         check("Проверить обновление" in _tab.btn_apply.toolTip(),
               f"и в подсказке сказано, что сначала проверить: "
               f"{_tab.btn_apply.toolTip()[:40]}")
+        # Скиллы и агенты — блок 21.10.2026: две кнопки и подпись с базами.
+        check(hasattr(_tab, "btn_sync_skills") and hasattr(_tab, "btn_sync_agents"),
+              "во вкладке есть кнопки обновления скиллов и агентов")
+        check(hasattr(_tab, "lbl_sync_bases") and _tab.lbl_sync_bases.text(),
+              f"и подпись говорит, сколько баз затронет кнопка: "
+              f"{_tab.lbl_sync_bases.text()[:44]}")
+        # Версии мостов — блок 21.10.2026: проверка ничего не меняет,
+        # кнопка обновления выключена до проверки.
+        check(hasattr(_tab, "btn_bridge_check")
+              and hasattr(_tab, "btn_bridge_update"),
+              "во вкладке есть кнопки версий мостов")
+        check(not _tab.btn_bridge_update.isEnabled(),
+              "обновление мостов выключено, пока проверка не назвала, что ставить")
+        check(hasattr(_tab, "lbl_bridge_versions"),
+              "и отчёт по версиям мостов есть куда показать")
         # Отсутствие бэкапа — не ошибка, а состояние. Кнопка обязана быть
         # выключена И с названной причиной, иначе человек гадает.
         _backup_here = su._backup_path(_root)

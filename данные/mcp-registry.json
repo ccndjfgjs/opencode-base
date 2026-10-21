@@ -1710,6 +1710,68 @@
       "verdict": "Работает без установки: сервер скачивает npx, подключения и пароли живут рядом с настройками. Кнопка «Включить» сначала проверяет соединение и только потом вписывает сервер в opencode"
     },
     {
+      "id": "kinocut",
+      "name": "Kinocut (монтаж видео для агентов: FFmpeg, субтитры, вертикалки, квитанции)",
+      "source": "https://github.com/KyaniteLabs/kinocut",
+      "install": "Мост — лаунчер программы tools/dbapp/launchers/kinocut_bridge_launcher.py. Kinocut — пакет Python: pip install kinocut или uvx --from kinocut kino (сервер — прежний mcp-video, переименован). Путь к kino.exe лаунчер читает из mcp-kinocut.json рядом с настройками opencode; файл пишет команда kinocut_bridge_launcher.py --set-kino <путь>. Проверено 21.10.2026: Kinocut 1.16.1, PyPI, рукопожатие за 2,1 секунды, 203 инструмента.",
+      "program_install": {
+        "program": "Kinocut",
+        "method": "venv-pip",
+        "winget_id": "",
+        "catalog_version": "",
+        "expected_publisher": "",
+        "expected_signer": "",
+        "signer_checked": "",
+        "needs_admin": false,
+        "needs_admin_verified": false,
+        "official_url": "https://kinocut.dev/",
+        "hand_over": false,
+        "publisher_trusted": true,
+        "bridge": "bundled",
+        "instructions": "Kinocut — pip-пакет: программа ставит его сама в окружение моста (tools/thirdparty/kinocut, pyproject с закреплённой версией с PyPI, uv sync). FFmpeg, если его нет, ставится через winget (Gyan.FFmpeg). Путь к kino.exe после установки вписывается в mcp-kinocut.json — это файл лаунчера, а НЕ opencode.jsonc: включение моста — отдельное действие. Лицензия Apache-2.0, всё локально, без ключей и аккаунтов.",
+        "checked": "2026-10-21",
+        "installed_version": "",
+        "version_measured": "",
+        "bridge_checked": false,
+        "known_good": [],
+        "version_note": "Версия PyPI на день проверки 1.16.1; в репозитории master уже дальше — закреплять пин нечем, пакет ставится обычным pip"
+      },
+      "connection": {
+        "kind": "local",
+        "command": [
+          "{DBAPP_PYTHON}",
+          "{PROGRAM}/tools/dbapp/launchers/kinocut_bridge_launcher.py"
+        ],
+        "warm_up": true,
+        "note": "Путь к kino.exe в конфиг opencode не попадает: он лежит в mcp-kinocut.json рядом с настройками, лаунчер читает файл и запускает kino --mcp. Без FFmpeg лаунчер отказывается словами. Прогрев безопасен: с закрытым stdin сервер завершается сам. Проверено 21.10.2026 живым рукопожатием."
+      },
+      "license": "Apache-2.0",
+      "tools_count": 203,
+      "why": "Монтаж видео без выдуманных флагов FFmpeg: обрезка, склейка, субтитры, перевод в вертикальный формат, нормализация звука, проверка качества и «видеоквитанция» с хешами после каждого рендера. Всё исполняется локально, медиа никуда не загружается.",
+      "auth": "Ничего не нужно: локальный сервер без аккаунтов и ключей для всей основной поверхности. Опциональные модули (расшифровка Whisper, разгон нейросетью) ставятся отдельно и сами качают модели — программа их не ставит.",
+      "requires": [
+        {
+          "what": "FFmpeg",
+          "check": "ffmpeg",
+          "type": "command",
+          "args": [
+            "-version"
+          ],
+          "note": "без FFmpeg сервер поднялся бы, но все инструменты падали бы на рендере, поэтому отсутствие — отказ, а не предупреждение"
+        },
+        {
+          "what": "путь к kino.exe записан",
+          "check": null,
+          "type": "manual",
+          "blocks": true,
+          "note": "файл mcp-kinocut.json рядом с настройками, ключ kino. Пишется командой kinocut_bridge_launcher.py --set-kino <путь>. Без пути мосту нечем быть мостом"
+        }
+      ],
+      "ready_here": true,
+      "ready_here_note": "21.10.2026 живая проверка на этой машине: Kinocut 1.16.1 в окружении, FFmpeg 9.0.2 через winget, kino trim 4с→1с отработал, MCP-рукопожатие 2,1 с. На другой машине готовность зависит от FFmpeg и записанного пути.",
+      "verdict": "Локальный монтаж без ключей: FFmpeg ставится winget, путь к kino записывается одной командой. Кнопка «Включить» сначала живая проверка лаунчера, потом запись в opencode"
+    },
+    {
       "id": "browsers",
       "name": "Браузеры (Chrome, Edge, Яндекс.Браузер, Firefox)",
       "source": "https://github.com/microsoft/playwright-mcp",

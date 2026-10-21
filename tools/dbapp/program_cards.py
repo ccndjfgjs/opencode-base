@@ -208,6 +208,12 @@ class Card:
         if self.can_install:
             label = f"Установить {self.install.program or self.name}"
             hint = "Поставит winget"
+            if self.install.action == programs.ACTION_VENV_PIP:
+                hint = ("Ставит pip-пакет в окружение моста: pyproject с "
+                        "закреплённой версией с PyPI и uv sync. FFmpeg, "
+                        "если его нет, ставится через winget. Мост в "
+                        "настройки opencode не вписывается — включение "
+                        "отдельное действие.")
             if self.needs_admin:
                 hint += "; может запросить права администратора"
             if self.hand_over:
@@ -560,6 +566,23 @@ def _lmarena_payload() -> tuple[bool, str]:
     )
 
 
+def _kinocut_payload() -> tuple[bool, str]:
+    """Есть ли kino.exe на машине.
+
+    Kinocut — не редактор с файлом установки: это pip-пакет, и вопрос
+    «найден ли kino» решается поиском по трём местам (файл настроек,
+    окружение программы, папка человека). Ответ нужен словами: путь
+    установки человек выбирал сам, и «не найдена» без перечня мест —
+    то же враньё, что «не найдена» при стоящей программе.
+    """
+    import kinocut_install  # noqa: PLC0415 — рядом лежит
+
+    found, path, reason = kinocut_install.find_kino()
+    if found:
+        return True, f"kino найден: {path}"
+    return False, reason
+
+
 #: Мосты, у которых состояние — это «развёрнут ли пакет», а не «есть ли
 #: файл программы». 19.10.2026 карточка OmniRoute молчала об этом: в ней
 #: стояло «программа не ставится», и человек не мог понять, развёрнут
@@ -567,6 +590,7 @@ def _lmarena_payload() -> tuple[bool, str]:
 BRIDGE_PAYLOAD_CHECKS = {
     "omniroute": _omniroute_payload,
     "lmarena": _lmarena_payload,
+    "kinocut": _kinocut_payload,
 }
 
 

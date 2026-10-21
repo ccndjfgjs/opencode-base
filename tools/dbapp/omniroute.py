@@ -298,7 +298,7 @@ def _tail(text: str, limit: int = 400) -> str:
 
 
 def _run(args: list[str], dest: Path, timeout: int = CLI_TIMEOUT,
-         progress=None) -> tuple[int, str, str]:
+         progress=None, extra_env: dict | None = None) -> tuple[int, str, str]:
     """Запускает CLI OmniRoute. Возвращает (код, stdout, stderr).
 
     Журнал самого OmniRoute идёт в stdout — в том числе строки про
@@ -307,6 +307,8 @@ def _run(args: list[str], dest: Path, timeout: int = CLI_TIMEOUT,
     """
     argv = command(args)
     env = config_env(dest, progress=progress)
+    if extra_env:
+        env.update(extra_env)
     try:
         proc = subprocess.run(
             argv, cwd=str(SERVER_DIR), env=env, capture_output=True, text=True,
@@ -435,8 +437,15 @@ def wait_ready(dest: Path, progress=None, timeout: int = READY_TIMEOUT) -> tuple
     return messages, errors
 
 
-def start(dest: Path, progress=None) -> tuple[list[str], list[str]]:
-    """Поднимает сервер OmniRoute и ждёт ответа API."""
+def start(dest: Path, progress=None,
+          initial_password: str | None = None) -> tuple[list[str], list[str]]:
+    """Поднимает сервер OmniRoute и ждёт ответа API.
+
+    initial_password — пароль, передаваемый серверу через
+    INITIAL_PASSWORD на ЭТОТ запуск. Он имеет силу только когда у
+    OmniRoute ещё нет своего пароля: тогда сервер создаёт из него хэш.
+    Если пароль уже стоит, сервер его игнорирует, и ничего не ломается.
+    """
     messages: list[str] = []
     errors: list[str] = []
 
@@ -454,6 +463,11 @@ def start(dest: Path, progress=None) -> tuple[list[str], list[str]]:
             "Node.js не найден: OmniRoute запускается на нём.",
         ]
 
+    # Пароль панели: если его ещё нет ни в базе, ни в файле, программа
+    # генерирует сама и передаёт серверу. Повторный запуск держит тот же
+    # пароль (файл), чужой хэш не трогается.
+    bootstrap_password = initial_password or ensure_panel_password(dest, progress)
+
     # Первый вопрос — «сервер уже отвечает?». Ждать здесь надо с
     # запасом: 19.10.2026 сервер был живой, но занят, и пяти секунд не
     # хватило. Программа решила, что сервера нет, и пошла поднимать
@@ -465,9 +479,13 @@ def start(dest: Path, progress=None) -> tuple[list[str], list[str]]:
         say("OmniRoute уже отвечает — второй экземпляр не поднимаю.")
     else:
         say("Запускаю OmniRoute: omniroute serve --daemon --no-open…")
+        extra_env = {}
+        if bootstrap_password:
+            extra_env["INITIAL_PASSWORD"] = bootstrap_password
         code, out, err = _run(
             ["serve", "--daemon", "--no-open", "--port", str(DEFAULT_PORT)],
             dest, timeout=CLI_TIMEOUT, progress=progress,
+            extra_env=extra_env,
         )
         if code != 0:
             # Отказ команды — ещё не отказ моста. Если API отвечает «ok»,
@@ -891,6 +909,210 @@ def _main(argv: list[str]) -> int:
     for line in errors:
         _say("Ошибка: " + line)
     return 1 if errors else 0
+
+
+    if value.startswith("$2"):
+        return "", ("пароль хранится хэшем — показать его технически "
+                    "нельзя, только сбросить в панели")
+    return value, ""
+
+
+#: Имя файла рядом с данными OmniRoute, где программа хранит ПЛОСКИЙ
+#: пароль панели, если она сама его создала. Образец — mcp-obs-password.txt:
+#: пароль генерируется программой, лежит рядом с настройками, в конфиг
+#: и в журналы не пишется. Файл читает только кнопка «Пароль».
+PASSWORD_FILE_NAME = "panel-password.txt"
+
+#: Алфавит без похожих знаков: 0/O и 1/l/I при копировании руками —
+#: верный способ ошибиться на середине и решать, что мост сломан.
+PASSWORD_ALPHABET = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def password_file(dest: Path | None = None) -> Path:
+    """Файл с паролем панели, который сгенерировала сама программа."""
+    return data_dir(dest or find_settings_dir()) / "panel-password.txt"
+
+
+def generate_panel_password(length: int = 18) -> str:
+    """Новый пароль панели. Без похожих знаков (0/O, 1/l/I)."""
+    import secrets
+
+    alphabet = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+def _password_state(dest: Path | None = None) -> tuple[str, str]:
+    """Откуда OmniRoute знает пароль. (состояние, пароль-если-открытый).
+
+    file — пароль, который программа сама сгенерировала при развёртывании
+    и записала рядом; plaintext — OmniRoute хранит его открытым текстом;
+    hash — хэш (показать нельзя); none — пароля нет вовсе.
+    """
+    path = password_file(dest)
+    if path.is_file():
+        try:
+            value = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return "", ""
+        if value:
+            return "file", value
+    db = data_dir(dest or find_settings_dir()) / "storage.sqlite"
+    if not db.is_file():
+        return "none", ""
+    uri = f"file:{db.as_posix()}?mode=ro"
+    try:
+        import sqlite3
+
+        conn = sqlite3.connect(uri, uri=True)
+        rows = conn.execute(
+            "SELECT value FROM key_value "
+            "WHERE namespace = 'settings' AND key = 'password'").fetchall()
+        conn.close()
+    except sqlite3.Error as exc:
+        return "error", str(exc)
+    if not rows:
+        return "none", ""
+    value = str(rows[0][0] or "")
+    if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+        try:
+            value = str(json.loads(value))
+        except ValueError:
+            pass
+    if value.startswith("$2"):
+        return "hash", ""
+    return "plaintext", value
+
+
+def _write_password_file(dest: Path, password: str) -> str:
+    """Сохраняет пароль рядом с данными. Возвращает причину отказа."""
+    try:
+        data_dir(dest).mkdir(parents=True, exist_ok=True)
+        password_file(dest).write_text(password, encoding="utf-8")
+        return ""
+    except OSError as exc:
+        return f"сохранить пароль рядом не удалось: {exc}"
+
+
+def ensure_panel_password(dest: Path, progress=None) -> tuple[str, str]:
+    """Пароль для запуска сервера. (пароль, ошибка).
+
+    Бутстрап OmniRoute берёт INITIAL_PASSWORD только когда пароль ещё
+    не задан вовсе: если хэш уже в базе, он не трогается — чужой пароль
+    программа не меняет молча. Здесь три случая:
+
+    * хэш уже стоит — пусто, ничего не делаем;
+    * файл с паролем есть — возвращаем его: повторный запуск держит
+      тот же пароль, а не плодит новый при каждом старте;
+    * нет ни того, ни другого — генерируем, пишем в файл и отдаём:
+      его увидит кнопка «Пароль» в панели трея, а в журнал он не идёт.
+    """
+    state, value = _password_state(dest)
+    if state == "hash":
+        return ""
+    if state == "file":
+        return value
+    if state == "plaintext":
+        # OmniRoute держит пароль открытым (старое хранилище) — сохраняем
+        # рядом, чтобы кнопка «Пароль» его показывала без чтения базы.
+        _write_password_file(dest, value)
+        return value
+    new = generate_panel_password()
+    failed = _write_password_file(dest, new)
+    if failed:
+        if progress:
+            progress(f"пароль панели не создан: {failed}")
+        return ""
+    if progress:
+        progress("Пароль панели сгенерирован и сохранён рядом с настройками — "
+                 "посмотреть: кнопка «Пароль» в панели трея.")
+    return new
+
+
+def reset_panel_password(new_password: str, dest: Path | None = None,
+                         progress=None) -> tuple[list[str], list[str]]:
+    """Задаёт новый пароль панели: хэш удаляется, новый вписывается.
+
+    порядок жёсткий: стоп сервера (писать в базу работающего сервера
+    нельзя), копия базы рядом (откат руками, если что-то пойдёт не так),
+    удаление хэша, старт с INITIAL_PASSWORD — на нём OmniRoute создаёт
+    хэш нового пароля. После запуска хэш перечитывается: «команда прошла»
+    не считается доказательством.
+    """
+    import time
+
+    if len(str(new_password or "")) < 8:
+        return [], ["новый пароль короче 8 знаков — такой не ставится"]
+    target = dest or find_settings_dir()
+    messages: list[str] = []
+    errors: list[str] = []
+
+    def say(text: str) -> None:
+        messages.append(text)
+        if progress:
+            progress(text)
+
+    db = data_dir(target) / "storage.sqlite"
+    if not db.is_file():
+        return [], ["базы данных OmniRoute нет — сбрасывать нечего: "
+                    "пароль задаётся при первом запуске"]
+    stopped, stopped_errors = stop(target, progress=progress)
+    if stopped_errors:
+        return stopped, stopped_errors
+
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    backup = db.with_name(f"storage.sqlite.bak-{stamp}")
+    try:
+        shutil.copy2(db, backup)
+    except OSError as exc:
+        return stopped, [f"копия базы перед сбросом не сделалась: {exc}"]
+    say(f"Копия базы OmniRoute: {backup.name}")
+
+    import sqlite3
+
+    try:
+        conn = sqlite3.connect(str(db))
+        conn.execute(
+            "DELETE FROM key_value "
+            "WHERE namespace = 'settings' AND key = 'password'")
+        conn.commit()
+        conn.close()
+    except sqlite3.Error as exc:
+        return stopped, [f"убрать старый хэш не вышло: {exc}"]
+    say("Старый пароль удалён из базы (копия базы сохранена рядом).")
+
+    state, value = _password_state(target)
+    if state != "none":
+        return stopped, [f"старый пароль не удался удалить: состояние "
+                         f"{state} — ничего не трогаю дальше"]
+
+    got, start_errors = start(target, progress=progress,
+                              initial_password=str(new_password))
+    return stopped + got, stopped_errors + start_errors
+
+
+def panel_password(settings_dir: Path | None = None) -> tuple[str, str]:
+    """Пароль входа в панель OmniRoute. (пароль, причина отказа).
+
+    Три источника, по порядку: файл с паролем, который сгенерировала
+    сама программа при первом запуске (тогда он показывается и
+    копируется), пароль открытым текстом в базе OmniRoute, и хэш —
+    его показать нельзя технически, тогда честный отказ словами.
+    Пароль в журнал и в сообщения не попадает — его видит только
+    диалог, который спросил человек.
+    """
+    import sqlite3
+
+    dest = settings_dir or find_settings_dir()
+    state, value = _password_state(dest)
+    if state in ("file", "plaintext"):
+        return value, ""
+    if state == "hash":
+        return "", ("пароль хранится хэшем — показать его технически "
+                    "нельзя; задать новый можно кнопкой «Новый пароль»")
+    if state == "error":
+        return "", f"база OmniRoute не читается: {value}"
+    return "", ("пароль панели ещё не создан — при первом запуске сервера "
+                "программа сгенерирует его сама и покажет кнопкой «Пароль»")
 
 
 if __name__ == "__main__":

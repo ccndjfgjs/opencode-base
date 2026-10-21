@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "unity-mcp-env"
+version = "0.1.0"
+description = "Постоянное окружение моста Unity: пакет CoplayDev mcpforunityserver."
+requires-python = ">=3.10"
+dependencies = [
+    # Сервер CoplayDev, закреплён той же версией, что и команда uvx
+    # в bridge_common.UNITY_FROM. Смена пина — одновременно здесь и там.
+    "mcpforunityserver==10.3.0",
+]
+
+[tool.uv]
+# Окружение ставится через `uv sync --project` (python_envs.ensure_venv)
+# и кнопкой «Настроить автоматически». Не пакет нашего кода — только
+# обвязка для uv, сервер живёт в PyPI-пакете.

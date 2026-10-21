@@ -35,13 +35,15 @@ if __package__ in (None, ""):
     import rtk  # type: ignore[import-not-found]
     import program_cards  # type: ignore[import-not-found]
     import program_groups  # type: ignore[import-not-found]
+    import programs  # type: ignore[import-not-found]
+    import kinocut_install  # type: ignore[import-not-found]
     import winget_install  # type: ignore[import-not-found]
 else:  # запуск как модуль
     from . import (core, ui, mcp_registry, opencode_caps, android_studio,
                    auto_improve, bridge_versions, bridges, browsers, caveman,
                    dbhub, editor_plugins, engine_setup, greenlight, lmarena,
-                   omniroute, program_cards, program_groups, pxpipe,
-                   qwen_review, rtk, winget_install)
+                   kinocut_install, omniroute, program_cards, program_groups,
+                   programs, pxpipe, qwen_review, rtk, winget_install)
 
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QFontMetrics
@@ -7192,8 +7194,8 @@ class ProgramsTab(ScrollPage):
         self._set_result(key, "Перепроверено")
 
     def _install_card(self, card: program_cards.Card) -> None:
-        if not card.install.winget_id:
-            self._set_result(card.key, "В реестре нет идентификатора winget — "
+        if not card.install.has_button:
+            self._set_result(card.key, "В реестре нет описания установки — "
                                        "ставить нечем.")
             return
         if self._worker is not None and self._worker.isRunning():
@@ -7204,14 +7206,28 @@ class ProgramsTab(ScrollPage):
             return
 
         self._set_busy(card.key, True)
-        self._set_result(card.key, "Запускаю winget…")
-        worker = Worker(
-            lambda progress: winget_install.install(card.install.winget_id, progress),
-            self,
-        )
+        if card.install.action == programs.ACTION_VENV_PIP:
+            # pip-пакет в своё окружение моста: у него свой ход, не winget.
+            self._set_result(card.key, "Ставлю pip-пакет в окружение моста…")
+            worker = Worker(
+                lambda progress: kinocut_install.install(progress),
+                self,
+            )
+        else:
+            if not card.install.winget_id:
+                self._set_result(card.key, "В реестре нет идентификатора "
+                                           "winget — ставить нечем.")
+                return
+            self._set_result(card.key, "Запускаю winget…")
+            worker = Worker(
+                lambda progress: winget_install.install(
+                    card.install.winget_id, progress),
+                self,
+            )
         worker.line.connect(
             lambda text, _kind, k=card.key: self._set_result(k, text))
-        worker.finished.connect(lambda k=card.key, w=worker: self._install_done(k, w))
+        worker.finished.connect(
+            lambda k=card.key, w=worker: self._install_done(k, w))
         self._worker = worker
         worker.start()
 

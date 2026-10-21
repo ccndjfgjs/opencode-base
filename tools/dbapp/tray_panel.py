@@ -26,8 +26,12 @@ from pathlib import Path
 from PyQt6.QtCore import QEvent, QPoint, Qt, QTimer
 from PyQt6.QtWidgets import (
     QApplication,
+    QDialog,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -94,6 +98,9 @@ CATEGORY_BY_ID = {
     # о подключённых мостах — полный прогон самопроверки поймал это
     # 19.10.2026.
     "mcp-doctor": "python",
+    # Kinocut — Python-пакет, лаунчер запускает kino --mcp из окружения
+    # человека (путь в mcp-kinocut.json). Раздел по тому, чем поднят.
+    "kinocut": "python",
     # Настоящего рантайма нет: плагин внутри IDE или сервер на стороне вендора.
     "android-studio": "ide",
     "roblox-studio": "ide",
@@ -122,6 +129,78 @@ REVIEWERS_TITLE = "Ревьюеры"
 PANEL_URLS = {
     "omniroute": lambda: omniroute.panel_url(),
 }
+
+#: Мосты, чей пароль панели можно показать. Значение — функция чтения,
+#: зовётся в момент нажатия: пароль в состояние строки и в журнал не
+#: попадает, его видит только диалог. Список не выдумывается: у моста
+#: без пароля кнопка была бы враньём.
+PANEL_PASSWORDS = {
+    "omniroute": omniroute.panel_password,
+}
+
+
+def _show_panel_password(window, read) -> None:
+    """Диалог с паролем панели моста.
+
+    Показывает пароль и даёт скопировать кнопкой: выделять длинный ключ
+    мышью — верный способ ошибиться на середине. Пароль в журнал и в
+    состояние строки не попадает — его видит только этот диалог. Отказ
+    (пароля нет или он хэш) показывается теми же словами, что и другие
+    отказы панели.
+    """
+    password, why = read()
+    if not password:
+        _notify(window, why)
+        return
+    dialog = QDialog(window)
+    dialog.setWindowTitle("Пароль панели")
+    layout = QVBoxLayout(dialog)
+    info = QLabel(
+        "Пароль входа в панель OmniRoute. Не пересылай его — он открывает "
+        "доступ к шлюзу на этой машине. В журналах его нет.")
+    info.setWordWrap(True)
+    field = QPlainTextEdit(password)
+    field.setReadOnly(True)
+    field.setMaximumHeight(60)
+    copy_btn = QPushButton("Скопировать")
+    close_btn = QPushButton("Закрыть")
+    buttons_row = QHBoxLayout()
+    buttons_row.addWidget(copy_btn)
+    buttons_row.addWidget(close_btn)
+    layout.addWidget(info)
+    layout.addWidget(field)
+    layout.addLayout(buttons_row)
+    copy_btn.clicked.connect(
+        lambda: QApplication.clipboard().setText(password))
+    close_btn.clicked.connect(dialog.accept)
+    dialog.exec()
+
+
+def _reset_panel_password(window) -> None:
+    """Кнопка «Новый пароль»: задаёт новый пароль панели OmniRoute.
+
+    Для случая, когда старый пароль утерян: OmniRoute хранит только
+    хэш, и показать его нельзя — остаётся задать новый. Ход: стоп
+    сервера, копия его базы рядом, удаление хэша, старт с новым
+    паролем, перечитывание хэша. Идёт синхронно: операция редкая,
+    секунд двадцать — панель занята, но не сломана.
+    """
+    text, ok = QInputDialog.getText(
+        window, "Новый пароль панели",
+        "Новый пароль панели OmniRoute (не меньше 8 знаков):")
+    if not ok or not text.strip():
+        return
+    QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+    try:
+        done, errors = omniroute.reset_panel_password(text.strip())
+    except Exception as exc:  # noqa: BLE001 — отказ панели словами
+        errors, done = [f"сброс не удался: {exc}"], []
+    finally:
+        QApplication.restoreOverrideCursor()
+    if errors:
+        _notify(window, " ".join(errors))
+        return
+    _notify(window, " ".join(done[-1:]))
 
 
 def _open_server_panel(window, url: str) -> None:
@@ -287,6 +366,18 @@ def _server_entry(caps, window, server) -> Entry:
         actions.append(("Открыть",
                         lambda srv=server, url=panel: _open_server_panel(
                             window, url)))
+    # У мостов с паролем панели — кнопка «Пароль»: показывает его в
+    # диалоге и даёт скопировать. Список тот же принцип, что у PANEL_URLS:
+    # запись есть только у моста, у которого пароль панели правда есть.
+    password_reader = PANEL_PASSWORDS.get(server.id)
+    if password_reader is not None:
+        actions.append(("Пароль",
+                        lambda read=password_reader: _show_panel_password(
+                            window, read)))
+        # У моста с паролем панели есть и сброс: OmniRoute хранит хэш,
+        # утерянный пароль показать нельзя — остаётся задать новый.
+        actions.append(("Новый пароль",
+                        lambda: _reset_panel_password(window)))
     if checked:
         # Требования уже проверены: повторно звать проверку незачем,
         # достаточно открыть подробности.

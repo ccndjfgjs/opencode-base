@@ -19,7 +19,11 @@
         "pinned_in": "",
         "note": "npx -y без метки: приедет последняя на момент запуска"
       },
-      "plugin": null
+      "plugin": null,
+      "update": {
+        "family": "npm",
+        "package": "windows-admin-mcp"
+      }
     },
     "ghidra-mcp": {
       "program": {
@@ -50,7 +54,11 @@
         "pinned_in": "",
         "note": "npx -y без метки: приедет последняя на момент запуска"
       },
-      "plugin": null
+      "plugin": null,
+      "update": {
+        "family": "npm",
+        "package": "@sbroenne/mcp-server-excel"
+      }
     },
     "blender": {
       "program": {
@@ -68,6 +76,10 @@
         "kind": "manual",
         "version": null,
         "note": "аддон ставится командой uvx, версия аддона не закреплена"
+      },
+      "update": {
+        "family": "pypi",
+        "package": "mcp-for-blender"
       }
     },
     "adobe-creativity": {
@@ -148,6 +160,11 @@
         "kind": "package",
         "version": "10.3.0",
         "note": "метка релиза закреплена: #v10.3.0"
+      },
+      "update": {
+        "family": "pypi",
+        "package": "mcpforunityserver",
+        "pin": "10.3.0"
       }
     },
     "unreal": {
@@ -196,6 +213,11 @@
         "family": "godot-ai",
         "kind": "archive",
         "version": "4.3.0"
+      },
+      "update": {
+        "family": "pypi",
+        "package": "godot-ai",
+        "pin": "4.3.0"
       }
     },
     "tiktok": {
@@ -208,7 +230,12 @@
         "pinned": true,
         "pinned_in": "bridge_common.TIKTOK_PACKAGE"
       },
-      "plugin": null
+      "plugin": null,
+      "update": {
+        "family": "npm",
+        "package": "@getmcpads/tiktok-ads-mcp-server",
+        "pin": "2.0.1"
+      }
     },
     "capcut": {
       "program": {
@@ -299,7 +326,29 @@
         "pinned_in": "",
         "note": "запуск через npx без метки: приедет последняя"
       },
-      "plugin": null
+      "plugin": null,
+      "update": {
+        "family": "npm",
+        "package": "@bytebase/dbhub"
+      }
+    },
+    "kinocut": {
+      "program": {
+        "any": true,
+        "text": "FFmpeg на PATH (проверяет лаунчер живьём)"
+      },
+      "mcp_server": {
+        "spec": "kino --mcp (сервер kinocut, прежний mcp-video)",
+        "pinned": false,
+        "pinned_in": "",
+        "note": "версию выбирает pip при установке (на 21.10.2026 PyPI даёт 1.16.1); путь к kino.exe лежит в mcp-kinocut.json рядом с настройками"
+      },
+      "plugin": null,
+      "update": {
+        "family": "pypi",
+        "package": "kinocut",
+        "venv_hint": "config"
+      }
     },
     "browsers": {
       "program": {
