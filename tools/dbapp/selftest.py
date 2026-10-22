@@ -12277,6 +12277,16 @@ def main() -> int:
 
     _repo_mode = _is_repo(_prog)
     if _repo_mode:
+        # Обычный `git clone` подмодуль не забирает, и проверки ниже падают
+        # не из-за программы: папка пустая, файлов нет. Человеку это выглядит
+        # как поломка, а на самом деле клон недособран. Поэтому перед проверкой
+        # подмодуль дозабирается — тихо, если всё на месте, и с честной строкой,
+        # если пришлось сходить в сеть. Проверять после этого надо честно: если
+        # дозабрать не вышло, проверки ниже упадут по-настоящему.
+        _healed, _note = core.update_submodules(_prog)
+        if "и так на месте" not in _note:
+            echo(f"     подмодуль: {_note}")
+
         _gm = _prog / ".gitmodules"
         check(_gm.is_file(), ".gitmodules есть: подмодуль заявлен явно")
         _gm_text = (_gm.read_text(encoding="utf-8", errors="ignore")
@@ -12312,6 +12322,17 @@ def main() -> int:
           "уведомление называет тот же коммит, что и репозиторий")
     check(_sub_dir.is_dir() and (_sub_dir / "package.json").is_file(),
           "исходники моста не пустая папка: есть package.json")
+
+    # Починка подмодуля — не «на всякий случай», а код, который обязан работать.
+    # Без этих проверок её откат был бы незаметен: клон и дальше недособранный,
+    # а виноват всегда был бы git.
+    check(not _repo_mode or core.is_git_repo(_prog),
+          "core.is_git_repo отвечает про git-репозиторий")
+    check(callable(getattr(core, "update_submodules", None)),
+          "core.update_submodules на месте: клон чинит сам себя")
+    if _repo_mode and callable(getattr(core, "missing_submodules", None)):
+        check(core.missing_submodules(_prog) == [],
+              "незабранных подмодулей не осталось после починки")
 
     # Навык не должен учить не доверять настоящему пути: раньше он именно
     # так и делал, называя исходники мёртвым Python-мостом, которого там нет.
