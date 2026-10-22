@@ -51,19 +51,19 @@ class FirstRunDialog(QDialog):
 
         title = QLabel("Конструктор баз данных")
         title.setStyleSheet(
-            "font-size: 22px; font-weight: 700; color: #4c9aff;"
+            f"font-size: 22px; font-weight: 700; color: {ui.ACCENT};"
         )
         outer.addWidget(title)
 
         body = QLabel(WELCOME_TEXT)
         body.setWordWrap(True)
-        body.setStyleSheet("font-size: 13px; color: #e6e6e8;")
+        body.setStyleSheet(f"font-size: 13px; color: {ui.TEXT};")
         outer.addWidget(body)
 
         box = QWidget()
         box.setStyleSheet(
-            "background: #26272b; border: 1px solid #3a3b41; "
-            "border-radius: 8px; padding: 16px;"
+            f"background: {ui.PANEL}; border: 1px solid {ui.BORDER}; "
+            "border-radius: 16px; padding: 16px;"
         )
         box_layout = QVBoxLayout(box)
         box_layout.setContentsMargins(0, 0, 0, 0)
@@ -71,7 +71,7 @@ class FirstRunDialog(QDialog):
 
         box_title = QLabel("Папка для баз данных")
         box_title.setStyleSheet(
-            "font-size: 13px; font-weight: 600; color: #e6e6e8; border: none;"
+            f"font-size: 13px; font-weight: 600; color: {ui.TEXT}; border: none;"
         )
         box_layout.addWidget(box_title)
 
@@ -79,13 +79,13 @@ class FirstRunDialog(QDialog):
         path_label.setWordWrap(True)
         path_label.setStyleSheet(
             "font-family: Consolas, monospace; font-size: 12px; "
-            "color: #9a9ba1; border: none;"
+            f"color: {ui.TEXT_DIM}; border: none;"
         )
         box_layout.addWidget(path_label)
 
         info = QLabel(DATA_BASES_INFO.format(path=self.base_folder))
         info.setWordWrap(True)
-        info.setStyleSheet("font-size: 13px; color: #e6e6e8; border: none;")
+        info.setStyleSheet(f"font-size: 13px; color: {ui.TEXT}; border: none;")
         box_layout.addWidget(info)
 
         outer.addWidget(box)

@@ -216,4 +216,4 @@ def place_card(card, placed: dict[str, Placement]) -> Placement:
                          f"{', '.join(GROUP_TITLES.get(key, key) for key in groups)}")
     first = items[0]
     return Placement(first.bridge, first.group,
-                     f"по мосту {first.bridge}: {first.rule}")
+                     f"по мосту {first.bridge} — {first.rule}")

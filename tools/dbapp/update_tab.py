@@ -47,6 +47,7 @@ import omniroute_update as _orupd  # noqa: E402
 import update_download as _dl  # noqa: E402
 import update_source as _src  # noqa: E402
 import bridge_updates as _bupd  # noqa: E402
+import ui  # noqa: E402
 from ui import flow_row, label  # noqa: E402
 
 # ScrollPage и Worker живут в main.py, а не в ui.py: `label` — это про вид,
@@ -102,8 +103,11 @@ class UpdateTab(ScrollPage):
         bl = QVBoxLayout(box)
         self.lbl_local = QLabel("—")
         self.lbl_local.setWordWrap(True)
-        self.lbl_remote = QLabel("—")
+        # До первой проверки прочерк ничего не объяснял: человек видел
+        # пустое поле и не понимал, это «нет обновлений» или «не смотрели».
+        self.lbl_remote = QLabel("ещё не проверялось")
         self.lbl_remote.setWordWrap(True)
+        self.lbl_remote.setStyleSheet(f"color: {ui.TEXT_DIM};")
         self.lbl_rate = QLabel("")
         self.lbl_rate.setWordWrap(True)
         bl.addWidget(label("Локальная версия", kind="dim"))
@@ -117,9 +121,16 @@ class UpdateTab(ScrollPage):
         prog = QGroupBox("Ход загрузки")
         pl = QVBoxLayout(prog)
         self.progress = QProgressBar()
-        self.progress.setVisible(False)
-        self.lbl_step = QLabel("")
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.progress.setTextVisible(False)
+        self.progress.setFixedHeight(10)
+        self.progress.setVisible(True)
+        self.lbl_step = QLabel(
+            "Проверка ещё не запускалась — нажмите «Проверить обновление»."
+        )
         self.lbl_step.setWordWrap(True)
+        self.lbl_step.setStyleSheet(f"color: {ui.TEXT_DIM};")
         pl.addWidget(self.progress)
         pl.addWidget(self.lbl_step)
         outer.addWidget(prog)
@@ -359,7 +370,10 @@ class UpdateTab(ScrollPage):
         base = self.program_dir()
         here = _selfupdate.local_version(base)
         self.btn_check.setEnabled(False)
+        self.lbl_step.setStyleSheet(f"color: {ui.TEXT};")
         self.lbl_step.setText("спрашиваю у репозитория…")
+        self.progress.setRange(0, 0)
+        self.progress.setVisible(True)
 
         def work(progress):
             source = _src.load_source(base)
@@ -405,6 +419,11 @@ class UpdateTab(ScrollPage):
         # отдельно и кнопку применения не трогает. Забыть это — значит
         # скачать не то, что человек только что увидел в подписи.
         self._found = (tag, version)
+        self.lbl_remote.setText(f"{version}  (метка {tag})")
+        self.lbl_remote.setStyleSheet(f"color: {ui.TEXT};")
+        self.progress.setRange(0, 100)
+        self.progress.setValue(100)
+        self.lbl_step.setStyleSheet(f"color: {ui.TEXT};")
         prerelease = bool(meta.get("prerelease"))
         newer = _vs.version_tuple(version) > _vs.version_tuple(here)
         self.btn_apply.setEnabled(newer)
@@ -436,6 +455,7 @@ class UpdateTab(ScrollPage):
         self.btn_check.setEnabled(False)
         self.progress.setVisible(True)
         self.progress.setRange(0, 0)  # не знаем размера заранее
+        self.lbl_step.setStyleSheet(f"color: {ui.TEXT};")
 
         tag, version = self._pending()
 
@@ -489,8 +509,10 @@ class UpdateTab(ScrollPage):
         self.lbl_step.setText(text)
 
     def _apply_done(self) -> None:
-        self.progress.setVisible(False)
+        # Полосу не прячем: пустой блок «Ход загрузки» выглядел как
+        # недоделанный. Она остаётся заполненной, а подпись говорит итог.
         self.progress.setRange(0, 100)
+        self.progress.setValue(100)
         self.btn_check.setEnabled(True)
         worker, self._worker = self._worker, None
         if worker is None or worker.result is None:

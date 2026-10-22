@@ -17,6 +17,7 @@ if __package__ in (None, ""):
     import core  # type: ignore[import-not-found]
     import ui  # type: ignore[import-not-found]
     import mcp_registry  # type: ignore[import-not-found]
+    import mcp_categories  # type: ignore[import-not-found]
     import opencode_caps  # type: ignore[import-not-found]
     import android_studio  # type: ignore[import-not-found]
     import bridge_versions  # type: ignore[import-not-found]
@@ -39,14 +40,15 @@ if __package__ in (None, ""):
     import kinocut_install  # type: ignore[import-not-found]
     import winget_install  # type: ignore[import-not-found]
 else:  # запуск как модуль
-    from . import (core, ui, mcp_registry, opencode_caps, android_studio,
+    from . import (core, ui, mcp_categories, mcp_registry, opencode_caps,
+                   android_studio,
                    auto_improve, bridge_versions, bridges, browsers, caveman,
                    dbhub, editor_plugins, engine_setup, greenlight, lmarena,
                    kinocut_install, omniroute, program_cards, program_groups,
                    programs, pxpipe, qwen_review, rtk, winget_install)
 
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QFont, QFontMetrics
+from PyQt6.QtGui import QColor, QFont, QFontMetrics
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -72,6 +74,7 @@ from PyQt6.QtWidgets import (
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QFrame,
     QWidget,
@@ -228,6 +231,13 @@ class ScrollPage(QScrollArea):
             if not label.wordWrap() or label.width() <= 0:
                 continue
             needed = label.heightForWidth(label.width())
+            # heightForWidth не всегда считает явные переносы «\n»:
+            # последняя строка такого текста срезалась пополам. Считаем
+            # строки сами и берём высоту с запасом.
+            lines = label.text().count("\n") + 1
+            if lines > 1:
+                by_lines = lines * label.fontMetrics().lineSpacing() + 4
+                needed = max(needed, by_lines)
             if needed > 0 and label.minimumHeight() != needed:
                 label.setMinimumHeight(needed)
 
@@ -365,7 +375,7 @@ class CreateTab(ScrollPage):
 
     def _build(self, page: QWidget) -> None:
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(14, 14, 14, 14)
+        outer.setContentsMargins(18, 16, 18, 16)
         outer.setSpacing(10)
 
         outer.addWidget(
@@ -400,7 +410,9 @@ class CreateTab(ScrollPage):
         btn_pick_parent.clicked.connect(self._pick_parent)
 
         row1 = QHBoxLayout()
-        row1.addWidget(QLabel("Папка-родитель:"))
+        label_parent = QLabel("Папка-родитель:")
+        label_parent.setMinimumWidth(130)
+        row1.addWidget(label_parent)
         row1.addWidget(self.parent_edit, 1)
         row1.addWidget(btn_pick_parent)
         path_layout.addLayout(row1)
@@ -415,12 +427,15 @@ class CreateTab(ScrollPage):
             "и токены даже по просьбе, а предложит хранилище. "
             "По умолчанию выключено."
         )
-        path_layout.addWidget(self.chk_sensitive)
+        # Чекбокс про секреты стоит внизу блока, а не между путём и
+        # именем: по смыслу он про настройку базы, а не про имя папки.
 
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("например: Моя-база")
         row2 = QHBoxLayout()
-        row2.addWidget(QLabel("Имя новой базы:  "))
+        label_name = QLabel("Имя новой базы:")
+        label_name.setMinimumWidth(130)
+        row2.addWidget(label_name)
         row2.addWidget(self.name_edit, 1)
         path_layout.addLayout(row2)
 
@@ -434,6 +449,12 @@ class CreateTab(ScrollPage):
 
         self.path_preview = ui.label("", kind="dim", wrap=True)
         path_layout.addWidget(self.path_preview)
+        path_layout.addSpacing(4)
+        path_layout.addWidget(ui.line())
+        path_layout.addWidget(self.chk_sensitive)
+        path_layout.addWidget(ui.label(
+            "Без разрешения нейросеть не запишет в базу пароли, ключи и "
+            "токены — даже по прямой просьбе.", kind="dim", wrap=True))
         outer.addWidget(box_path)
 
         # --- шаг 2: чем наполнить
@@ -452,6 +473,7 @@ class CreateTab(ScrollPage):
         )
         content_layout.addWidget(self.blank_hint)
         content_layout.addWidget(self.radio_template)
+        content_layout.addSpacing(8)
 
         self.template_edit = QLineEdit()
         self.template_edit.setPlaceholderText("Папка существующей базы с файлами")
@@ -461,7 +483,9 @@ class CreateTab(ScrollPage):
         self.btn_pick_template.clicked.connect(self._pick_template)
 
         row3 = QHBoxLayout()
-        row3.addWidget(QLabel("Откуда взять:"))
+        label_source = QLabel("Откуда взять:")
+        label_source.setMinimumWidth(130)
+        row3.addWidget(label_source)
         row3.addWidget(self.template_edit, 1)
         row3.addWidget(self.btn_pick_template)
         content_layout.addLayout(row3)
@@ -515,11 +539,14 @@ class CreateTab(ScrollPage):
         for ident, title in core.SHORTCUT_PLACES:
             self.link_place.addItem(title, ident)
         row4 = QHBoxLayout()
-        row4.addWidget(QLabel("Где разместить:"))
+        label_place = QLabel("Где разместить:")
+        label_place.setMinimumWidth(130)
+        row4.addWidget(label_place)
         row4.addWidget(self.link_place, 1)
         link_layout.addLayout(row4)
 
-        self.link_custom_label = QLabel("Своя папка:   ")
+        self.link_custom_label = QLabel("Своя папка:")
+        self.link_custom_label.setMinimumWidth(130)
         self.link_custom_edit = QLineEdit()
         self.link_custom_edit.setPlaceholderText("Своя папка для ярлыка")
         self.link_custom_edit.setVisible(False)
@@ -577,12 +604,17 @@ class CreateTab(ScrollPage):
         self.btn_obsidian = QPushButton("Открыть в Obsidian")
         self.btn_obsidian.setEnabled(False)
         self.btn_obsidian.clicked.connect(self._open_obsidian)
-        buttons.addWidget(self.btn_preview)
-        buttons.addStretch(1)
-        buttons.addWidget(self.btn_open)
-        buttons.addWidget(self.btn_obsidian)
-        buttons.addWidget(self.btn_create)
-        outer.addLayout(buttons)
+        # Кнопки живут в нижней панели окна, а не в прокрутке: раньше
+        # «Создать базу» уезжала за экран вместе с длинной страницей.
+        self.footer = QWidget()
+        footer_layout = QHBoxLayout(self.footer)
+        footer_layout.setContentsMargins(0, 6, 0, 0)
+        footer_layout.setSpacing(8)
+        footer_layout.addWidget(self.btn_preview)
+        footer_layout.addStretch(1)
+        footer_layout.addWidget(self.btn_open)
+        footer_layout.addWidget(self.btn_obsidian)
+        footer_layout.addWidget(self.btn_create)
 
         self.log = ui.LogView()
         self.log.setMinimumHeight(170)
@@ -830,6 +862,22 @@ class CreateTab(ScrollPage):
 
     def _name_changed(self, text: str) -> None:
         parent = self.parent_edit.text().strip()
+        # Пустое поле — ещё не ошибка. Красное «Имя не может быть пустым»
+        # горело сразу при открытии вкладки, хотя человек ничего не вводил.
+        # Показываем его только после попытки проверить или создать базу.
+        if not text.strip() and not getattr(self, "_name_tried", False):
+            self.name_edit.setProperty("bad", "false")
+            self.name_edit.style().unpolish(self.name_edit)
+            self.name_edit.style().polish(self.name_edit)
+            self.name_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
+            self.name_hint.setText(
+                "Имя станет именем папки. Пробелы и буквы любого языка "
+                "разрешены; нельзя только  < > : \" / \\ | ? *"
+            )
+            self.path_preview.setText("")
+            self.btn_create.setEnabled(False)
+            self._plan = None
+            return
         try:
             name = core.validate_name(text)
         except core.NameError_ as exc:
@@ -864,6 +912,8 @@ class CreateTab(ScrollPage):
         return core.PROGRAMS_BY_ID.get(item.data(1000))
 
     def _make_plan(self, *, quiet: bool = False) -> core.CreationPlan | None:
+        # С этого момента пустое имя — ошибка, и её видно красным.
+        self._name_tried = True
         parent = Path(self.parent_edit.text().strip() or str(Path.home()))
         template = None
         if self.radio_template.isChecked():
@@ -1154,7 +1204,7 @@ class ImportTab(ScrollPage):
 
     def _build(self, page: QWidget) -> None:
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(14, 14, 14, 14)
+        outer.setContentsMargins(18, 16, 18, 16)
         outer.setSpacing(10)
         outer.addWidget(
             ui.label(
@@ -1183,9 +1233,17 @@ class ImportTab(ScrollPage):
         self.btn_scan.clicked.connect(self._scan_bases)
         self.btn_refresh_mine = QPushButton("Обновить список")
         self.btn_refresh_mine.clicked.connect(self._fill_mine)
-        self.btn_forget_mine = QPushButton("Убрать из список")
+        self.btn_forget_mine = QPushButton("Убрать из списка")
         self.btn_forget_mine.setEnabled(False)
         self.btn_forget_mine.clicked.connect(self._forget_mine)
+        # Временные папки (Temp) попадают в список после самопроверок и
+        # остаются мусором. Убираем их одной кнопкой, папки не трогаем.
+        self.btn_forget_temp = QPushButton("Убрать временные")
+        self.btn_forget_temp.setToolTip(
+            "Убрать из списка записи, чьи папки лежат во временной папке "
+            "Windows. Сами папки не удаляются"
+        )
+        self.btn_forget_temp.clicked.connect(self._forget_temp)
         self.btn_delete_mine = QPushButton("Удалить базу")
         self.btn_delete_mine.setEnabled(False)
         self.btn_delete_mine.setObjectName("danger")
@@ -1193,16 +1251,38 @@ class ImportTab(ScrollPage):
         row_mine.addWidget(self.btn_scan)
         row_mine.addWidget(self.btn_refresh_mine)
         row_mine.addWidget(self.btn_forget_mine)
-        row_mine.addWidget(self.btn_delete_mine)
+        row_mine.addWidget(self.btn_forget_temp)
         row_mine.addStretch(1)
         source_layout.addLayout(row_mine)
 
         self.mine_hint = ui.label("", kind="dim", wrap=True)
         source_layout.addWidget(self.mine_hint)
 
-        source_layout.addWidget(
-            ui.label("…или укажите папку вручную:", kind="dim")
-        )
+        # Опасное действие — отдельно от безопасных и справа: случайно
+        # нажать «Удалить базу» рядом с «Обновить список» слишком просто.
+        danger_row = QHBoxLayout()
+        self.chk_show_temp = QCheckBox("Показывать временные")
+        self.chk_show_temp.setToolTip(
+            "Записи из временной папки Windows — обычно следы самопроверок")
+        self.chk_show_temp.toggled.connect(self._fill_mine)
+        danger_row.addWidget(self.chk_show_temp)
+        danger_row.addStretch(1)
+        danger_row.addWidget(self.btn_delete_mine)
+        source_layout.addLayout(danger_row)
+
+        # Ручной ввод — под спойлером: выбранный пункт списка и так
+        # подставляет путь, и поле только дублировало его.
+        self.manual_toggle = QToolButton()
+        self.manual_toggle.setText("Указать папку вручную")
+        self.manual_toggle.setCheckable(True)
+        self.manual_toggle.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.manual_toggle.setArrowType(Qt.ArrowType.RightArrow)
+        self.manual_toggle.setObjectName("cardSpoiler")
+        self.manual_box = QWidget()
+        manual_layout = QVBoxLayout(self.manual_box)
+        manual_layout.setContentsMargins(0, 4, 0, 0)
+        manual_layout.setSpacing(6)
         self.source_edit = QLineEdit()
         self.source_edit.setPlaceholderText("Папка с файлами базы")
         btn_browse = QPushButton("Обзор…")
@@ -1211,7 +1291,18 @@ class ImportTab(ScrollPage):
         row1.addWidget(QLabel("Папка базы:"))
         row1.addWidget(self.source_edit, 1)
         row1.addWidget(btn_browse)
-        source_layout.addLayout(row1)
+        manual_layout.addLayout(row1)
+        self.manual_box.setVisible(False)
+
+        def toggle_manual(checked: bool) -> None:
+            self.manual_box.setVisible(checked)
+            self.manual_toggle.setArrowType(
+                Qt.ArrowType.DownArrow if checked
+                else Qt.ArrowType.RightArrow)
+
+        self.manual_toggle.toggled.connect(toggle_manual)
+        source_layout.addWidget(self.manual_toggle)
+        source_layout.addWidget(self.manual_box)
         self.source_hint = ui.label("", kind="dim", wrap=True)
         source_layout.addWidget(self.source_hint)
         outer.addWidget(box_source)
@@ -1322,7 +1413,10 @@ class ImportTab(ScrollPage):
                     name = str(data.get("name") or base.name)
                 except (OSError, ValueError):
                     pass
-            text = f"{name}  —  {base}"
+            short = self._short_path(str(base))
+            text = f"{name}  —  {short}"
+            if self._is_temp_path(str(base)):
+                text += "   (временная)"
             row = QListWidgetItem(text)
             row.setData(1000, str(base))
             row.setToolTip(str(base))
@@ -1346,18 +1440,25 @@ class ImportTab(ScrollPage):
         main_base = core.current_base("opencode")
         main_key = str(main_base).lower() if main_base is not None else None
         entries = core.read_bases()
+        if not self.chk_show_temp.isChecked():
+            entries = [item for item in entries
+                       if not self._is_temp_path(str(item.get("path", "")))]
         for item in entries:
             folder = Path(str(item.get("path", "")))
             name = str(item.get("name") or folder.name)
             when = str(item.get("when", ""))[:10]
-            text = f"{name}  —  {folder}"
-            if when:
-                text += f"   (создана {when})"
+            short = self._short_path(str(folder))
+            text = f"{name}  —  {short}"
+            if self._is_temp_path(str(folder)):
+                text += "   (временная)"
+            # Дату создания держим в подсказке: в строке она обрезалась
+            # и мешала видеть путь.
+            tip = str(folder) + (f"\nсоздана {when}" if when else "")
             if main_key and str(folder).lower() == main_key:
                 text += "   ← основная"
             row = QListWidgetItem(text)
             row.setData(1000, str(folder))
-            row.setToolTip(str(folder))
+            row.setToolTip(tip)
             self.mine_list.addItem(row)
 
         if not entries:
@@ -1389,6 +1490,27 @@ class ImportTab(ScrollPage):
         has_item = self.mine_list.currentItem() is not None
         self.btn_forget_mine.setEnabled(has_item)
         self.btn_delete_mine.setEnabled(has_item)
+
+    @staticmethod
+    def _is_temp_path(path: str) -> bool:
+        """Лежит ли папка во временной папке Windows."""
+        low = str(path).replace("/", "\\").lower()
+        return "\\temp\\" in low or "\\tmp\\" in low
+
+    @staticmethod
+    def _short_path(path: str, limit: int = 62) -> str:
+        """Путь с многоточием посередине: видны диск и имя папки.
+
+        Слева важны диск и верхние папки, справа — сама база; середина
+        («Users\\Dedy_Sher\\AppData\\Local\\Temp\\...») ничего не говорит
+        и как раз её можно потерять.
+        """
+        text = str(path)
+        if len(text) <= limit:
+            return text
+        tail = max(24, limit // 2)
+        head = max(10, limit - tail - 1)
+        return text[:head].rstrip("\\/") + "…" + text[-tail:]
 
     def _mine_chosen(self) -> None:
         """Подставляет путь выбранной базы в поле."""
@@ -1427,6 +1549,34 @@ class ImportTab(ScrollPage):
         core.forget_base(folder)
         self._fill_mine()
 
+    def _forget_temp(self) -> None:
+        """Убирает из списка записи с временными папками. Файлы целы."""
+        entries = core.read_bases()
+        temp = [item for item in entries
+                if self._is_temp_path(str(item.get("path", "")))]
+        if not temp:
+            QMessageBox.information(
+                self, "Временных записей нет",
+                "В списке нет баз из временной папки Windows — убирать нечего.")
+            return
+        answer = QMessageBox.question(
+            self,
+            "Убрать временные записи",
+            f"Убрать из списка {len(temp)} записей с временными папками?\n\n"
+            "Сама папка останется на месте, файлы не удаляются.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        for item in temp:
+            folder = Path(str(item.get("path", "")))
+            if folder.name:
+                core.forget_base(folder)
+        self._fill_mine()
+        self.mine_hint.setText(
+            f"Убрано временных записей: {len(temp)}. Папки на диске целы.")
+
     def _delete_mine(self) -> None:
         """Полностью удаляет базу с диска и из списка."""
         item = self.mine_list.currentItem()
@@ -1435,18 +1585,17 @@ class ImportTab(ScrollPage):
         folder = Path(str(item.data(1000) or ""))
         if not folder.name:
             return
-        answer = QMessageBox.question(
+        # Удаление необратимо, поэтому подтверждение — вводом имени:
+        # одну кнопку «Да» нажимают не глядя.
+        typed, ok = QInputDialog.getText(
             self,
             "Удалить базу",
-            f"Удалить базу «{folder.name}»?\n\n"
             f"С диска удалится вся папка:\n{folder}\n\n"
-            "Вместе с ней пропадут её файлы: профиль, факты, проекты, "
+            "Вместе с ней пропадут файлы базы: профиль, факты, проекты, "
             "библиотека и наработки.\n\n"
-            "Продолжить?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            f"Чтобы подтвердить, введите имя базы: {folder.name}",
         )
-        if answer != QMessageBox.StandardButton.Yes:
+        if not ok or typed.strip() != folder.name:
             return
         ok, message = core.delete_base(folder, confirm=True)
         if ok:
@@ -1564,7 +1713,12 @@ class ImportTab(ScrollPage):
             self.source_hint.setText(подсказка)
             self.btn_run.setEnabled(False)
             return
-        files = ", ".join(str(f) for f in info["files"])
+        # Файлы переносим вручную, по три в строку: одна общая строка
+        # «Файлы: …» на широком списке уезжала за правый край панели,
+        # и хвост списка просто пропадал.
+        names = [str(f) for f in info["files"]]
+        chunks = [", ".join(names[i:i + 3]) for i in range(0, len(names), 3)]
+        files = ",\n".join(chunks)
         marker = info["marker"] or {}
         created = f" Создана: {marker['created'][:10]}." if marker.get("created") else ""
         main_base = core.current_base("opencode")
@@ -1575,7 +1729,7 @@ class ImportTab(ScrollPage):
         self.source_hint.setText(
             f"База найдена. Скиллов: {info['skills']}. "
             f"Размер: {core.human_size(int(info['size']))}.{created}{main_note}\n"
-            f"Файлы: {files}"
+            f"Файлы:\n{files}"
         )
         self._refresh_run()
 
@@ -1707,7 +1861,7 @@ class BridgeTab(ScrollPage):
 
     def _build(self, page: QWidget) -> None:
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(14, 14, 14, 14)
+        outer.setContentsMargins(18, 16, 18, 16)
         outer.setSpacing(10)
 
         outer.addWidget(
@@ -1811,8 +1965,12 @@ class BridgeTab(ScrollPage):
         prog_layout.addLayout(row_save)
         outer.addWidget(box_prog)
 
-        # --- кнопки
-        buttons = QHBoxLayout()
+        # --- кнопки: в нижней панели окна, чтобы «Создать мост» была
+        # на виду с самого начала, а не уезжала под длинную страницу.
+        self.footer = QWidget()
+        footer_layout = QHBoxLayout(self.footer)
+        footer_layout.setContentsMargins(0, 6, 0, 0)
+        footer_layout.setSpacing(8)
         self.btn_create = QPushButton("Создать мост")
         self.btn_create.setObjectName("primary")
         self.btn_create.clicked.connect(self._create)
@@ -1820,11 +1978,10 @@ class BridgeTab(ScrollPage):
         self.btn_check.clicked.connect(self._check)
         self.btn_open = QPushButton("Открыть папку")
         self.btn_open.clicked.connect(self._open)
-        buttons.addWidget(self.btn_create)
-        buttons.addWidget(self.btn_check)
-        buttons.addStretch(1)
-        buttons.addWidget(self.btn_open)
-        outer.addLayout(buttons)
+        footer_layout.addWidget(self.btn_create)
+        footer_layout.addWidget(self.btn_check)
+        footer_layout.addStretch(1)
+        footer_layout.addWidget(self.btn_open)
 
         self.log = ui.LogView()
         self.log.setMinimumHeight(170)
@@ -3557,7 +3714,7 @@ class CapsTab(ScrollPage):
 
     def _build(self, page: QWidget) -> None:
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(14, 14, 14, 14)
+        outer.setContentsMargins(18, 16, 18, 16)
         outer.setSpacing(10)
 
         outer.addWidget(
@@ -3630,7 +3787,7 @@ class CapsTab(ScrollPage):
         row_ag.addWidget(btn_ag_all)
         row_ag.addWidget(btn_ag_none)
         row_ag.addStretch(1)
-        btn_ag_put = QPushButton("Поставить отмеченных")
+        btn_ag_put = QPushButton("Установить отмеченных")
         btn_ag_put.setToolTip(
             "Ставит только агентов: копирует отмеченные файлы в папку agents "
             "рядом с настройками opencode. Навыки и остальное не трогает"
@@ -4046,13 +4203,44 @@ class CapsTab(ScrollPage):
         )
 
         self.reg_servers: list[mcp_registry.Server] = []
+        # Что реально показано в таблице: поиск и подменю категорий
+        # фильтруют список, а кнопки блока работают с выбранной строкой.
+        # Без отдельного списка «строка 3» после фильтра означала бы
+        # третий сервер реестра, а не третий на экране.
+        self._reg_shown: list[mcp_registry.Server] = []
+        self._reg_query = ""
+        self._reg_group = ""
+
+        # Поиск стоит над таблицей, а не над всей вкладкой: он ищет
+        # именно мосты, и стоять выше агентов значило бы обещать
+        # фильтр по всей странице.
+        search_row = QHBoxLayout()
+        self.reg_search = QLineEdit()
+        self.reg_search.setPlaceholderText(
+            "Поиск мостов: имя, категория или описание…"
+        )
+        self.reg_search.setClearButtonEnabled(True)
+        self.reg_search.textChanged.connect(self._reg_apply_filter)
+        search_row.addWidget(self.reg_search, 1)
+        self.btn_reg_check_top = QPushButton("Проверить всё")
+        self.btn_reg_check_top.setObjectName("primary")
+        self.btn_reg_check_top.setToolTip(
+            "Живая проверка требований: запускает чужие команды, чтобы "
+            "честно сказать состояние. Ничего не устанавливает и не включает"
+        )
+        self.btn_reg_check_top.clicked.connect(self._reg_check_all)
+        search_row.addWidget(self.btn_reg_check_top)
+        mcp_layout.addLayout(search_row)
+        self.reg_counter = ui.label("", kind="dim")
+        mcp_layout.addWidget(self.reg_counter)
+
         self.reg_table = QTableWidget(0, 4)
         # Заголовок «Инструментов» не помещался в свою колонку: та
         # получает остаток места, а не своё, и на снимке обрезалась
         # с двух сторон — «-трумен…». Короче и понятнее: сколько
         # инструментов даёт сервер.
         self.reg_table.setHorizontalHeaderLabels(
-            ["Сервер", "Состояние", "Лицензия", "Инструм."]
+            ["Сервер", "Категория", "Состояние", "Инструм."]
         )
         self.reg_table.verticalHeader().setVisible(False)
         self.reg_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -4069,12 +4257,17 @@ class CapsTab(ScrollPage):
         # целиком - по нему человека ищет в списке, - а лишнее место
         # отдаётся состоянию, потому что оно длиннее всех.
         header = self.reg_table.horizontalHeader()
+        # Подписи колонок — по левому краю, как и текст в ячейках:
+        # центрированные заголовки выглядели сдвинутыми относительно
+        # своих колонок.
+        header.setDefaultAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         header.setStretchLastSection(False)
         header.setSectionResizeMode(header.ResizeMode.Fixed)
         # Ширины считаются по содержимому при заполнении таблицы,
         # см. _reg_fit_columns. Здесь только минимумы: пока таблица
         # пустая, измерять нечего.
-        for col, minimum in ((0, 150), (1, 200), (2, 110), (3, 90)):
+        for col, minimum in ((0, 160), (1, 80), (2, 120), (3, 70)):
             self.reg_table.setColumnWidth(col, minimum)
         # Прокрутка вбок появляется только когда не помещается. Раньше она
         # была выключена вовсе, и тогда таблица задавала ширину всей
@@ -4792,6 +4985,19 @@ class CapsTab(ScrollPage):
             return f"нужно: {first[0].what}{tail}"
         return "можно включить"
 
+    @staticmethod
+    def _reg_state_color(text: str) -> str:
+        """Цвет строки состояния. Один и тот же для таблицы и подсказок."""
+        low = str(text).lower()
+        if low.startswith("включён") or low.startswith("можно включить"):
+            return ui.OK
+        if low.startswith("не проверено"):
+            return ui.TEXT_DIM
+        if (low.startswith("нужно") or low.startswith("не хватает")
+                or "нет команды" in low):
+            return ui.WARN
+        return ui.TEXT
+
     def _reg_fit_columns(self) -> None:
         """Раздаёт ширины колонок по тому, что в них реально лежит.
 
@@ -4824,7 +5030,23 @@ class CapsTab(ScrollPage):
             if header_item is not None:
                 need = max(need, QFontMetrics(header_item.font())
                            .horizontalAdvance(header_item.text()))
+            # Имя моста бывает в целую строку («Kinocut (монтаж видео для
+            # агентов: FFmpeg, субтитры, вертикалки, квитанции)»). Без
+            # потолка колонка съедала всю ширину, и таблица уезжала
+            # вбок; длинное имя лучше перенести на вторую строку.
+            if col == 0:
+                need = min(need, 300)
             raw.append(need)
+
+        # «не проверено» — самое длинное значение колонки состояния, и
+        # без запаса оно обрезалось до «не …». Запас берём у имени:
+        # имя и так переносится, а состояние — нет.
+        if len(raw) >= 4:
+            take = min(40, max(0, raw[0] - 220))
+            raw[0] -= take
+            raw[1] += 10
+            raw[2] += 14
+            raw[3] += 10
 
         # Отступы делятся, а не задаются с потолка. Меряю от того,
         # что действительно есть, а не от того, что предполагаю:
@@ -4846,7 +5068,9 @@ class CapsTab(ScrollPage):
         else:
             padding = min(28, max(8, spare // columns))
         for col, need in enumerate(raw):
-            table.setColumnWidth(col, need + padding)
+            # +6 — внутренние поля ячейки из QSS: без них заголовок
+            # «Категория» обрезался до «Категори».
+            table.setColumnWidth(col, need + padding + 6)
         # Минимум ширины разрывает круг. Qt считает ширину таблицы как
         # сумму ширин колонок, а я считаю колонки от ширины таблицы.
         # Без этого minima Qt сжимает таблицу под блок, сумма ширин
@@ -4871,14 +5095,84 @@ class CapsTab(ScrollPage):
             total = limit
         table.setMinimumWidth(total)
 
+    def _reg_visible(self) -> list[mcp_registry.Server]:
+        """Серверы после поиска и фильтра категории, по алфавиту.
+
+        Порядок алфавитный, а не как в реестре: при семидесяти с лишним
+        мостах искать «Spotify» глазами в случайном порядке бессмысленно.
+        Фильтр идёт по имени, id, лицензии, категории, описанию и
+        способу установки — то есть по всему, что человек помнит.
+        """
+        query = self._reg_query.strip().lower()
+        group = self._reg_group
+        out: list[mcp_registry.Server] = []
+        for server in self.reg_servers:
+            category = mcp_categories.group_of(server.id)
+            if group and category != group:
+                continue
+            if query:
+                raw = server.raw if isinstance(server.raw, dict) else {}
+                haystack = " ".join((
+                    server.name, server.id, server.license,
+                    mcp_categories.title(category),
+                    str(raw.get("why") or ""),
+                    str(raw.get("install") or ""),
+                    str(raw.get("requires") or ""),
+                )).lower()
+                if query not in haystack:
+                    continue
+            out.append(server)
+        out.sort(key=lambda item: item.name.lower())
+        return out
+
+    def _reg_update_counter(self) -> None:
+        """Строка «показано N из M» — иначе фильтр молчит о себе."""
+        total = len(self.reg_servers)
+        shown = len(self._reg_shown)
+        parts = [f"Показано {shown} из {total}"]
+        if self._reg_group:
+            parts.append("категория: " + mcp_categories.title(self._reg_group))
+        if self._reg_query.strip():
+            parts.append(f"поиск: «{self._reg_query.strip()}»")
+        self.reg_counter.setText(" · ".join(parts))
+
+    def _reg_apply_filter(self, text: str) -> None:
+        """Поиск по мере набора: перерисовать список и ничего не трогать."""
+        self._reg_query = str(text or "")
+        self._reg_paint()
+
+    def set_bridge_category(self, group_id: str) -> None:
+        """Категория из подменю сайдбара. Пустая строка — все мосты."""
+        self._reg_group = str(group_id or "")
+        self._reg_paint()
+
+    def bridge_category(self) -> str:
+        """Какая категория выбрана сейчас (для подсветки в сайдбаре)."""
+        return self._reg_group
+
     def _reg_paint(self) -> None:
-        servers = self.reg_servers
+        servers = self._reg_visible()
+        self._reg_shown = servers
         self.reg_table.setRowCount(len(servers))
         for row, server in enumerate(servers):
+            category = mcp_categories.short_title(
+                mcp_categories.group_of(server.id))
             self.reg_table.setItem(row, 0, QTableWidgetItem(server.name))
-            self.reg_table.setItem(row, 1, QTableWidgetItem(self._reg_state_text(server)))
-            self.reg_table.setItem(row, 2, QTableWidgetItem(server.license))
-            self.reg_table.setItem(row, 3, QTableWidgetItem(server.tools_count))
+            self.reg_table.setItem(row, 1, QTableWidgetItem(category))
+            state_text = self._reg_state_text(server)
+            state_item = QTableWidgetItem(state_text)
+            # Цвет состояния — единственный цветной текст в таблице:
+            # зелёный «включён», жёлтый «нужно…», серый «не проверено».
+            state_item.setForeground(QColor(self._reg_state_color(state_text)))
+            self.reg_table.setItem(row, 2, state_item)
+            tools_text = str(server.tools_count or "").strip()
+            tools_item = QTableWidgetItem(tools_text or "—")
+            if not tools_text:
+                tools_item.setForeground(QColor(ui.TEXT_DIM))
+                tools_item.setToolTip(
+                    "Число инструментов появится после проверки сервера")
+            self.reg_table.setItem(row, 3, tools_item)
+        self._reg_update_counter()
         self._reg_fit_columns()
         self._reg_fit_table_height()
         if servers and self.reg_table.currentRow() < 0:
@@ -4906,8 +5200,8 @@ class CapsTab(ScrollPage):
 
     def _reg_current(self) -> mcp_registry.Server | None:
         row = self.reg_table.currentRow()
-        if 0 <= row < len(self.reg_servers):
-            return self.reg_servers[row]
+        if 0 <= row < len(self._reg_shown):
+            return self._reg_shown[row]
         return None
 
     def _reg_show_detail(self) -> None:
@@ -6873,6 +7167,11 @@ class ProgramsTab(ScrollPage):
         # стирает всё написанное, а человек увидел бы пустую строку
         # там, где должен узнать, что произошло.
         self._messages: dict[str, str] = {}
+        # Категория из подменю и строка поиска. Пустые — показать всё.
+        self._prog_group = ""
+        self._prog_query = ""
+        self._prog_all: list = []
+        self._prog_placed: dict = {}
         inner = QWidget()
         super().__init__(inner, parent)
         self._page = inner
@@ -6883,19 +7182,28 @@ class ProgramsTab(ScrollPage):
 
     def _build(self, page: QWidget) -> None:
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(14, 14, 14, 14)
+        outer.setContentsMargins(18, 16, 18, 16)
         outer.setSpacing(10)
 
         outer.addWidget(ui.label("Программы", kind="title"))
-        outer.addWidget(
-            ui.label(
-                "Здесь то, без чего мосты работать не будут. Карточки строятся "
-                "из реестра: отдельного списка программ нет, иначе он сразу "
-                "разошёлся бы с тем, что на самом деле стоит.",
-                kind="dim",
-                wrap=True,
-            )
+        # Короткая строка вместо абзаца: длинный серый текст сверху
+        # никто не читает. Полное объяснение — в подсказке у значка.
+        intro = QHBoxLayout()
+        intro.setSpacing(6)
+        intro.addWidget(
+            ui.label("Карточки из реестра: что стоит и чего не хватает.",
+                     kind="dim", wrap=True),
+            1,
         )
+        info = QLabel("ⓘ")
+        info.setObjectName("infoDot")
+        info.setToolTip(
+            "Здесь то, без чего мосты работать не будут. Карточки строятся "
+            "из реестра: отдельного списка программ нет, иначе он сразу "
+            "разошёлся бы с тем, что на самом деле стоит."
+        )
+        intro.addWidget(info)
+        outer.addLayout(intro)
 
         # Полоса общих замечаний. Сюда попадает и «данные поехали», и
         # «winget на машине нет» — обе вещи человек обязан увидеть до
@@ -6903,9 +7211,19 @@ class ProgramsTab(ScrollPage):
         self.notice = ui.label("", kind="dim", wrap=True)
         outer.addWidget(self.notice)
 
+        # Поиск и перепроверка — в одной строке над карточками.
+        search_row = QHBoxLayout()
+        self.prog_search = QLineEdit()
+        self.prog_search.setPlaceholderText("Поиск программ: имя или категория…")
+        self.prog_search.setClearButtonEnabled(True)
+        self.prog_search.textChanged.connect(self._prog_apply_filter)
+        search_row.addWidget(self.prog_search, 1)
         self.btn_reload = QPushButton("Перепроверить всё")
         self.btn_reload.clicked.connect(self.reload)
-        outer.addWidget(self.btn_reload)
+        search_row.addWidget(self.btn_reload)
+        outer.addLayout(search_row)
+        self.prog_counter = ui.label("", kind="dim")
+        outer.addWidget(self.prog_counter)
 
         self.cards_box = QVBoxLayout()
         self.cards_box.setSpacing(10)
@@ -6967,7 +7285,6 @@ class ProgramsTab(ScrollPage):
         alive = set(self._cards)
         for gone in [k for k in self._messages if k not in alive]:
             del self._messages[gone]
-        names = program_cards.servers_by_name(base)
         if not cards:
             self.cards_box.addWidget(
                 ui.label("Ни одной карточки. Реестр прочитан, но предметов "
@@ -6976,16 +7293,58 @@ class ProgramsTab(ScrollPage):
                          kind="warn", wrap=True)
             )
             return
-        # Карточки разложены по группам, и у каждой группы заголовок с
-        # правилом. Правило видно потому: группа, выбранная молча, не
-        # проверяется — а проверить её должен человек, а не автор кода.
-        placed = self._placements(base)
+        # Что пришло из реестра, запоминаем: поиск и категория из
+        # сайдбара только фильтруют этот список, реестр не перечитывают.
+        self._prog_all = cards
+        self._prog_placed = self._placements(base)
+        self._paint_cards()
+
+    def _paint_cards(self) -> None:
+        """Рисует карточки по категориям с учётом поиска и фильтра."""
+        while self.cards_box.count():
+            item = self.cards_box.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._rows.clear()
+
+        cards = getattr(self, "_prog_all", []) or []
+        if not cards:
+            return
+        names = program_cards.servers_by_name(self._base())
+        placed = getattr(self, "_prog_placed", {})
+        query = self._prog_query.strip().lower()
+        group = self._prog_group
+
         buckets: dict[str, list] = {}
         for card in cards:
-            item = program_groups.place_card(card, placed)
-            buckets.setdefault(item.group, []).append((card, item))
+            placement = program_groups.place_card(card, placed)
+            if group and placement.group != group:
+                continue
+            if query:
+                haystack = " ".join((
+                    card.name, card.state_text, placement.title,
+                    card.status,
+                )).lower()
+                if query not in haystack:
+                    continue
+            buckets.setdefault(placement.group, []).append((card, placement))
+
         order = {key: index for index, (key, _t) in enumerate(program_groups.GROUPS)}
         titles = program_groups.GROUP_TITLES
+        shown = sum(len(rows) for rows in buckets.values())
+        self.prog_counter.setText(
+            f"Показано {shown} из {len(cards)}"
+            + (f" · категория: {titles.get(group, group)}" if group else "")
+            + (f" · поиск: «{self._prog_query.strip()}»" if query else "")
+        )
+        if not shown:
+            self.cards_box.addWidget(
+                ui.label("Ничего не найдено. Сбросьте поиск или выберите "
+                         "«Все программы» в меню слева.", kind="dim", wrap=True)
+            )
+            return
+
         for key, _title in sorted(program_groups.GROUPS, key=lambda p: order[p[0]]):
             rows = buckets.get(key)
             if not rows:
@@ -7002,6 +7361,35 @@ class ProgramsTab(ScrollPage):
             for card, _item in rows:
                 self.cards_box.addWidget(self._build_card(card, names, None))
 
+    def _prog_apply_filter(self, text: str) -> None:
+        """Поиск по мере набора."""
+        self._prog_query = str(text or "")
+        self._paint_cards()
+
+    def set_program_group(self, group_id: str) -> None:
+        """Категория из подменю сайдбара. Пустая строка — все программы."""
+        self._prog_group = str(group_id or "")
+        self._paint_cards()
+
+    def program_group(self) -> str:
+        return self._prog_group
+
+    def group_counts(self) -> dict[str, tuple[int, int]]:
+        """Сколько карточек в группе и сколько из них с проблемой.
+
+        Нужно подменю: «Движки и игры — 4», и красная отметка у группы,
+        где что-то не установлено.
+        """
+        out: dict[str, list[int]] = {}
+        placed = getattr(self, "_prog_placed", {})
+        for card in getattr(self, "_prog_all", []) or []:
+            placement = program_groups.place_card(card, placed)
+            bucket = out.setdefault(placement.group, [0, 0])
+            bucket[0] += 1
+            if card.state != program_cards.STATE_OK:
+                bucket[1] += 1
+        return {key: (total, broken) for key, (total, broken) in out.items()}
+
     def _placements(self, base: Path) -> dict:
         """Разложение мостов по группам. Пусто — виноват реестр, а не окно."""
         try:
@@ -7016,12 +7404,17 @@ class ProgramsTab(ScrollPage):
                     item: program_groups.Placement | None = None) -> QWidget:
         """Одна карточка. Виджеты запоминаются: их надо гасить на время
         установки и заполнять заново по ходу дела."""
-        box = QGroupBox(card.name)
+        # Имя карточки пишется внутри, крупной строкой. Заголовок самой
+        # рамки не нужен: он дублировал имя и наезжал на верхнюю границу.
+        box = QGroupBox()
+        box.setObjectName("programCard")
         layout = QVBoxLayout(box)
-        layout.setSpacing(6)
+        layout.setSpacing(8)
 
         head = ui.row()
-        head.layout().addWidget(ui.label(card.name, kind="title"))
+        name_label = ui.label(card.name, kind="title")
+        name_label.setStyleSheet("font-size: 16px; font-weight: 700;")
+        head.layout().addWidget(name_label)
         self.status = ui.label(card.status)
         self.status.setStyleSheet(f"color: {_STATE_COLOR.get(card.state, ui.TEXT_DIM)}")
         head.layout().addWidget(self.status)
@@ -7031,7 +7424,7 @@ class ProgramsTab(ScrollPage):
         # Почему карточка в этой группе. Правило видно словами: раскладку,
         # выбранную молча, нельзя ни проверить, ни оспорить.
         if item is not None and item.rule:
-            layout.addWidget(ui.label("Группа: " + item.title + ". " + item.rule,
+            layout.addWidget(ui.label(f"Группа: {item.title} · {item.rule}",
                                       kind="dim", wrap=True))
 
         needed = program_cards.needed_by_text(card, names)
@@ -7058,15 +7451,35 @@ class ProgramsTab(ScrollPage):
                                       "ставить не нужно.", kind="dim", wrap=True))
 
         if card.alternatives:
-            layout.addWidget(self._build_alternatives(card))
+            alternatives = self._build_alternatives(card)
+            if alternatives is not None:
+                layout.addWidget(alternatives)
 
         layout.addWidget(ui.label(self._verify_text(card), kind="dim", wrap=True))
 
         if card.install.instructions:
-            layout.addWidget(
-                ui.label("Как это ставится: " + card.install.instructions,
-                         kind="dim", wrap=True)
-            )
+            # Инструкция установки — под спойлером: в открытом виде она
+            # растягивала карточку на весь экран.
+            toggle = QToolButton()
+            toggle.setText("Как это ставится")
+            toggle.setCheckable(True)
+            toggle.setToolButtonStyle(
+                Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            toggle.setArrowType(Qt.ArrowType.RightArrow)
+            toggle.setObjectName("cardSpoiler")
+            details = ui.label(card.install.instructions, kind="dim", wrap=True)
+            details.setVisible(False)
+            details.setContentsMargins(18, 0, 0, 0)
+
+            def toggle_details(checked: bool, _d=details, _b=toggle) -> None:
+                _d.setVisible(checked)
+                _b.setArrowType(
+                    Qt.ArrowType.DownArrow if checked
+                    else Qt.ArrowType.RightArrow)
+
+            toggle.toggled.connect(toggle_details)
+            layout.addWidget(toggle)
+            layout.addWidget(details)
 
         buttons = ui.flow_row()
         row: dict[str, QPushButton] = {}
@@ -7117,7 +7530,7 @@ class ProgramsTab(ScrollPage):
             result.setText(remembered)
         return box
 
-    def _build_alternatives(self, card: program_cards.Card) -> QWidget:
+    def _build_alternatives(self, card: program_cards.Card) -> QWidget | None:
         """Варианты программы — как их записал реестр.
 
         Своя кнопка установки есть только у варианта с методом winget, и
@@ -7128,18 +7541,29 @@ class ProgramsTab(ScrollPage):
         layout = QVBoxLayout(wrap)
         layout.setContentsMargins(0, 4, 0, 0)
         layout.setSpacing(4)
-        layout.addWidget(ui.label("Варианты:", kind="dim"))
+        # Строки без содержимого не показываем: «? — в реестре написано:
+        # ничего» пять раз подряд выглядело как поломка, хотя это просто
+        # пустые поля реестра.
+        lines: list[str] = []
         for alt in card.alternatives:
-            name = str(alt.get("program") or "?")
-            method = str(alt.get("method") or "")
-            winget_id = str(alt.get("winget_id") or "")
-            note = str(alt.get("note") or "")
+            name = str(alt.get("program") or "").strip()
+            method = str(alt.get("method") or "").strip()
+            winget_id = str(alt.get("winget_id") or "").strip()
+            note = str(alt.get("note") or "").strip().rstrip(", ")
+            if not name:
+                continue
             if method == program_cards.METHOD_WINGET:
-                text = f"{name} — ставится через winget: {winget_id}"
+                lines.append(f"{name} — ставится через winget: {winget_id}")
             elif method == "manual":
-                text = f"{name} — кнопки нет, {note}".rstrip(", ")
-            else:
-                text = f"{name} — в реестре написано: {method or 'ничего'}"
+                lines.append(f"{name} — кнопки нет, {note}".rstrip(", "))
+            elif note:
+                lines.append(f"{name} — {note}")
+            elif method:
+                lines.append(f"{name} — в реестре написано: {method}")
+        if not lines:
+            return None
+        layout.addWidget(ui.label("Варианты:", kind="dim"))
+        for text in lines:
             layout.addWidget(ui.label(text, kind="dim", wrap=True))
         return wrap
 
@@ -7153,11 +7577,12 @@ class ProgramsTab(ScrollPage):
         verify = card.verify
         if not verify.can_check:
             if verify.expected_publisher:
-                return (f"Подпись: сверять не с чем — имя подписанта неизвестно. "
-                        f"Издатель из каталога winget — {verify.expected_publisher} — "
-                        f"это другое поле. Имя появится, когда файл будет скачан.")
-            return ("Подпись: сверять не с чем — имя подписанта неизвестно, "
-                    "а файл установщика ещё не скачивали.")
+                return (f"Подпись: сверять не с чем — файл установщика ещё не "
+                        f"скачан. Издатель по каталогу winget: "
+                        f"{verify.expected_publisher} — это другое поле, "
+                        f"не подписант.")
+            return ("Подпись: сверять не с чем — файл установщика ещё не "
+                    "скачан, имя подписанта появится вместе с ним.")
         if verify.checked and verify.verified:
             return f"Подпись сходится: подписал {verify.expected_signer}."
         if verify.checked:
@@ -7610,209 +8035,263 @@ class HelpTab(ScrollPage):
         self._build(inner)
 
     @staticmethod
-    def _section(text: str) -> QLabel:
-        label = ui.label(text, kind="title")
-        label.setStyleSheet(f"font-size: 14px; font-weight: 600; color: {ui.ACCENT};")
-        return label
+    def _section(text: str) -> QToolButton:
+        """Заголовок раздела — кнопка, которая раскрывает и сворачивает."""
+        button = QToolButton()
+        button.setText(text)
+        button.setCheckable(True)
+        button.setChecked(True)
+        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        button.setArrowType(Qt.ArrowType.DownArrow)
+        button.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        return button
 
     @staticmethod
     def _step(text: str) -> QLabel:
         label = QLabel(text)
         label.setWordWrap(True)
-        label.setStyleSheet(f"color: {ui.TEXT};")
+        label.setStyleSheet(
+            f"color: {ui.TEXT}; padding: 2px 4px 2px 18px;"
+        )
         return label
+
+    def _collapsible(self, title: str, widgets: list,
+                     expanded: bool = False) -> QWidget:
+        """Раскрывающийся раздел: заголовок-кнопка и текст под ним.
+
+        По умолчанию свёрнут: длинная инструкция одной стеной текста
+        выглядит как аварийный документ. Раскрыт только первый раздел —
+        он отвечает на вопрос «что это» и показывает, что остальные
+        открываются так же.
+        """
+        holder = QWidget()
+        col = QVBoxLayout(holder)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(6)
+        button = self._section(title)
+        button.setChecked(expanded)
+        body = ui.column(*widgets, spacing=6)
+        body.setVisible(expanded)
+        col.addWidget(button)
+        col.addWidget(body)
+
+        def toggle(checked: bool) -> None:
+            body.setVisible(checked)
+            button.setArrowType(
+                Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow
+            )
+
+        button.toggled.connect(toggle)
+        button.setArrowType(
+            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
+        )
+        return holder
 
     def _build(self, page: QWidget) -> None:
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(14, 14, 14, 14)
+        outer.setContentsMargins(18, 16, 18, 16)
         outer.setSpacing(8)
 
         outer.addWidget(ui.label("Как пользоваться программой", kind="title"))
 
-        outer.addWidget(self._section("1. Что это"))
-        outer.addWidget(self._step(
-            "Это окно для базы OpenCode. База — папка с текстовыми файлами: "
-            "память, библиотека, скиллы, инструкции. Сами базы лежат отдельно, "
-            "обычно в DataBases на рабочем столе. Окно их создаёт, подключает "
-            "к OpenCode, ставит возможности и показывает, какие сторонние "
-            "серверы можно включить."
-        ))
-        outer.addWidget(self._step(
-            "Запуск: двойной щелчок по «Управление-базой.cmd» в корне базы. "
-            "Нужен Python с PyQt6. Системный Python без этого пакета окно не "
-            "откроет. Вкладок восемь, ниже — что делает каждая и чего она не "
-            "делает. Зелёной галочки «чужой сервер уже ответил» здесь нет: "
-            "программа так не пишет, пока ответа не было."
-        ))
+        outer.addWidget(self._collapsible("1. Что это", [
+            self._step(
+                "Это окно для базы OpenCode. База — папка с текстовыми файлами: "
+                "память, библиотека, скиллы, инструкции. Сами базы лежат отдельно, "
+                "обычно в DataBases на рабочем столе. Окно их создаёт, подключает "
+                "к OpenCode, ставит возможности и показывает, какие сторонние "
+                "серверы можно включить."
+            ),
+            self._step(
+                "Запуск: двойной щелчок по «Управление-базой.cmd» в корне базы. "
+                "Нужен Python с PyQt6. Системный Python без этого пакета окно не "
+                "откроет. Вкладок восемь, ниже — что делает каждая и чего она не "
+                "делает. Зелёной галочки «чужой сервер уже ответил» здесь нет: "
+                "программа так не пишет, пока ответа не было."
+            ),
+        ], expanded=True))
 
-        outer.addWidget(self._section("2. Первый запуск"))
-        outer.addWidget(self._step(
-            "Программа создаёт папку DataBases на рабочем столе и показывает "
-            "приветствие. Новые базы лучше класть туда же: кнопка «Сканировать» "
-            "на второй вкладке ищет их на рабочем столе и в DataBases по файлу "
-            ".opencode-base.json."
-        ))
+        outer.addWidget(self._collapsible("2. Первый запуск", [
+            self._step(
+                "Программа создаёт папку DataBases на рабочем столе и показывает "
+                "приветствие. Новые базы лучше класть туда же: кнопка «Сканировать» "
+                "на второй вкладке ищет их на рабочем столе и в DataBases по файлу "
+                ".opencode-base.json."
+            ),
+        ]))
 
-        outer.addWidget(self._section("3. Создать новую базу"))
-        outer.addWidget(self._step(
-            "Вкладка «Новая база».\n"
-            "1. Папка-родитель. По умолчанию DataBases.\n"
-            "2. Имя папки. Пробелы и русские буквы можно. Нельзя знаки "
-            "< > : \" / \\ | ? * и служебные имена Windows вроде CON.\n"
-            "3. Галочка «Разрешить пароли и ключи» по умолчанию снята. "
-            "Без неё нейросеть откажется записывать секреты.\n"
-            "4. Откуда взять содержимое: пустой шаблон или копия образца, "
-            "со скиллами или без.\n"
-            "5. «Подключить базу к программе сразу» — копия уходит в настройки "
-            "OpenCode. Папки ваших проектов не трогаются. Прежние файлы памяти "
-            "уходят в _previous-version.\n"
-            "6. Ярлык. Он должен вести на файл «Открыть-базу.cmd», не на папку.\n"
-            "Сначала «Проверить» — это только план, ничего не пишется. "
-            "Потом «Создать базу».\n"
-            "Перед кнопками есть «Интеграция с Obsidian». Два переключателя "
-            "независимы. Оба выключены — ничего нового. «Поддержка Obsidian» "
-            "добавляет Главная.md, если её нет, и кнопку «Открыть в Obsidian». "
-            "Чужие заметки не затираются. «Obsidian Agent» кладёт файл @obsidian "
-            "в базу. Это не живой запуск модели. Если Obsidian не установлен, "
-            "база всё равно создаётся."
-        ))
-        outer.addWidget(self._step(
-            "База — это папка с текстовыми файлами: память, библиотека знаний, "
-            "скиллы, инструкции. Скиллы при создании берутся из встроенного "
-            "шаблона, вместе с индексом сценариев (skills-index.json) — "
-            "нейросеть читает его и сама выбирает нужный скилл по задаче."
-        ))
+        outer.addWidget(self._collapsible("3. Создать новую базу", [
+            self._step(
+                "Вкладка «Новая база».\n"
+                "1. Папка-родитель. По умолчанию DataBases.\n"
+                "2. Имя папки. Пробелы и русские буквы можно. Нельзя знаки "
+                "< > : \" / \\ | ? * и служебные имена Windows вроде CON.\n"
+                "3. Галочка «Разрешить пароли и ключи» по умолчанию снята. "
+                "Без неё нейросеть откажется записывать секреты.\n"
+                "4. Откуда взять содержимое: пустой шаблон или копия образца, "
+                "со скиллами или без.\n"
+                "5. «Подключить базу к программе сразу» — копия уходит в настройки "
+                "OpenCode. Папки ваших проектов не трогаются. Прежние файлы памяти "
+                "уходят в _previous-version.\n"
+                "6. Ярлык. Он должен вести на файл «Открыть-базу.cmd», не на папку.\n"
+                "Сначала «Проверить» — это только план, ничего не пишется. "
+                "Потом «Создать базу».\n"
+                "Перед кнопками есть «Интеграция с Obsidian». Два переключателя "
+                "независимы. Оба выключены — ничего нового. «Поддержка Obsidian» "
+                "добавляет Главная.md, если её нет, и кнопку «Открыть в Obsidian». "
+                "Чужие заметки не затираются. «Obsidian Agent» кладёт файл @obsidian "
+                "в базу. Это не живой запуск модели. Если Obsidian не установлен, "
+                "база всё равно создаётся."
+            ),
+            self._step(
+                "База — это папка с текстовыми файлами: память, библиотека знаний, "
+                "скиллы, инструкции. Скиллы при создании берутся из встроенного "
+                "шаблона, вместе с индексом сценариев (skills-index.json) — "
+                "нейросеть читает его и сама выбирает нужный скилл по задаче."
+            ),
+        ]))
 
-        outer.addWidget(self._section("4. Подключить существующую базу"))
-        outer.addWidget(self._step(
-            "Вторая вкладка «Подключить»:\n"
-            "1) нажмите «Сканировать» — программа найдёт все базы с файлом-"
-            "идентификатором .opencode-base.json на рабочем столе и в DataBases;\n"
-            "2) выбазу из списка или укажите папку вручную через «Обзор…»;\n"
-            "3) нажмите «Подключить» — файлы базы скопируются в настройки "
-            "OpenCode, прежние файлы уйдут в _previous-version."
-        ))
+        outer.addWidget(self._collapsible("4. Подключить существующую базу", [
+            self._step(
+                "Вторая вкладка «Подключить»:\n"
+                "1) нажмите «Сканировать» — программа найдёт все базы с файлом-"
+                "идентификатором .opencode-base.json на рабочем столе и в DataBases;\n"
+                "2) выберите базу из списка или укажите папку вручную через «Обзор…»;\n"
+                "3) нажмите «Подключить» — файлы базы скопируются в настройки "
+                "OpenCode, прежние файлы уйдут в _previous-version."
+            ),
+        ]))
 
-        outer.addWidget(self._section("5. Мост NCP"))
-        outer.addWidget(self._step(
-            "Третья вкладка «Мост NCP — создать»: создаёт переводчик между "
-            "OpenCode и библиотекой знаний NCP. Мост умеет 7 операций: "
-            "ncp_status (состояние), ncp_search (поиск), ncp_save (сохранить "
-            "запись), ncp_read (прочитать), ncp_update (изменить), "
-            "ncp_checkpoint (контрольная точка), ncp_reindex (пересобрать "
-            "индекс). Путь к библиотеке подставляется автоматически."
-        ))
+        outer.addWidget(self._collapsible("5. Мост NCP", [
+            self._step(
+                "Третья вкладка «Мост NCP — создать»: создаёт переводчик между "
+                "OpenCode и библиотекой знаний NCP. Мост умеет 7 операций: "
+                "ncp_status (состояние), ncp_search (поиск), ncp_save (сохранить "
+                "запись), ncp_read (прочитать), ncp_update (изменить), "
+                "ncp_checkpoint (контрольная точка), ncp_reindex (пересобрать "
+                "индекс). Путь к библиотеке подставляется автоматически."
+            ),
+        ]))
 
-        outer.addWidget(self._section("6. Возможности для OpenCode (вкладка «opencode»)"))
-        outer.addWidget(self._step(
-            "Здесь ставятся в настройки OpenCode только отмеченные возможности:\n"
-            "— команда /голос (голосовой ввод);\n"
-            "— агенты и скиллы (поиск, план, код, проверка и другие);\n"
-            "— обход блокировок (запуск OpenCode через прокси).\n"
-            "Мосты ПК и памяти сюда галочками не входят: они едут с базой и "
-            "включаются кнопкой «Подключить»."
-        ))
+        outer.addWidget(self._collapsible(
+            "6. Возможности для OpenCode (вкладка «opencode»)", [
+            self._step(
+                "Здесь ставятся в настройки OpenCode только отмеченные возможности:\n"
+                "— команда /голос (голосовой ввод);\n"
+                "— агенты и скиллы (поиск, план, код, проверка и другие);\n"
+                "— обход блокировок (запуск OpenCode через прокси).\n"
+                "Мосты ПК и памяти сюда галочками не входят: они едут с базой и "
+                "включаются кнопкой «Подключить»."
+            ),
+        ]))
 
-        outer.addWidget(self._section("7. Серверы MCP — блок на вкладке «opencode»"))
-        outer.addWidget(self._step(
-            "Это не мосты базы. Это сторонние программы из реестра. Таблица: "
-            "сервер, состояние, лицензия, число инструментов. Подробности — "
-            "в тексте под таблицей.\n"
-            "До «Проверить всё» состояние честно «не проверено». Проверка "
-            "запускает чужие команды и ничего не устанавливает.\n"
-            "«Включить» вписывает команду в opencode.jsonc. «Выключить» убирает "
-            "только этот блок. «Открыть источник» открывает страницу проекта.\n"
-            "«Настроить автоматически» делает разное:\n"
-            "— Android Studio, OBS, эмулятор, DBHub, Браузеры, OmniRoute и "
-            "LMArena: настраивает целиком, насколько это можно без чужого окна;\n"
-            "— Unity, Unreal, Roblox Studio, Godot, TikTok, CapCut, Spotify, "
-            "ChatGPT API, Codex и Cursor: только свою часть. Файл или проверка. "
-            "Редактор, сайт и браузер кнопка не открывает и готовым мост не "
-            "считает.\n"
-            "У LDPlayer этой кнопки нет: ему хватает «Включить».\n"
-            "Что именно сделает кнопка у выбранной строки — написано в "
-            "подсказке на самой кнопке.\n"
-            "После включения перезапустите OpenCode. Пока чужой сервер сам не "
-            "ответил, говорить «подключено» нельзя."
-        ))
-        outer.addWidget(self._step(
-            "Что можно попросить в терминале OpenCode после настройки и перезапуска:\n"
-            "— Spotify: «включи трек». Нужны Premium, открытое приложение и "
-            "один раз вход пакета. Это Web API, не скачивание файла.\n"
-            "— ChatGPT API: «создай новый ответ и продолжи его». Это не сайт "
-            "chatgpt.com. Нужны свой ключ и имя модели из кабинета.\n"
-            "— Codex: «создай новый чат и выполни команду». По умолчанию только "
-            "чтение. Полный доступ к диску не даётся.\n"
-            "— Cursor: «создай новый чат и отправь команду». Файлы без явной "
-            "просьбы не правятся.\n"
-            "VK Музыка и Яндекс.Музыка в списке нет: открытого API на включение "
-            "трека нет, скачивать файл программа не будет."
-        ))
+        outer.addWidget(self._collapsible(
+            "7. Серверы MCP — блок на вкладке «opencode»", [
+            self._step(
+                "Это не мосты базы. Это сторонние программы из реестра. Таблица: "
+                "сервер, состояние, лицензия, число инструментов. Подробности — "
+                "в тексте под таблицей.\n"
+                "До «Проверить всё» состояние честно «не проверено». Проверка "
+                "запускает чужие команды и ничего не устанавливает.\n"
+                "«Включить» вписывает команду в opencode.jsonc. «Выключить» убирает "
+                "только этот блок. «Открыть источник» открывает страницу проекта.\n"
+                "«Настроить автоматически» делает разное:\n"
+                "— Android Studio, OBS, эмулятор, DBHub, Браузеры, OmniRoute и "
+                "LMArena: настраивает целиком, насколько это можно без чужого окна;\n"
+                "— Unity, Unreal, Roblox Studio, Godot, TikTok, CapCut, Spotify, "
+                "ChatGPT API, Codex и Cursor: только свою часть. Файл или проверка. "
+                "Редактор, сайт и браузер кнопка не открывает и готовым мост не "
+                "считает.\n"
+                "У LDPlayer этой кнопки нет: ему хватает «Включить».\n"
+                "Что именно сделает кнопка у выбранной строки — написано в "
+                "подсказке на самой кнопке.\n"
+                "После включения перезапустите OpenCode. Пока чужой сервер сам не "
+                "ответил, говорить «подключено» нельзя."
+            ),
+            self._step(
+                "Что можно попросить в терминале OpenCode после настройки и перезапуска:\n"
+                "— Spotify: «включи трек». Нужны Premium, открытое приложение и "
+                "один раз вход пакета. Это Web API, не скачивание файла.\n"
+                "— ChatGPT API: «создай новый ответ и продолжи его». Это не сайт "
+                "chatgpt.com. Нужны свой ключ и имя модели из кабинета.\n"
+                "— Codex: «создай новый чат и выполни команду». По умолчанию только "
+                "чтение. Полный доступ к диску не даётся.\n"
+                "— Cursor: «создай новый чат и отправь команду». Файлы без явной "
+                "просьбы не правятся.\n"
+                "VK Музыка и Яндекс.Музыка в списке нет: открытого API на включение "
+                "трека нет, скачивать файл программа не будет."
+            ),
+        ]))
 
-        outer.addWidget(self._section("8. Обход блокировок"))
-        outer.addWidget(self._step(
-            "Обход работает только для запущенного через ярлык OpenCode.\n"
-            "Каналы по приоритету:\n"
-            "1) V2Ray — свой Xray (узлы из встроенных VLESS-подписок, выбирается "
-            "быстрейший);\n"
-            "2) публичные прокси (список обновляется автоматически, источников 6);\n"
-            "3) защищённый DNS (DoH: Google, Cloudflare, Quad9, AdGuard, Yandex, "
-            "NextDNS, CleanBrowsing, Mullvad).\n"
-            "Фасад сам выбирает канал по скорости и пишет подробный лог в окно "
-            "запуска: видно, через что идёт трафик и что отвалилось."
-        ))
+        outer.addWidget(self._collapsible("8. Обход блокировок", [
+            self._step(
+                "Обход работает только для запущенного через ярлык OpenCode.\n"
+                "Каналы по приоритету:\n"
+                "1) V2Ray — свой Xray (узлы из встроенных VLESS-подписок, выбирается "
+                "быстрейший);\n"
+                "2) публичные прокси (список обновляется автоматически, источников 6);\n"
+                "3) защищённый DNS (DoH: Google, Cloudflare, Quad9, AdGuard, Yandex, "
+                "NextDNS, CleanBrowsing, Mullvad).\n"
+                "Фасад сам выбирает канал по скорости и пишет подробный лог в окно "
+                "запуска: видно, через что идёт трафик и что отвалилось."
+            ),
+        ]))
 
-        outer.addWidget(self._section("9. Темы (вкладка «Темы»)"))
-        outer.addWidget(self._step(
-            "Папка themes/ в конструкторе и в базе. Заготовка темы OpenCode — "
-            "Markdown-файл с полями: цвета, шрифт, размер. Скопируйте заготовку, "
-            "заполните своими значениями и попросите ассистента применить тему."
-        ))
+        outer.addWidget(self._collapsible("9. Темы (вкладка «Темы»)", [
+            self._step(
+                "Папка themes/ в конструкторе и в базе. Заготовка темы OpenCode — "
+                "Markdown-файл с полями: цвета, шрифт, размер. Скопируйте заготовку, "
+                "заполните своими значениями и попросите ассистента применить тему."
+            ),
+        ]))
 
-        outer.addWidget(self._section("10. Обновление самой программы"))
-        outer.addWidget(self._step(
-            "Программа обновляется файлом из репозитория, не через git pull.\n"
-            "«Проверить обновление» смотрит, есть ли новое. Пока не нажали, "
-            "«Скачать и применить» выключена: неизвестно, что качать.\n"
-            "Перед применением делается бэкап. «Вернуть из бэкапа» откатывает "
-            "последнее обновление.\n"
-            "Отдельным блоком ниже — мост OmniRoute. Версию программа "
-            "спрашивает у официального GitHub проекта "
-            "(https://github.com/diegosouzapw/OmniRoute), а сам пакет ставит "
-            "из npm ровно той версией, которую назвал GitHub. Пока не нажали "
-            "«Проверить», «Обновить мост» выключена: неизвестно, есть ли "
-            "что ставить."
-        ))
+        outer.addWidget(self._collapsible("10. Обновление самой программы", [
+            self._step(
+                "Программа обновляется файлом из репозитория, не через git pull.\n"
+                "«Проверить обновление» смотрит, есть ли новое. Пока не нажали, "
+                "«Скачать и применить» выключена: неизвестно, что качать.\n"
+                "Перед применением делается бэкап. «Вернуть из бэкапа» откатывает "
+                "последнее обновление.\n"
+                "Отдельным блоком ниже — мост OmniRoute. Версию программа "
+                "спрашивает у официального GitHub проекта "
+                "(https://github.com/diegosouzapw/OmniRoute), а сам пакет ставит "
+                "из npm ровно той версией, которую назвал GitHub. Пока не нажали "
+                "«Проверить», «Обновить мост» выключена: неизвестно, есть ли "
+                "что ставить."
+            ),
+        ]))
 
-        outer.addWidget(self._section("11. Перенос на другой компьютер"))
-        outer.addWidget(self._step(
-            "Скопируйте папку базы целиком, установите Python с PyQt6, запустите "
-            "«Управление-базой.cmd». Программа сама найдёт базу, подключит мосты "
-            "и настроит OpenCode. Ничего вручную прописывать не нужно.\n"
-            "Секреты мостов (mcp-tiktok.txt, mcp-spotify.txt, mcp-chatgpt.txt "
-            "и другие) в репозиторий не входят: их надо создать заново кнопкой "
-            "настройки. Живое подключение само на новом компьютере не появится."
-        ))
+        outer.addWidget(self._collapsible("11. Перенос на другой компьютер", [
+            self._step(
+                "Скопируйте папку базы целиком, установите Python с PyQt6, запустите "
+                "«Управление-базу.cmd». Программа сама найдёт базу, подключит мосты "
+                "и настроит OpenCode. Ничего вручную прописывать не нужно.\n"
+                "Секреты мостов (mcp-tiktok.txt, mcp-spotify.txt, mcp-chatgpt.txt "
+                "и другие) в репозиторий не входят: их надо создать заново кнопкой "
+                "настройки. Живое подключение само на новом компьютере не появится."
+            ),
+        ]))
 
-        outer.addWidget(self._section("12. Если что-то не работает"))
-        outer.addWidget(self._step(
-            "— OpenCode не видит базу → проверьте memory-base-path.txt и "
-            "перезапустите OpenCode;\n"
-            "— обход не подключается → запустите ярлык «OpenCode (обход)», "
-            "посмотрите лог в окне;\n"
-            "— мост NCP не отвечает → проверьте library_path в "
-            "tools/ncp-bridge/config.json;\n"
-            "— программа не открывается → нужен Python 3 с пакетом PyQt6;\n"
-            "— сервер в таблице «не проверено» → это нормально, пока не нажали "
-            "«Проверить всё»;\n"
-            "— «Включить» вписало команду, а в терминале тишина → перезапустите "
-            "OpenCode. Если лаунчер пишет, что нет файла или команды, откройте "
-            "«Настроить автоматически»;\n"
-            "— Spotify не включает трек → нет Premium, приложение не открыто "
-            "или не сделан вход пакета. Программа трек не подделывает;\n"
-            "— ChatGPT открывает сайт → не должен. Мост ходит только на "
-            "api.openai.com по вашему ключу."
-        ))
+        outer.addWidget(self._collapsible("12. Если что-то не работает", [
+            self._step(
+                "— OpenCode не видит базу → проверьте memory-base-path.txt и "
+                "перезапустите OpenCode;\n"
+                "— обход не подключается → запустите ярлык «OpenCode (обход)», "
+                "посмотрите лог в окне;\n"
+                "— мост NCP не отвечает → проверьте library_path в "
+                "tools/ncp-bridge/config.json;\n"
+                "— программа не открывается → нужен Python 3 с пакетом PyQt6;\n"
+                "— сервер в таблице «не проверено» → это нормально, пока не нажали "
+                "«Проверить всё»;\n"
+                "— «Включить» вписало команду, а в терминале тишина → перезапустите "
+                "OpenCode. Если лаунчер пишет, что нет файла или команды, откройте "
+                "«Настроить автоматически»;\n"
+                "— Spotify не включает трек → нет Premium, приложение не открыто "
+                "или не сделан вход пакета. Программа трек не подделывает;\n"
+                "— ChatGPT открывает сайт → не должен. Мост ходит только на "
+                "api.openai.com по вашему ключу."
+            ),
+        ]))
 
 
 # ---------------------------------------------------------------- вкладка «Темы»
@@ -7839,7 +8318,7 @@ class ThemesTab(ScrollPage):
 
     def _build(self, page: QWidget) -> None:
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(14, 14, 14, 14)
+        outer.setContentsMargins(18, 16, 18, 16)
         outer.setSpacing(10)
 
         outer.addWidget(
@@ -7996,7 +8475,7 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
-        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(10)
         # Шапка: название слева, кнопка трея справа. Кнопка нужна
         # потому, что крестик закрывает программу как обычно, а трей
@@ -8007,6 +8486,7 @@ class MainWindow(QMainWindow):
         head.addWidget(ui.label("Управление базой", kind="title"))
         head.addStretch(1)
         self.tray_button = QPushButton("Свернуть в трей")
+        self.tray_button.setObjectName("ghost")
         self.tray_button.clicked.connect(self._on_tray_clicked)
         self.tray_button.setToolTip(
             "Скрыть окно в трей. Программа продолжит работать и придёт "
@@ -8095,21 +8575,35 @@ class MainWindow(QMainWindow):
         sidebar.setObjectName("sidebar")
         sidebar.setFixedWidth(190)
         side = QVBoxLayout(sidebar)
-        side.setContentsMargins(10, 14, 10, 12)
-        side.setSpacing(4)
-        logo = ui.label("◈  Управление\n     базой", kind="title")
-        side.addWidget(logo)
-        side.addSpacing(10)
+        side.setContentsMargins(10, 10, 10, 8)
+        side.setSpacing(3)
+        logo_row = QHBoxLayout()
+        logo_row.setSpacing(10)
+        badge = QLabel()
+        badge.setPixmap(ui.app_icon().pixmap(30, 30))
+        badge.setStyleSheet("border: none; background: transparent;")
+        logo_row.addWidget(badge)
+        logo_text = ui.label("Управление\nбазой", kind="title")
+        logo_text.setStyleSheet("font-size: 15px; font-weight: 700;")
+        logo_row.addWidget(logo_text)
+        logo_row.addStretch(1)
+        side.addLayout(logo_row)
+        side.addSpacing(6)
         for index in range(tabs.count()):
             button = QPushButton(tabs.tabText(index))
             button.setObjectName("nav")
             button.setCheckable(True)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.setMinimumHeight(34)
+            button.setMinimumHeight(24)
             button.clicked.connect(
                 lambda _checked=False, i=index: self._open_section(tabs, i))
             side.addWidget(button)
             self.nav_buttons.append(button)
+            if tabs.tabText(index) == "opencode":
+                side.addWidget(self._build_subnav())
+            if tabs.tabText(index) == "Программы":
+                side.addWidget(self._build_prog_subnav())
+
         side.addStretch(1)
         self.nav_status = ui.label("", kind="dim", wrap=True)
         side.addWidget(self.nav_status)
@@ -8128,6 +8622,13 @@ class MainWindow(QMainWindow):
         _row.addWidget(sidebar)
         _row.addWidget(tabs, 1)
         layout.addLayout(_row, 1)
+        # Нижние панели действий: «Создать базу» и «Создать мост» всегда
+        # на виду, страница под ними прокручивается.
+        self.create_footer = self.create_tab.footer
+        self.bridge_footer = self.bridge_tab.footer
+        for _footer in (self.create_footer, self.bridge_footer):
+            _footer.setVisible(False)
+            layout.addWidget(_footer)
         # Полосу вкладок убираем, сам QTabWidget оставляем. Он теперь
         # просто хранилище страниц: всё в программе ходит к разделам
         # через window.tabs, и замена на QStackedWidget сломала бы
@@ -8153,6 +8654,197 @@ class MainWindow(QMainWindow):
         """
         tabs.setCurrentIndex(index)
         self._sync_nav(index)
+        # Раздел открыт целиком: человек ещё не выбирал категорию, и
+        # подсвеченный «Все мосты» над экраном агентов сбивал с толку.
+        if index == self._opencode_index():
+            self._bridge_picked = False
+            self.caps_tab.set_bridge_category("")
+        if index == self._programs_index():
+            self._programs_picked = False
+            self.programs_tab.set_program_group("")
+
+    def _build_subnav(self) -> QWidget:
+        """Подменю категорий мостов под пунктом «opencode».
+
+        Категорий девять, и в высоту окна они влезают только компактными
+        строками. Подменю видно лишь когда открыт opencode: в остальных
+        разделах оно занимало бы место без пользы.
+        """
+        self.nav_sub = QWidget()
+        self.nav_sub.setObjectName("navSub")
+        sub = QVBoxLayout(self.nav_sub)
+        sub.setContentsMargins(20, 4, 2, 6)
+        sub.setSpacing(1)
+        self.nav_sub_buttons: list = []
+        # Выбрана ли категория руками. Пока нет — подменю ничего не
+        # подсвечивает: раздел открыт целиком, а не отфильтрован.
+        self._bridge_picked = False
+
+        all_button = QPushButton("Все мосты")
+        all_button.setObjectName("subnav")
+        all_button.setCheckable(True)
+        all_button.setChecked(True)
+        all_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        all_button.setMinimumHeight(19)
+        all_button.clicked.connect(lambda: self._open_bridge_group(""))
+        sub.addWidget(all_button)
+        self.nav_sub_buttons.append(all_button)
+
+        for key, title in mcp_categories.GROUPS:
+            if key == "other":
+                continue
+            button = QPushButton(title)
+            button.setObjectName("subnav")
+            button.setCheckable(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setMinimumHeight(19)
+            button.clicked.connect(
+                lambda _checked=False, k=key: self._open_bridge_group(k))
+            sub.addWidget(button)
+            self.nav_sub_buttons.append(button)
+        # Высота считается по строкам, а не берётся из sizeHint:/n        # до показа окна sizeHint ещё не знает стиля, выходит меньше
+        # фактической — и последние строки наезжали на «Программы».
+        rows = 1 + len([k for k, _t in mcp_categories.GROUPS
+                        if k != "other"])
+        self.nav_sub.setFixedHeight(rows * 19 + (rows - 1) + 10)
+        self.nav_sub.setVisible(False)
+        return self.nav_sub
+
+    def _build_prog_subnav(self) -> QWidget:
+        """Подменю категорий программ под пунктом «Программы».
+
+        Категории те же, что раскладывает program_groups, с числом
+        карточек: «Движки и игры — 4». У группы, где что-то не стоит,
+        число красное — проблемные места видно до клика.
+        """
+        self.nav_prog_sub = QWidget()
+        self.nav_prog_sub.setObjectName("navSub")
+        sub = QVBoxLayout(self.nav_prog_sub)
+        sub.setContentsMargins(20, 4, 2, 6)
+        sub.setSpacing(1)
+        self.nav_prog_buttons: list = []
+        self._programs_picked = False
+
+        all_button = QPushButton("Все программы")
+        all_button.setObjectName("subnav")
+        all_button.setCheckable(True)
+        all_button.setChecked(True)
+        all_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        all_button.setMinimumHeight(19)
+        all_button.clicked.connect(lambda: self._open_program_group(""))
+        sub.addWidget(all_button)
+        self.nav_prog_buttons.append(all_button)
+
+        # В сайдбаре подписи короче: полные названия не влезают в 190
+        # пикселей и упираются в край.
+        short_titles = {
+            "engines": "Движки и игры",
+            "editors": "Редакторы",
+            "office": "Офис",
+            "media": "Медиа",
+            "record": "Запись",
+            "devices": "Эмуляторы",
+            "shared": "Общие",
+            "bridges": "Служебные",
+            "other": "Прочее",
+        }
+        for key, title in program_groups.GROUPS:
+            button = QPushButton(short_titles.get(key, title))
+            button.setProperty("group", key)
+            button.setObjectName("subnav")
+            button.setCheckable(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setMinimumHeight(19)
+            button.clicked.connect(
+                lambda _checked=False, k=key: self._open_program_group(k))
+            sub.addWidget(button)
+            self.nav_prog_buttons.append(button)
+        rows = 1 + len(program_groups.GROUPS)
+        self.nav_prog_sub.setFixedHeight(rows * 19 + (rows - 1) + 10)
+        self.nav_prog_sub.setVisible(False)
+        return self.nav_prog_sub
+
+    def _programs_index(self) -> int:
+        for index in range(self.tabs.count()):
+            if self.tabs.tabText(index) == "Программы":
+                return index
+        return -1
+
+    def _open_program_group(self, group_id: str) -> None:
+        """Открыть «Программы» и показать только эту категорию."""
+        index = self._programs_index()
+        if index < 0:
+            return
+        self._programs_picked = True
+        self.tabs.setCurrentIndex(index)
+        self.programs_tab.set_program_group(group_id)
+        self._sync_nav(index)
+        self._sync_prog_subnav(group_id)
+
+    def _sync_prog_subnav(self, group_id: str) -> None:
+        for button in getattr(self, "nav_prog_buttons", []) or []:
+            key = button.property("group")
+            if key is None:
+                checked = not group_id
+            else:
+                checked = key == group_id
+            button.setChecked(bool(checked))
+
+    def _refresh_prog_subnav(self) -> None:
+        """Счётчики и цвет проблемных групп в подменю программ."""
+        counts = self.programs_tab.group_counts()
+        for button in getattr(self, "nav_prog_buttons", []) or []:
+            key = button.property("group")
+            if key is None:
+                continue
+            base = button.text().split(" — ")[0]
+            total, broken = counts.get(key, (0, 0))
+            # Группа без карточек не нужна в меню: пустой пункт только
+            # занимает высоту, которой и так впритык.
+            button.setVisible(bool(total))
+            button.setText(f"{base} — {total}" if total else base)
+            # Жёлтый, а не красный: «не установлено» — обычное дело,
+            # красный оставляем для настоящих сбоев.
+            if broken:
+                button.setStyleSheet(f"color: {ui.WARN};")
+            else:
+                button.setStyleSheet("")
+        # Высота — по числу видимых строк: скрытое «Прочее» не должно
+        # оставлять пустую полосу.
+        shown = sum(1 for b in self.nav_prog_buttons if not b.isHidden())
+        self.nav_prog_sub.setFixedHeight(
+            max(1, shown) * 19 + max(0, shown - 1) + 10)
+        self._sync_prog_subnav(self.programs_tab.program_group())
+
+    def _opencode_index(self) -> int:
+        """Номер вкладки opencode. Ищем по подписи, а не по числу."""
+        for index in range(self.tabs.count()):
+            if self.tabs.tabText(index) == "opencode":
+                return index
+        return -1
+
+    def _open_bridge_group(self, group_id: str) -> None:
+        """Открыть opencode и показать в таблице только эту категорию."""
+        index = self._opencode_index()
+        if index < 0:
+            return
+        self._bridge_picked = True
+        self.tabs.setCurrentIndex(index)
+        self.caps_tab.set_bridge_category(group_id)
+        self._sync_nav(index)
+        self._sync_subnav(group_id)
+        # Подменю называется «Все мосты», а вкладка открывается на
+        # агентах — без прокрутки человек не видел, что фильтр сработал.
+        QTimer.singleShot(0, lambda: self.caps_tab.ensureWidgetVisible(
+            self.caps_tab.reg_table, 0, 30))
+
+    def _sync_subnav(self, group_id: str) -> None:
+        """Отметить в подменю выбранную категорию."""
+        for button in getattr(self, "nav_sub_buttons", []) or []:
+            text = button.text()
+            checked = (text == "Все мосты" and not group_id) or (
+                group_id and text == mcp_categories.title(group_id))
+            button.setChecked(bool(checked))
 
     def _sync_nav(self, index: int) -> None:
         """Отметить в меню тот раздел, что открыт в полосе вкладок.
@@ -8169,6 +8861,39 @@ class MainWindow(QMainWindow):
             status = getattr(self, "nav_status", None)
             if status is not None:
                 status.setText(buttons[index].text())
+        create_footer = getattr(self, "create_footer", None)
+        if create_footer is not None:
+            create_footer.setVisible(index == 0)
+        bridge_footer = getattr(self, "bridge_footer", None)
+        if bridge_footer is not None:
+            bridge_footer.setVisible(
+                index == next((i for i in range(self.tabs.count())
+                               if self.tabs.tabText(i) == "Мост NCP"), -1))
+        sub = getattr(self, "nav_sub", None)
+        prog_sub = getattr(self, "nav_prog_sub", None)
+        if sub is not None:
+            sub_visible = index == self._opencode_index()
+            sub.setVisible(sub_visible)
+            if sub_visible and not getattr(self, "_bridge_picked", False):
+                # Раздел открыт целиком: подсвеченный «Все мосты» над
+                # экраном агентов сбивал с толку.
+                for button in getattr(self, "nav_sub_buttons", []) or []:
+                    button.setChecked(False)
+        if prog_sub is not None:
+            prog_visible = index == self._programs_index()
+            prog_sub.setVisible(prog_visible)
+            if prog_visible:
+                # В «Программах» подменю и есть сам экран: «Все программы»
+                # — честное текущее состояние, и оно подсвечено. Снимать
+                # подсветку здесь значило бы показать неактивный пункт.
+                self._refresh_prog_subnav()
+        # Подпись раздела внизу дублирует открытый раздел и отнимает
+        # высоту у подменю — на время подменю её прячем.
+        status = getattr(self, "nav_status", None)
+        if status is not None:
+            any_sub = bool((sub is not None and sub.isVisible())
+                           or (prog_sub is not None and prog_sub.isVisible()))
+            status.setVisible(not any_sub)
 
     def closeEvent(self, event) -> None:  # noqa: N802 — имя из Qt
         """Крестик закрывает программу, как закрывал раньше.
