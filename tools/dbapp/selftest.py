@@ -13662,9 +13662,43 @@ def main() -> int:
             _logged.append((str(kind), str(text))), _saved["log.add"](text, kind),
         )[1]
 
+        # Строка таблицы и сервер — разные списки. Таблица показывает
+        # мосты по алфавиту (_reg_visible сортирует по имени), а
+        # reg_servers лежит в порядке реестра. Поэтому индекс строки в
+        # reg_servers указывает на другой сервер: в одной и той же
+        # проверке строка 15 — это chatgpt по реестру и lmarena по
+        # алфавиту. Нажатие уходило в чужой обработчик, а тот открывал
+        # модальный диалог — прогон вставал насмерть и никогда не
+        # доходил до конца.
+        # Проверяем то, на чём держится обход: строка, найденная по
+        # серверу, даёт программе именно этот сервер.
+        _shown_ids = [s.id for s in _tab._reg_shown]
+        _wrong_row = []
+        for _srv in _tab.reg_servers:
+            if _srv.id not in _es.IDS:
+                continue
+            if _srv.id not in _shown_ids:
+                _wrong_row.append(f"{_srv.id}: сервера нет в таблице")
+                continue
+            _row_by_table = _shown_ids.index(_srv.id)
+            _tab.reg_table.setCurrentCell(_row_by_table, 0)
+            _picked = _tab._reg_current()
+            if _picked is None or _picked.id != _srv.id:
+                _wrong_row.append(
+                    f"{_srv.id}: строка {_row_by_table} дала "
+                    f"{_picked.id if _picked is not None else 'ничего'}")
+        check(not _wrong_row,
+              "строка, найденная по серверу, даёт программе этот же сервер"
+              + (f" — расходятся: {_wrong_row[:4]}" if _wrong_row else ""))
+
         try:
-            for _row, _srv in enumerate(_tab.reg_servers):
+            for _srv in _tab.reg_servers:
                 if _srv.id not in _es.IDS:
+                    continue
+                # Строку ищем по серверу, а не по индексу в reg_servers.
+                _row = (_shown_ids.index(_srv.id)
+                        if _srv.id in _shown_ids else -1)
+                if _row < 0:
                     continue
                 _tab.reg_table.setCurrentCell(_row, 0)
                 _crashed[_srv.id] = ""
