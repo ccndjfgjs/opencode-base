@@ -24,17 +24,22 @@ from PyQt6.QtWidgets import (
 
 # ---------------------------------------------------------------- оформление
 
-BG = "#1e1f22"
-PANEL = "#26272b"
-PANEL_ALT = "#2d2e33"
-BORDER = "#3a3b41"
-TEXT = "#e6e6e8"
-TEXT_DIM = "#9a9ba1"
-ACCENT = "#4c9aff"
-ACCENT_DIM = "#2f5f9e"
-OK = "#5fbf7f"
-WARN = "#d9a441"
-ERROR = "#e06c75"
+# Дизайн-система «Управление базой» — тёмная тема в духе X/Twitter:
+# почти чёрный фон, серые поверхности, один синий акцент (#1d9bf0).
+# Иерархия — тоном поверхности и лёгкой границей, без теней.
+BG = "#000000"          # база: окно, сайдбар, врезанные поля
+PANEL = "#16181c"       # поверхности: панель вкладок, сайдбар
+PANEL_ALT = "#1d1f23"   # приподнятый слой: поля ввода, кнопки, hover
+CARD = "#16181c"        # карточки-группы внутри панели
+BORDER = "#2f3336"
+BORDER_LIGHT = "#3e4144"  # граница при наведении/фокусе
+TEXT = "#e7e9ea"
+TEXT_DIM = "#8b949e"
+ACCENT = "#1d9bf0"
+ACCENT_DIM = "#1a8cd8"
+OK = "#00ba7c"
+WARN = "#ffd400"
+ERROR = "#f4212e"
 
 # Окно у значка трея. Оно открывается поверх всего, поэтому рамка и тень
 # обязательны: без рамки светлое содержимое уезжает на светлый рабочий
@@ -42,8 +47,8 @@ ERROR = "#e06c75"
 PANEL_QSS = f"""
 #TrayPanel {{
     background: {PANEL};
-    border: 1px solid {BORDER};
-    border-radius: 6px;
+    border: 1px solid {BORDER_LIGHT};
+    border-radius: 8px;
 }}
 /* Селектор намеренно не QWidget: правило по QWidget цепляется ко всем
    вложенным элементам, и каждая подпись в панели получала рамку с
@@ -56,11 +61,11 @@ QPushButton {{
     background: {PANEL_ALT};
     color: {TEXT};
     border: 1px solid {BORDER};
-    border-radius: 4px;
-    padding: 2px 10px;
+    border-radius: 999px;
+    padding: 3px 10px;
 }}
-QPushButton:hover {{ border-color: {ACCENT}; color: {ACCENT}; }}
-QPushButton:pressed {{ background: {ACCENT_DIM}; }}
+QPushButton:hover {{ border-color: {BORDER_LIGHT}; background: {BORDER}; }}
+QPushButton:pressed {{ background: {PANEL}; }}
 /* Крестик закрытия. Без рамки: он не действие, а выход, и рамка на нём
    превращала бы его в такую же кнопку, как соседнюю, и тянула взгляд на
    пустое место. Цвет приглушённый: крестик заметен, но не спорит с
@@ -68,7 +73,7 @@ QPushButton:pressed {{ background: {ACCENT_DIM}; }}
 QPushButton#TrayPanelClose {{
     background: transparent;
     border: none;
-    border-radius: 4px;
+    border-radius: 999px;
     color: {TEXT_DIM};
     padding: 0;
     font-size: 13px;
@@ -80,7 +85,7 @@ QPushButton#TrayPanelClose:hover {{
 QScrollBar:vertical {{
     background: transparent;
     width: 10px;
-    margin: 0;
+    margin: 2px;
 }}
 QScrollBar::handle:vertical {{
     background: {BORDER};
@@ -96,9 +101,9 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
 def app_icon() -> QIcon:
     """Значок программы — рисуется сам, файлов с картинками в ней нет.
 
-    Рисуем скруглённый квадрат в акцентном цвете с белой полосой
-    «корешка папки»: тот же значок встаёт и в заголовок окна, и в трей,
-    и в уведомления Windows, поэтому выглядит везде одинаково.
+    Три скруглённые «полки» с прорезью в каждой — образ базы данных:
+    тот же значок встаёт и в заголовок окна, и в трей, и в уведомления
+    Windows, поэтому выглядит везде одинаково.
     """
     icon = QIcon()
     for size in (16, 24, 32, 48, 64, 128, 256):
@@ -106,22 +111,26 @@ def app_icon() -> QIcon:
         pixmap.fill(QColor(0, 0, 0, 0))
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        margin = size * 0.08
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(ACCENT))
-        painter.drawRoundedRect(
-            QRectF(margin, margin, size - 2 * margin, size - 2 * margin),
-            size * 0.22, size * 0.22,
-        )
-        # полоса «папки» — единственная деталь, читаемая и в 16 пикселей
-        painter.setBrush(QColor("#ffffff"))
-        left = size * 0.26
-        painter.drawRect(
-            QRectF(left, size * 0.30, size * 0.48, max(1.0, size * 0.10))
-        )
-        painter.drawRect(
-            QRectF(left, size * 0.48, size * 0.34, max(1.0, size * 0.10))
-        )
+        gap = size * 0.09          # зазор между полками
+        shelf_h = (size - 2 * gap) / 3.0
+        width = size
+        top = 0.0
+        for _ in range(3):
+            # сама полка
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(ACCENT))
+            painter.drawRoundedRect(
+                QRectF(0, top, width, shelf_h), shelf_h * 0.32, shelf_h * 0.32,
+            )
+            # прорезь — тёмная линия через середину полки
+            painter.setBrush(QColor(BG))
+            cut_h = max(1.0, size * 0.045)
+            painter.drawRoundedRect(
+                QRectF(width * 0.10, top + shelf_h / 2 - cut_h / 2,
+                       width * 0.80, cut_h),
+                cut_h / 2, cut_h / 2,
+            )
+            top += shelf_h + gap
         painter.end()
         icon.addPixmap(pixmap)
     return icon
@@ -139,27 +148,68 @@ class SplashWindow(QWidget):
         super().__init__()
         self.setWindowTitle("Управление базой")
         self.setWindowIcon(app_icon())
-        self.setFixedSize(360, 158)
+        self.setWindowTitle("Управление базой")
+        self.setWindowIcon(app_icon())
         # Селектор по имени: иначе стиль окна (фон, рамка) сходит и на
         # подписи внутри, и те обводятся рамками — выглядит как чертёж.
         self.setObjectName("splashWindow")
         self.setStyleSheet(
-            f"QWidget#splashWindow {{ background: {PANEL};"
-            f" border: 1px solid {BORDER}; border-radius: 8px; }}"
+            f"QWidget#splashWindow {{ background: {BG};"
+            f" border: 1px solid {BORDER}; border-radius: 24px; }}"
             f"QLabel {{ border: none; background: transparent; }}"
         )
+        self.setFixedWidth(360)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 20, 22, 20)
-        layout.setSpacing(10)
+        layout.setContentsMargins(26, 24, 26, 24)
+        layout.setSpacing(12)
+        head = QHBoxLayout()
+        head.setSpacing(14)
+        badge = QLabel()
+        # Логотип не тянет ни при каком размере окна: пропорции храним
+        # (KeepAspectRatio), масштабируем плавно, больше оригинала не
+        # растём (фиксированные 48x48) и рисуем по центру своей ячейки.
+        # Без фиксации лейбл сжимался раскладкой на маленькой высоте окна
+        # (на экране 150% меряно 48x28) и логотип срезался снизу.
+        logo_pm = app_icon().pixmap(48, 48)
+        # scaled() считает в физических пикселях: на экране с масштабом
+        # 150% прямой scaled(48, 48) уменьшил бы логотип до 32. Поэтому
+        # цель умножаем на плотность экрана и возвращаем ей DPR назад —
+        # картинка остаётся 48x48 в логических пикселях при любой DPR.
+        _dpr = logo_pm.devicePixelRatio() or 1.0
+        logo_pm = logo_pm.scaled(
+            round(48 * _dpr), round(48 * _dpr),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        logo_pm.setDevicePixelRatio(_dpr)
+        badge.setPixmap(logo_pm)
+        badge.setScaledContents(False)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Размер метки считаем от самой картинки (в логических пикселях),
+        # а не зашиваем: на любом масштабе Windows метка и картинка
+        # совпадают, и логотип не срезается и не растягивается.
+        _logo_w = round(logo_pm.width() / _dpr)
+        _logo_h = round(logo_pm.height() / _dpr)
+        badge.setFixedSize(_logo_w, _logo_h)
+        badge.setStyleSheet("border: none; background: transparent;")
+        head.addWidget(badge)
         title = QLabel("Управление базой")
         title.setStyleSheet(
-            f"QLabel {{ color: {TEXT}; font-size: 15px; font-weight: 600;"
+            f"QLabel {{ color: {TEXT}; font-size: 22px; font-weight: 700;"
             " border: none; background: transparent; }"
+        )
+        head.addWidget(title)
+        head.addStretch(1)
+        layout.addLayout(head)
+        self.percent = QLabel("")
+        self.percent.setStyleSheet(
+            f"QLabel {{ color: {TEXT_DIM}; font-size: 12px;"
+            " border: none; background: transparent; }}"
         )
         self.step = QLabel("Запуск…")
         self.step.setStyleSheet(
-            f"QLabel {{ color: {TEXT_DIM}; font-size: 12px;"
-            " border: none; background: transparent; }"
+            f"QLabel {{ color: {TEXT_DIM}; font-size: 13px;"
+            " border: none; background: transparent; }}"
         )
         self.step.setWordWrap(True)
         # Шкала загрузки. Полоска идёт слева направо и показывает
@@ -169,34 +219,43 @@ class SplashWindow(QWidget):
         self.bar.setRange(0, 100)
         self.bar.setValue(0)
         self.bar.setTextVisible(False)
-        self.bar.setFixedHeight(6)
+        self.bar.setFixedHeight(8)
         self.bar.setStyleSheet(
-            f"QProgressBar {{ background: {PANEL_ALT}; border: none;"
-            f" border-radius: 3px; }}"
+            f"QProgressBar {{ background: {PANEL}; border: none;"
+            f" border-radius: 4px; }}"
             f"QProgressBar::chunk {{ background: {ACCENT};"
-            " border-radius: 3px; }"
+            " border-radius: 4px; }"
         )
-        layout.addWidget(title)
         layout.addStretch(1)
+        layout.addWidget(self.percent)
         layout.addWidget(self.step)
-        layout.addSpacing(2)
+        layout.addSpacing(4)
         layout.addWidget(self.bar)
+        # Высота — по содержимому. Прежние жёсткие 158px не вмещали шапку
+        # с логотипом на экранах с масштабом 150% (меряно: содержимому
+        # нужно 178), раскладка сжимала шапку и срезала логотип. Максимум
+        # прежних 158 и собственных потребностей раскладки: на обычных
+        # экранах размер остаётся прежним, на крупных растёт ровно
+        # настолько, сколько нужно.
+        self.setFixedHeight(max(158, self.sizeHint().height()))
 
     def say(self, text: str, percent: int | None = None) -> None:
-        """Подписать шаг и сдвинуть шкалу.
-
-        Здесь намеренно НЕ processEvents. Сначала стоял именно он, и он
-        стоил четыре секунды запуска: очередь событий прогоняла
-        перерисовку полусобранного главного окна, а шагов десять.
-        Измерено: MainWindow() 2.9 с в покое против 7.1 с с очередью
-        событий на каждом шаге. Надпись и полосу достаточно перерисовать
-        точечно — очередь крутить не нужно.
-        """
+        """Подписать шаг и сдвинуть шкалу."""
         self.step.setText(text)
         if percent is not None:
-            self.bar.setValue(max(0, min(100, int(percent))))
-        for part in (self.step, self.bar):
+            value = max(0, min(100, int(percent)))
+            self.bar.setValue(value)
+            self.percent.setText(f"{value}%")
+        # Окно перерисовывается целиком и синхронно, без прокрутки очереди
+        # событий. Во время сборки вкладок главного окна поток занят, и
+        # repaint() без этого не выполнится — splash висел бы «мёртвой»
+        # картинкой на одной надписи, а человек принимал бы работу за
+        # зависание. processEvents() здесь брать нельзя: он выстрелит
+        # отложенными таймерами страниц, а им нельзя работать на
+        # полусобранном окне (известное падение 0xC0000409).
+        for part in (self.step, self.bar, self.percent):
             part.repaint()
+        self.repaint()
 
 
 class TrayIcon(QSystemTrayIcon):
@@ -379,72 +438,218 @@ def apply_dark_theme(app) -> None:
         f"""
         QWidget {{ font-size: 13px; }}
         #sidebar {{
-            background: {PANEL};
+            background: {BG};
             border-right: 1px solid {BORDER};
         }}
         QPushButton#nav {{
             background: transparent;
             border: none;
-            border-radius: 6px;
+            border-radius: 999px;
             color: {TEXT};
             text-align: left;
-            padding: 6px 10px;
+            padding: 5px 12px;
         }}
         QPushButton#nav:hover {{ background: {PANEL_ALT}; }}
         QPushButton#nav:checked {{
-            background: {PANEL_ALT};
-            color: {ACCENT};
-            font-weight: 600;
+            background: {ACCENT};
+            color: #ffffff;
+            font-weight: 700;
         }}
-        QTabWidget::pane {{ border: 1px solid {BORDER}; border-radius: 6px;
+        /* Подменю категорий мостов: мельче основного меню и без плашки,
+           чтобы не спорить с выбранным разделом. */
+        QPushButton#subnav {{
+            background: transparent;
+            border: none;
+            border-radius: 999px;
+            color: {TEXT_DIM};
+            text-align: left;
+            padding: 2px 10px;
+            font-size: 11px;
+        }}
+        QPushButton#subnav:hover {{ background: {PANEL_ALT}; color: {TEXT}; }}
+        QPushButton#subnav:checked {{
+            color: {ACCENT};
+            font-weight: 700;
+            background: transparent;
+        }}
+        /* Значок подсказки: маленькая серая «i», полный текст в тултипе. */
+        QLabel#infoDot {{
+            color: {TEXT_DIM};
+            font-size: 14px;
+            padding: 0 4px;
+        }}
+        /* Спойлер внутри карточки: без рамки и фона, только стрелка. */
+        QToolButton#cardSpoiler {{
+            background: transparent;
+            border: none;
+            border-radius: 6px;
+            padding: 2px 4px;
+            color: {TEXT_DIM};
+            font-size: 12px;
+            font-weight: 600;
+            text-align: left;
+        }}
+        QToolButton#cardSpoiler:hover {{ color: {ACCENT}; }}
+        QTabWidget::pane {{ border: 1px solid {BORDER}; border-radius: 16px;
                             background: {PANEL}; }}
         QTabBar::tab {{ background: {BG}; color: {TEXT_DIM};
                         padding: 8px 18px; border: 1px solid {BORDER};
                         border-bottom: none;
-                        border-top-left-radius: 6px;
-                        border-top-right-radius: 6px; margin-right: 2px; }}
+                        border-top-left-radius: 10px;
+                        border-top-right-radius: 10px; margin-right: 2px; }}
         QTabBar::tab:selected {{ background: {PANEL}; color: {TEXT}; }}
         QTabBar::tab:hover {{ color: {TEXT}; }}
 
-        QListWidget {{ background: {PANEL}; border: 1px solid {BORDER};
-                       border-radius: 6px; padding: 4px; outline: none; }}
-        QListWidget::item {{ padding: 8px 10px; border-radius: 4px; }}
-        QListWidget::item:selected {{ background: {ACCENT_DIM}; color: #ffffff; }}
+        QListWidget {{ background: {BG}; border: 1px solid {BORDER};
+                       border-radius: 12px; padding: 4px; outline: none; }}
+        QListWidget::item {{ padding: 8px 10px; border-radius: 8px; }}
+        QListWidget::item:selected {{ background: {ACCENT}; color: #ffffff; }}
         QListWidget::item:hover {{ background: {PANEL_ALT}; }}
 
-        QLineEdit {{ background: {PANEL_ALT}; border: 1px solid {BORDER};
-                     border-radius: 4px; padding: 6px 8px; color: {TEXT}; }}
+        QLineEdit {{ background: {BG}; border: 1px solid {BORDER};
+                     border-radius: 8px; padding: 7px 12px; color: {TEXT};
+                     selection-background-color: {ACCENT}; }}
+        QLineEdit:hover {{ border: 1px solid {BORDER_LIGHT}; }}
         QLineEdit:focus {{ border: 1px solid {ACCENT}; }}
+        QLineEdit:disabled {{ color: {TEXT_DIM}; background: {PANEL}; }}
         QLineEdit[bad="true"] {{ border: 1px solid {ERROR}; }}
 
+        QComboBox, QSpinBox, QDoubleSpinBox {{
+            background: {BG}; border: 1px solid {BORDER};
+            border-radius: 8px; padding: 6px 12px; color: {TEXT};
+        }}
+        QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover {{
+            border: 1px solid {BORDER_LIGHT};
+        }}
+        QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
+            border: 1px solid {ACCENT};
+        }}
+        QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {{
+            color: {TEXT_DIM}; background: {PANEL};
+        }}
+        QComboBox::drop-down {{ border: none; width: 24px; }}
+        QComboBox QAbstractItemView {{
+            background: {PANEL_ALT}; border: 1px solid {BORDER_LIGHT};
+            border-radius: 8px; padding: 4px;
+            selection-background-color: {ACCENT};
+            selection-color: #ffffff; outline: none;
+        }}
+
         QPushButton {{ background: {PANEL_ALT}; border: 1px solid {BORDER};
-                       border-radius: 4px; padding: 7px 16px; color: {TEXT}; }}
-        QPushButton:hover {{ background: {BORDER}; }}
+                       border-radius: 999px; padding: 7px 18px; color: {TEXT}; }}
+        QPushButton:hover {{ background: {BORDER}; border-color: {BORDER_LIGHT}; }}
+        QPushButton:pressed {{ background: {PANEL}; }}
         QPushButton:disabled {{ color: {TEXT_DIM}; background: {PANEL}; }}
-        QPushButton#primary {{ background: {ACCENT_DIM}; border-color: {ACCENT};
-                               font-weight: 600; }}
-        QPushButton#primary:hover {{ background: {ACCENT}; color: #ffffff; }}
+        QPushButton#primary {{ background: {ACCENT}; border-color: {ACCENT};
+                               color: #ffffff; font-weight: 700; }}
+        QPushButton#primary:hover {{ background: {ACCENT_DIM}; border-color: {ACCENT_DIM};
+                                     color: #ffffff; }}
         QPushButton#primary:disabled {{ background: {PANEL};
                                         border-color: {BORDER};
                                         color: {TEXT_DIM}; }}
+        QPushButton#ghost {{ background: transparent; border: 1px solid {ACCENT};
+                             color: {ACCENT}; font-weight: 600; }}
+        QPushButton#ghost:hover {{ background: rgba(29, 155, 240, 0.12); }}
+        QPushButton#ghost:disabled {{ background: transparent;
+                                      border-color: {BORDER};
+                                      color: {TEXT_DIM}; }}
+        /* Опасное действие: красная рамка и красный текст, заливка
+           только при наведении. Стоит отдельно от безопасных кнопок. */
+        QPushButton#danger {{
+            background: transparent;
+            border: 1px solid {ERROR};
+            color: {ERROR};
+            font-weight: 600;
+        }}
+        QPushButton#danger:hover {{
+            background: rgba(244, 33, 46, 0.12);
+            color: {ERROR};
+        }}
+        QPushButton#danger:disabled {{
+            background: transparent;
+            border-color: {BORDER};
+            color: {TEXT_DIM};
+        }}
+
+        QToolButton {{ background: {CARD}; border: 1px solid {BORDER};
+                       border-radius: 12px; padding: 12px 16px;
+                       color: {TEXT}; text-align: left;
+                       font-size: 14px; font-weight: 600; }}
+        QToolButton:hover {{ border-color: {BORDER_LIGHT}; background: {PANEL_ALT}; }}
+        QToolButton:pressed {{ background: {PANEL_ALT}; }}
 
         QPlainTextEdit {{ background: {BG}; border: 1px solid {BORDER};
-                          border-radius: 6px; color: {TEXT};
+                          border-radius: 12px; color: {TEXT};
+                          padding: 6px;
                           font-family: Consolas, "Courier New", monospace; }}
 
-        QGroupBox {{ border: 1px solid {BORDER}; border-radius: 6px;
-                     margin-top: 10px; padding: 12px 10px 10px 10px; }}
-        QGroupBox::title {{ subcontrol-origin: margin; left: 10px;
-                            padding: 0 4px; color: {TEXT_DIM}; }}
+        /* Карточка секции: заголовок стоит СНАРУЖИ рамки, отдельной
+           строкой над ней. Раньше он рисовался в полосе margin впритык
+           к границе, и текст визуально врезался в блок. */
+        QGroupBox {{ background: {CARD};
+                     border: 1px solid {BORDER}; border-radius: 16px;
+                     margin-top: 30px; padding: 16px 14px 14px 14px; }}
+        QGroupBox::title {{ subcontrol-origin: margin;
+                            subcontrol-position: top left;
+                            left: 2px; top: 0;
+                            padding: 0;
+                            color: {TEXT};
+                            font-size: 14px; font-weight: 700; }}
+        /* Карточка программы: имя стоит внутри, заголовка у рамки нет. */
+        QGroupBox#programCard {{ margin-top: 0; padding: 16px; }}
 
-        QCheckBox {{ color: {TEXT}; }}
-        QRadioButton {{ color: {TEXT}; }}
+        QCheckBox {{ color: {TEXT}; spacing: 8px; }}
+        QRadioButton {{ color: {TEXT}; spacing: 8px; }}
+
+        QToolTip {{ background: {PANEL_ALT}; color: {TEXT};
+                    border: 1px solid {BORDER_LIGHT};
+                    border-radius: 8px; padding: 6px 10px; }}
+
+        QProgressBar {{
+            background: {BORDER};
+            border: none;
+            border-radius: 5px;
+            text-align: center;
+            color: {TEXT_DIM};
+        }}
+        QProgressBar::chunk {{
+            background: {ACCENT};
+            border-radius: 5px;
+        }}
+
+        QTableWidget {{
+            background: {BG};
+            alternate-background-color: {PANEL};
+            border: 1px solid {BORDER};
+            border-radius: 12px;
+            gridline-color: {BORDER};
+            selection-background-color: {ACCENT};
+            selection-color: #ffffff;
+            font-size: 12px;
+        }}
+        QTableWidget::item {{ padding: 4px 6px; }}
+        QTableWidget::item:selected {{ color: #ffffff; }}
+        QHeaderView::section {{
+            background: {PANEL};
+            color: {TEXT_DIM};
+            border: none;
+            border-bottom: 1px solid {BORDER};
+            padding: 6px 6px;
+            font-weight: 600;
+            text-align: left;
+        }}
+
         QLabel#hint {{ color: {TEXT_DIM}; }}
-        QLabel#title {{ font-size: 17px; font-weight: 600; }}
-        QScrollBar:vertical {{ background: {BG}; width: 10px; margin: 0; }}
+        QLabel#title {{ font-size: 20px; font-weight: 700; }}
+        QScrollBar:vertical {{ background: transparent; width: 12px; margin: 2px; }}
         QScrollBar::handle:vertical {{ background: {BORDER}; border-radius: 5px;
                                        min-height: 24px; }}
-        QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
+        QScrollBar::handle:vertical:hover {{ background: {BORDER_LIGHT}; }}
+        QScrollBar:horizontal {{ background: transparent; height: 12px; margin: 2px; }}
+        QScrollBar::handle:horizontal {{ background: {BORDER}; border-radius: 5px;
+                                         min-width: 24px; }}
+        QScrollBar::handle:horizontal:hover {{ background: {BORDER_LIGHT}; }}
+        QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
         """
     )
 

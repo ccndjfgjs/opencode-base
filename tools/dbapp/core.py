@@ -2632,6 +2632,30 @@ def refresh_skills(base: Path) -> list[str]:
     # Найдено живьём: в уже созданных базах папки tools/agents не было вовсе,
     # и в папке настроек opencode она была пуста — @iskatel и остальные
     # одиннадцать просто не существовали.
+    messages.extend(refresh_agents(base))
+
+    # Реестр MCP-серверов и уведомления — та же история, едут вместе с базой.
+    messages.extend(sync_base_data(base))
+    return messages
+
+
+def refresh_agents(base: Path) -> list[str]:
+    """Обновляет агентов в базе из конструктора: папка и реестр агентов.
+
+    Агент — часть программы, а не данные базы: обязан совпадать с
+    образцом, иначе нейросеть зовёт устаревшую голову. Здесь две вещи:
+
+    * папка `tools/agents` — те же правила, что у скиллов: свою папку
+      человека не трогаем, знакомые файлы обновляем, чужие храним;
+    * `agents-index.json` — реестр «кого вообще можно выбрать», едет
+      всегда, как skills-index у скиллов.
+
+    Выделено 21.10.2026 из refresh_skills: во вкладке «Обновление»
+    появились отдельные кнопки для скиллов и агентов, и агентам нужна
+    своя точка входа. refresh_skills зовёт эту же функцию — поведение
+    прежнее, сообщения прежние.
+    """
+    messages: list[str] = []
     agents_src = program_root() / "tools" / "agents"
     agents_dst = base / "tools" / "agents"
     if agents_src.is_dir():
@@ -2645,8 +2669,20 @@ def refresh_skills(base: Path) -> list[str]:
             if changed:
                 messages.append(f"Агенты обновлены: {len(changed)} файл")
 
-    # Реестр MCP-серверов и уведомления — та же история, едут вместе с базой.
-    messages.extend(sync_base_data(base))
+    # Реестр агентов — часть пакета агентов: из него база узнаёт, кто
+    # вообще есть. Едет всегда, как индекс скиллов.
+    src_index = program_file("agents-index.json")
+    dst_index = base / "agents-index.json"
+    if src_index.is_file():
+        try:
+            data = json.loads(src_index.read_text(encoding="utf-8"))
+            count = len(data.get("agents", [])) if isinstance(data, dict) else 0
+        except (OSError, ValueError):
+            count = 0
+        if not dst_index.is_file() or dst_index.read_bytes() != src_index.read_bytes():
+            dst_index.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_index, dst_index)
+            messages.append(f"Реестр агентов обновлён ({count} записей)")
     return messages
 
 

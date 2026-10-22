@@ -59,6 +59,9 @@ ACTION_NONE = "none"             # ставить нечего
 ACTION_WINGET = "winget"         # кнопка «Установить» через winget
 ACTION_DOWNLOAD = "download"     # кнопка качает с официального адреса
 ACTION_MANUAL = "manual"         # кнопки нет: страница и команда в буфер
+#: pip-пакет в своё окружение (uv sync по pyproject с пином). Первый
+#: такой случай — kinocut (21.10.2026): это pip-пакет, winget его не ставит.
+ACTION_VENV_PIP = "venv-pip"     # кнопка ставит pip-пакет в окружение моста
 
 #: Значение метода из реестра -> действие вкладки. Метод `none` означает
 #: разные вещи в разных серверах, поэтому подпись к нему обязательна: молча
@@ -69,6 +72,7 @@ METHOD_TO_ACTION = {
     "official-download": ACTION_DOWNLOAD,
     "manual": ACTION_MANUAL,
     "none": ACTION_NONE,
+    "venv-pip": ACTION_VENV_PIP,
 }
 
 #: Мост уже лежит внутри программы.
@@ -103,7 +107,8 @@ class InstallView:
 
     @property
     def has_button(self) -> bool:
-        return self.action in (ACTION_WINGET, ACTION_DOWNLOAD)
+        return self.action in (ACTION_WINGET, ACTION_DOWNLOAD,
+                               ACTION_VENV_PIP)
 
 
 @dataclass

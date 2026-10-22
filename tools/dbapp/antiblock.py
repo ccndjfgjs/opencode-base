@@ -465,13 +465,18 @@ def antiblock_status(dest: Path) -> bool:
     )
 
 
-def _port_listening(host: str, port: int, timeout: float = 1.0) -> bool:
+def _port_listening(host: str, port: int, timeout: float = 0.25) -> bool:
     """Слушает ли локальный порт. Без интернета, только свой компьютер.
 
     Отдельная функция потому, что портов теперь два — фасад и свой
     канал, — а проверка одна и та же. Закрытый локальный порт падает
     мгновенно с отказом, а не по таймауту, поэтому вызов дешёвый и
     годится для строки состояния при открытии вкладки.
+
+    Таймаут маленький (0.25 с) не только от дешевизны: эта проверка
+    идёт при сборке окна, и каждая такая задержка выглядит как
+    зависание запуска. Достаточно узнать, что порт открыт; если он
+    молчит на локальной петле четверть секунды — его и нет.
     """
     try:
         with socket.create_connection((host, port), timeout=timeout):
@@ -481,7 +486,7 @@ def _port_listening(host: str, port: int, timeout: float = 1.0) -> bool:
 
 
 def facade_running(
-    host: str = FACADE_HOST, port: int = FACADE_PORT, timeout: float = 1.0
+    host: str = FACADE_HOST, port: int = FACADE_PORT, timeout: float = 0.25
 ) -> bool:
     """Слушает ли фасад свой порт."""
     return _port_listening(host, port, timeout)
@@ -491,7 +496,7 @@ def channel_state(
     host: str = FACADE_HOST,
     xray_port: int = XRAY_PORT,
     facade_port: int = FACADE_PORT,
-    timeout: float = 1.0,
+    timeout: float = 0.25,
 ) -> tuple[str, str]:
     """Чем жив обход прямо сейчас: своим каналом, запасным или ничем.
 

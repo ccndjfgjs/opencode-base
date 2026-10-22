@@ -83,6 +83,7 @@ EXPLICIT: dict[str, tuple[str, str]] = {
     "android-emulator": ("devices", "мост к устройству: издателя нет"),
     "ldplayer": ("devices", "мост к устройству: издателя нет"),
     "dbhub": ("bridges", "мост к базам данных, программа не ставится"),
+    "kinocut": ("bridges", "мост к монтажу видео, программа не ставится"),
     "browsers": ("bridges", "мост к браузеру, программа не ставится"),
     "omniroute": ("bridges", "шлюз программы, внешней программы нет"),
     "lmarena": ("bridges", "мост к сайту, внешней программы нет"),
@@ -215,4 +216,4 @@ def place_card(card, placed: dict[str, Placement]) -> Placement:
                          f"{', '.join(GROUP_TITLES.get(key, key) for key in groups)}")
     first = items[0]
     return Placement(first.bridge, first.group,
-                     f"по мосту {first.bridge}: {first.rule}")
+                     f"по мосту {first.bridge} — {first.rule}")

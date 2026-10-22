@@ -1055,17 +1055,35 @@ def run_capture(argv: list[str], *, cwd: str | None = None,
 
     Три последних статуса различимы по-настоящему, а не спрятаны в тексте:
     вызывающий код обязан их различать, а читатель журнала — видеть.
+
+    Про кодировку (21.10.2026, найдено полным прогоном). Ребёнок печатает
+    по-русски в трубу: его stdout — не консоль, и Python-ребёнок пишет в
+    него в КОДИРОВКЕ КОНСОЛИ (cp1251), а отец читает трубу как UTF-8.
+    Русский доезжает кракозябрами, и «живой ответ» не узнаётся в своём
+    же выводе — полный прогон самопроверки поймал это на
+    test_process_tree. Лечение: ребёнку-питону принудительно задаётся
+    UTF-8 через PYTHONIOENCODING. Переменная безопасна для чужих детей:
+    не-Python её просто игнорирует, а системные команды (tasklist,
+    taskkill) печатают в ASCII или cp866 — их вывод в эти проверки не
+    разбирается по русским буквам.
     """
     prepared = prepare_argv(argv)
     if not prepared:
         return None, "", "пустая команда", "не_запустился"
+    # Наследуем среду отца и просим питона-ребёнка говорить по-UTF-8.
+    # Свой env вызывающего уважается: его ключи сильнее наших добавок.
+    child_env = dict(os.environ)
+    child_env.setdefault("PYTHONIOENCODING", "utf-8")
+    child_env.setdefault("PYTHONUTF8", "1")
+    if env:
+        child_env.update(env)
     image = Path(prepared[0]).name
     kernel32, job = _job_object()
     try:
         proc = subprocess.Popen(
             prepared,
             cwd=cwd,
-            env=env,
+            env=child_env,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
