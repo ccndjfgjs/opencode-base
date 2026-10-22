@@ -148,7 +148,8 @@ class SplashWindow(QWidget):
         super().__init__()
         self.setWindowTitle("Управление базой")
         self.setWindowIcon(app_icon())
-        self.setFixedSize(360, 158)
+        self.setWindowTitle("Управление базой")
+        self.setWindowIcon(app_icon())
         # Селектор по имени: иначе стиль окна (фон, рамка) сходит и на
         # подписи внутри, и те обводятся рамками — выглядит как чертёж.
         self.setObjectName("splashWindow")
@@ -157,13 +158,39 @@ class SplashWindow(QWidget):
             f" border: 1px solid {BORDER}; border-radius: 24px; }}"
             f"QLabel {{ border: none; background: transparent; }}"
         )
+        self.setFixedWidth(360)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(26, 24, 26, 24)
         layout.setSpacing(12)
         head = QHBoxLayout()
         head.setSpacing(14)
         badge = QLabel()
-        badge.setPixmap(app_icon().pixmap(48, 48))
+        # Логотип не тянет ни при каком размере окна: пропорции храним
+        # (KeepAspectRatio), масштабируем плавно, больше оригинала не
+        # растём (фиксированные 48x48) и рисуем по центру своей ячейки.
+        # Без фиксации лейбл сжимался раскладкой на маленькой высоте окна
+        # (на экране 150% меряно 48x28) и логотип срезался снизу.
+        logo_pm = app_icon().pixmap(48, 48)
+        # scaled() считает в физических пикселях: на экране с масштабом
+        # 150% прямой scaled(48, 48) уменьшил бы логотип до 32. Поэтому
+        # цель умножаем на плотность экрана и возвращаем ей DPR назад —
+        # картинка остаётся 48x48 в логических пикселях при любой DPR.
+        _dpr = logo_pm.devicePixelRatio() or 1.0
+        logo_pm = logo_pm.scaled(
+            round(48 * _dpr), round(48 * _dpr),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        logo_pm.setDevicePixelRatio(_dpr)
+        badge.setPixmap(logo_pm)
+        badge.setScaledContents(False)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Размер метки считаем от самой картинки (в логических пикселях),
+        # а не зашиваем: на любом масштабе Windows метка и картинка
+        # совпадают, и логотип не срезается и не растягивается.
+        _logo_w = round(logo_pm.width() / _dpr)
+        _logo_h = round(logo_pm.height() / _dpr)
+        badge.setFixedSize(_logo_w, _logo_h)
         badge.setStyleSheet("border: none; background: transparent;")
         head.addWidget(badge)
         title = QLabel("Управление базой")
@@ -204,6 +231,13 @@ class SplashWindow(QWidget):
         layout.addWidget(self.step)
         layout.addSpacing(4)
         layout.addWidget(self.bar)
+        # Высота — по содержимому. Прежние жёсткие 158px не вмещали шапку
+        # с логотипом на экранах с масштабом 150% (меряно: содержимому
+        # нужно 178), раскладка сжимала шапку и срезала логотип. Максимум
+        # прежних 158 и собственных потребностей раскладки: на обычных
+        # экранах размер остаётся прежним, на крупных растёт ровно
+        # настолько, сколько нужно.
+        self.setFixedHeight(max(158, self.sizeHint().height()))
 
     def say(self, text: str, percent: int | None = None) -> None:
         """Подписать шаг и сдвинуть шкалу."""
