@@ -1621,8 +1621,16 @@ def main() -> int:
                 check(hasattr(window.caps_tab, _name), f"кнопка {_name} собрана")
             check("browsers" in window.caps_tab.AUTO_SERVERS,
                   "Браузеры умеют «Настроить автоматически»")
+            # Новая таблица макета: Сервер, Категория, Состояние, Инструм.
+            # Колонку состояния ищем по заголовку, а не зашиваем номер.
+            _state_col = next(
+                (c for c in range(_reg_tab.columnCount())
+                 if _reg_tab.horizontalHeaderItem(c)
+                 and _reg_tab.horizontalHeaderItem(c).text().strip().startswith("Состояни")),
+                2,
+            )
             _states = [
-                _reg_tab.item(r, 1).text() if _reg_tab.item(r, 1) else ""
+                _reg_tab.item(r, _state_col).text() if _reg_tab.item(r, _state_col) else ""
                 for r in range(_reg_tab.rowCount())
             ]
             check(all(_states), "у всех строк заполнено состояние")
@@ -2952,7 +2960,11 @@ def main() -> int:
         core.remember_base(plan2.target, "claude")
         check(len(core.read_bases()) == 1, "повтор не создал дубль")
 
-        # список виден во вкладке
+        # список виден во вкладке. Временные базы по умолчанию скрыты
+        # (макет WorkBuddy, галочка «Показывать временные»), а пробная база
+        # живёт во временной папке — включаем показ перед проверкой.
+        if hasattr(itab, "chk_show_temp"):
+            itab.chk_show_temp.setChecked(True)
         itab._fill_mine()
         check(itab.mine_list.count() == 1,
               f"список в окне заполнен: {itab.mine_list.count()}")
