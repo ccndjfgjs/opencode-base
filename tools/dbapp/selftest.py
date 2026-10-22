@@ -13465,9 +13465,17 @@ def main() -> int:
         _gh_name = str((_by_id.get("ghidra-mcp") or {}).get("name") or "")
         check("209" not in _gh_name,
               f"неподтверждённое число инструментов из названия убрано: {_gh_name}")
-        _gh_count = str((_by_id.get("ghidra-mcp") or {}).get("tools_count") or "")
-        check("67" in _gh_count and "измерен" in _gh_count.lower(),
-              "и вместо него написано то, что измерено на этой машине")
+        # Число стоит в tools_count коротким, а пояснение «что измерено» —
+        # в tools_note: длинный текст в поле числа разъезжал колонку
+        # таблицы на тысячи пикселей (проверено 22.10.2026).
+        _gh = _by_id.get("ghidra-mcp") or {}
+        _gh_count = str(_gh.get("tools_count") or "")
+        _gh_note = str(_gh.get("tools_note") or "")
+        check("67" in _gh_count,
+              f"в поле числа стоит измеренное число: {_gh_count}")
+        check("измерен" in _gh_note.lower(),
+              "и вместо него написано то, что измерено на этой машине: "
+              f"{_gh_note[:60] or 'пояснения нет'}")
 
         # Кнопка докачки больше не зашита на OBS: её получает карточка.
         _main_src = (core.program_root() / "tools" / "dbapp" / "main.py")
