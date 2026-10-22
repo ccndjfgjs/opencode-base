@@ -241,6 +241,11 @@ class Server:
         return f"{value} инстр." if value else "—"
 
     @property
+    def tools_note(self) -> str:
+        value = self.raw.get("tools_note")
+        return str(value) if value else ""
+
+    @property
     def source(self) -> str:
         return str(self.raw.get("source") or "")
 
@@ -782,7 +787,7 @@ def _registry_key(base: Path) -> tuple | None:
     return (str(path), stat.st_size, stat.st_mtime_ns)
 
 
-def load_servers(base: Path) -> list[Server]:
+def load_servers(base: Path, check: bool = True) -> list[Server]:
     """Читает реестр и проверяет требования каждого сервера.
 
     Результат запоминается на время работы программы, и ключ — сам
@@ -793,13 +798,20 @@ def load_servers(base: Path) -> list[Server]:
     проверкой заново. На старте программы это была половина всего
     времени до появления окна.
 
+    `check=False` нужен на ранних шагах запуска, когда живая проверка
+    ещё не требуется: миграции блоков настроек достаточно записей
+    реестра. Кэш по check=False НЕ читается и НЕ пишется — иначе лёгкий
+    вызов отравил бы кэш, и настоящая проверка получила бы пустые
+    требования вместо живых. Состояния у таких серверов выходят
+    «не проверено», что честно для миграции.
+
     Почему ключ по файлу, а не по спецификации требования. Проверка
     зависит не только от записи в реестре, но и от того, что стоит на
     машине. Кэш по спецификации устарел бы молча и показал бы
     неверное «готово». Ключ по файлу реестра этого не делает: правка
     реестра меняет ключ, и всё перепроверяется само.
     """
-    key = _registry_key(base)
+    key = _registry_key(base) if check else None
     if key is not None:
         cached = _LOADED.get(key)
         if cached is not None:
@@ -818,9 +830,10 @@ def load_servers(base: Path) -> list[Server]:
                 conn.get("command") or conn.get("url") or conn.get("manual_config")
             ),
         )
-        for item in spec.get("requires") or []:
-            if isinstance(item, dict):
-                server.requirements.append(check_requirement(item))
+        if check:
+            for item in spec.get("requires") or []:
+                if isinstance(item, dict):
+                    server.requirements.append(check_requirement(item))
         result.append(server)
     if key is not None:
         _LOADED[key] = list(result)

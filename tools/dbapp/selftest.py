@@ -11919,6 +11919,14 @@ def main() -> int:
     _ptab = getattr(window, "programs_tab", None)
     check(_ptab is not None, "вкладка «Программы» создана")
     if _ptab is not None:
+        # Живая проверка программ идёт в стороне от окна: она обходит
+        # папки и запускает найденные файлы. Проверке нужен готовый
+        # список, а не «придёт когда-нибудь», поэтому ждём её конца и
+        # прокручиваем очередь — сигнал о готовности приходит событием.
+        if hasattr(_ptab, "wait_loaded"):
+            _ptab.wait_loaded()
+            for _ in range(3):
+                app.processEvents()
         _titles = [window.tabs.tabText(i) for i in range(window.tabs.count())]
         check("Программы" in _titles, f"вкладка «Программы» есть в списке: {_titles}")
         check(_ptab._base() == core.program_root(),
@@ -11986,11 +11994,11 @@ def main() -> int:
         # настоящая ошибка: перерисовка стирала написанное сразу же.
         _some_key = next(iter(_ptab._rows))
         _ptab._set_result(_some_key, "проверочный текст")
-        _ptab.reload()
+        _ptab.reload(wait=True)
         check(_ptab._rows[_some_key]["result"].text() == "проверочный текст",
               "сообщение переживает перерисовку карточек")
         _ptab._messages.clear()
-        _ptab.reload()
+        _ptab.reload(wait=True)
 
     # ---- 8п. Пояснения папок не врут
     echo("\n--- 8п. Пояснения папок: числа, пути, чужие символы ---")
@@ -13938,6 +13946,12 @@ def main() -> int:
               f"{_xray.group} — {_xray.rule}")
         # Настоящая вкладка: заголовки групп и подписи у карточек.
         _prog_tab = app_main.ProgramsTab()
+        # Карточки строятся в стороне от окна (поиск программ по диску —
+        # секунды), поэтому ждём готовности: без этого вкладка пуста и
+        # проверка ругалась бы на пустоту, а не на разметку.
+        _prog_tab.wait_loaded()
+        for _ in range(3):
+            app.processEvents()
         _heads, _card_rules = [], 0
         _index = 0
         while _index < _prog_tab.cards_box.count():

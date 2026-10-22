@@ -114,6 +114,56 @@ def fit_skills_height(lst) -> None:
     lst.setMaximumHeight(target)
 
 
+def fit_rows_height(lst, limit: int = 700) -> None:
+    """Растянуть список на все строки — без прокрутки внутри.
+
+    Высота строки спрашивается у самого списка, а не берётся из
+    константы: она зависит от шрифта, масштаба экрана и переносов в
+    тексте, и зашитое число на другом экране врёт. Так вышло у списка
+    агентов: константа обещала 26 px, а строка в две строки занимала
+    42, и список показывал четыре агента из тринадцати.
+
+    `limit` — потолок на случай совсем длинного списка: тогда он
+    прокручивается внутри, но это уже честная простыня, а не окошко
+    в четыре строки.
+    """
+    count = lst.count()
+    if count == 0:
+        return
+    row = lst.sizeHintForRow(0)
+    if row <= 0:
+        return
+    target = min(row * count + SKILL_LIST_PAD_PX, limit)
+    if target == lst.maximumHeight() == lst.minimumHeight():
+        return
+    lst.setMinimumHeight(target)
+    lst.setMaximumHeight(target)
+
+
+class FittedList(QListWidget):
+    """Список, который растягивается на все строки сам.
+
+    `fit_rows_height` до показа окна считает высоту строки по ещё не
+    применённому стилю: QSS задаёт полям пунктов 8 px, а до полировки
+    их в расчёте нет, и выходит 42 вместо 52. Список получался на
+    130 px ниже содержимого — внутри появлялась прокрутка, ровно та,
+    от которой уходили (проверено на живой сборке 22.10.2026).
+
+    Поэтому высота пересчитывается ещё и при показе. Сторож на
+    сравнение с текущей высотой не даёт раскладке зациклиться:
+    setMinimumHeight поднимает resizeEvent, и без него список звал бы
+    сам себя бесконечно.
+    """
+
+    def showEvent(self, event) -> None:  # noqa: D102
+        super().showEvent(event)
+        fit_rows_height(self)
+
+    def resizeEvent(self, event) -> None:  # noqa: D102
+        super().resizeEvent(event)
+        fit_rows_height(self)
+
+
 class ScrollPage(QScrollArea):
     """Вкладка с прокруткой.
 
@@ -3749,19 +3799,19 @@ class CapsTab(ScrollPage):
             "стоит: файл уберётся, если его не правили руками.",
             kind="dim", wrap=True,
         ))
-        self.caps_agents_list = QListWidget()
+        self.caps_agents_list = FittedList()
         # Настройки — как у списка навыков: перенос строки делает core,
         # а не Qt, поэтому высота строки известна заранее.
         self.caps_agents_list.setWordWrap(False)
         self.caps_agents_list.setUniformItemSizes(False)
         self.caps_agents_list.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        # Высота ограничена: тринадцать строк по две строки каждая — это
-        # около 570 пикселей, и такой блок не помещался в окно целиком,
-        # верх вкладки уезжал вниз. Список прокручивается внутри себя,
-        # как список навыков.
-        self.caps_agents_list.setMinimumHeight(170)
-        self.caps_agents_list.setMaximumHeight(230)
+        # Высота — по числу агентов, а не «окошко в 230 пикселей».
+        # Раньше список был ограничен 230 px, и при тринадцати агентах
+        # человек видел четыре строки, полосу прокрутки и пустое место
+        # под ними — блок выглядел сломанным (снимок 22.10.2026).
+        # Теперь список растянут на все строки, а прокручивается
+        # страница целиком, как у навыков.
         agents_layout.addWidget(self.caps_agents_list)
         for cap_name, cap_title in opencode_caps.CAPS_CHOICES:
             if not cap_name.startswith(opencode_caps.AGENT_PREFIX):
@@ -3778,6 +3828,10 @@ class CapsTab(ScrollPage):
             row.setFlags(row.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             row.setCheckState(Qt.CheckState.Checked)
             self.caps_agents_list.addItem(row)
+        # Строк ровно столько, сколько агентов: высота считается по
+        # настоящей высоте строки, а не по константе — шрифт и масштаб
+        # экрана у всех разные, и зашитая цифра врёт на 150%.
+        fit_rows_height(self.caps_agents_list)
 
         row_ag = QHBoxLayout()
         btn_ag_all = QPushButton("Отметить все")
@@ -5035,7 +5089,21 @@ class CapsTab(ScrollPage):
             # потолка колонка съедала всю ширину, и таблица уезжала
             # вбок; длинное имя лучше перенести на вторую строку.
             if col == 0:
-                need = min(need, 300)
+                need = min(need, 240)
+            # Категория и состояние — короткие слова, длиннее этой
+            # подписи быть не должны: запас на перенос не нужен ни тем,
+            # ни другим, а раздутая колонка грабит имя моста.
+            if col == 1:
+                need = min(need, 90)
+            if col == 2:
+                need = min(need, 120)
+            # Число инструментов — всегда короткая цифра (или «—»). Текст
+            # длиннее этой подписи в такое поле попасть не может: либо его
+            # раздуло в реестре (было: 406 символов пояснения в «числе»
+            # ghidra-mcp — колонка улетала на 2400 пикселей), либо это
+            # ошибка. Не даём колонке съесть ширину всей таблицы.
+            if col == 3:
+                need = min(need, 110)
             raw.append(need)
 
         # «не проверено» — самое длинное значение колонки состояния, и
@@ -5070,7 +5138,13 @@ class CapsTab(ScrollPage):
         for col, need in enumerate(raw):
             # +6 — внутренние поля ячейки из QSS: без них заголовок
             # «Категория» обрезался до «Категори».
-            table.setColumnWidth(col, need + padding + 6)
+            if col != 3:
+                table.setColumnWidth(col, need + padding + 6)
+        # Последняя колонка («Инструм.») берёт остаток после трёх первых.
+        # Так таблица заполняет свой просмотр на любой ширине окна без
+        # горизонтальной прокрутки: числа инструментов — короткие, им
+        # лишние пиксели не нужны, а имени они портят картину.
+        table.horizontalHeader().setStretchLastSection(True)
         # Минимум ширины разрывает круг. Qt считает ширину таблицы как
         # сумму ширин колонок, а я считаю колонки от ширины таблицы.
         # Без этого minima Qt сжимает таблицу под блок, сумма ширин
@@ -5167,6 +5241,8 @@ class CapsTab(ScrollPage):
             self.reg_table.setItem(row, 2, state_item)
             tools_text = str(server.tools_count or "").strip()
             tools_item = QTableWidgetItem(tools_text or "—")
+            if server.tools_note and tools_item.text() != "—":
+                tools_item.setToolTip(server.tools_note)
             if not tools_text:
                 tools_item.setForeground(QColor(ui.TEXT_DIM))
                 tools_item.setToolTip(
@@ -6398,18 +6474,44 @@ class CapsTab(ScrollPage):
         return Path(text)
 
     def _refresh(self) -> None:
+        """Показать, что уже стоит, — не замораживая окно.
+
+        Здесь всё живое: caps_status и providers_status читают настройки,
+        rtk/caveman/pxpipe/auto-improve/greenlight/qwen_review зовут
+        внешние программы, а pxpipe ещё и стучится в сеть. На этой
+        машине такая проверка занимает 3.4 секунды, и раньше она шла
+        прямо в потоке окна сразу после показа — интерфейс замирал
+        ровно в тот момент, когда человек начинал им пользоваться
+        (замерено 22.10.2026: сборка 8.6 с, потом ещё 3.4 с ступора).
+
+        Теперь сбор состояния идёт в Worker, а окно тем временем живёт.
+        Подпись честно говорит, что идёт проверка, и меняется, когда
+        ответ готов.
+        """
         dest = self._dest()
         if dest is None or not dest.is_dir():
             self.state_hint.setStyleSheet(f"color: {ui.WARN};")
             self.state_hint.setText("Папки пока нет — при установке будет создана.")
             return
+        self.state_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
+        self.state_hint.setText("Смотрим, что уже стоит…")
+        worker = Worker(lambda _progress: self._status_work(dest))
+        self._status_worker = worker
+        worker.finished.connect(lambda: self._status_finished(worker))
+        worker.start()
+
+    def _status_work(self, dest: Path) -> tuple[list[str], list[str], str]:
+        """Собрать состояние возможностей — без виджетов, для Worker.
+
+        Возвращает (что уже стоит, строки-пояснения, текст ошибки).
+        Ни одного обращения к окну: только файлы, внешние программы и
+        сеть, поэтому звать это можно из другого потока.
+        """
         try:
             status = opencode_caps.caps_status(dest)
             pstatus = opencode_caps.providers_status(dest)
-        except Exception as exc:
-            self.state_hint.setStyleSheet(f"color: {ui.ERROR};")
-            self.state_hint.setText(f"Не прочиталось: {exc}")
-            return
+        except Exception as exc:  # noqa: BLE001 — причину покажем в окне
+            return [], [], str(exc)
         # Подпись берём по цепочке: TITLES → список возможностей → само имя.
         # Раньше здесь стояло TITLES[n] прямой подстановкой, и новая
         # возможность, которой в TITLES нет, роняла окно: исключение из слота
@@ -6417,12 +6519,6 @@ class CapsTab(ScrollPage):
         inside = [self._cap_title(n) for n in status if status[n]]
         inside += [title for name, (title, _k, _b) in opencode_caps.PROVIDER_PRESETS.items()
                    if pstatus.get(name)]
-        if inside:
-            self.state_hint.setStyleSheet(f"color: {ui.OK};")
-            self.state_hint.setText("Уже стоит:\n- " + "\n- ".join(inside))
-        else:
-            self.state_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
-            self.state_hint.setText("Наших возможностей здесь пока нет.")
         # Строка про rtk и caveman — отдельно от «уже стоит». Без неё
         # галочка «rtk» выглядела бы рабочей, хотя без бинарника в PATH она
         # ничего не впишет: программа обязана сказать это до нажатия.
@@ -6525,8 +6621,38 @@ class CapsTab(ScrollPage):
                 else:
                     notes.append("Qwen Code: ревьюер не готов — " + "; ".join(
                         (qw.get("missing") or ["смотри строку ниже"])[:1]) + ".")
-            self.btn_qw_run.setEnabled(bool(self.checks["qwen-review"].isChecked()))
-        self.state_hint.setText(self.state_hint.text() + "\n" + "\n".join(notes))
+        return inside, notes, ""
+
+    def _status_finished(self, worker: Worker) -> None:
+        """Показать собранное состояние. Старое выполнение — мимо.
+
+        За время проверки мог прийти новый вызов (после установки, из
+        «Обновить»), и его слово главнее: результат устаревшего потока
+        человеку уже не нужен.
+        """
+        if getattr(self, "_status_worker", None) is not worker:
+            return
+        self._status_worker = None
+        if isinstance(worker.result, Exception):
+            self.state_hint.setStyleSheet(f"color: {ui.ERROR};")
+            self.state_hint.setText(f"Не прочиталось: {worker.result}")
+            return
+        inside, notes, error = worker.result
+        if error:
+            self.state_hint.setStyleSheet(f"color: {ui.ERROR};")
+            self.state_hint.setText(f"Не прочиталось: {error}")
+            return
+        if inside:
+            self.state_hint.setStyleSheet(f"color: {ui.OK};")
+            text = "Уже стоит:\n- " + "\n- ".join(inside)
+        else:
+            self.state_hint.setStyleSheet(f"color: {ui.TEXT_DIM};")
+            text = "Наших возможностей здесь пока нет."
+        self.state_hint.setText(text + "\n" + "\n".join(notes))
+        # Кнопка запуска ревьюера живёт по галочке, а не по результату
+        # проверки: включать её здесь — значит гасить кнопку каждый раз,
+        # когда qwen не развёрнут, хотя человек её только что отметил.
+        self.btn_qw_run.setEnabled(bool(self.checks["qwen-review"].isChecked()))
 
     # ---- выбор папки
 
@@ -7245,21 +7371,104 @@ class ProgramsTab(ScrollPage):
 
     # ---- наполнение
 
-    def reload(self) -> None:
+    def reload(self, wait: bool = False) -> None:
         """Перечитать реестр и перерисовать карточки.
 
-        Порядок именно такой: сначала убрать старые карточки, потом
-            нарисовать новые. Иначе при повторной проверке карточки
-        накапливались бы и человек видел бы два одинаковых списка.
-        """
-        while self.cards_box.count():
-            item = self.cards_box.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-        self._rows.clear()
+        Живые проверки уходят в сторону от окна: поиск Unity, Godot,
+        Roblox и Ghidra обходит папки программ и запускает найденные
+        файлы, сверка с реестром зовёт node и npx. На этой машине это
+        6 секунд, и раньше они шли прямо при сборке окна — человек
+        смотрел на окно загрузки и считал, что программа зависла
+        (замерено 22.10.2026: 8.6 с сборки, из них 6.1 с — этот поиск).
 
+        Старые карточки при этом остаются на месте до прихода новых:
+        стирать их сразу — значит на шесть секунд оставить человека
+        перед пустым экраном. Перерисовка чистит список сама, поэтому
+        двойных карточек не будет.
+
+        `wait=True` считает всё на месте. Так зовёт самотест: ему нужен
+        готовый список сразу после вызова, а не через событие.
+        """
         base = self._base()
+        self.notice.setText("Проверяем, что установлено…")
+        self.notice.setStyleSheet(f"color: {ui.TEXT_DIM};")
+        if wait:
+            self._apply_load(self._load_work(base))
+            return
+        worker = Worker(lambda _progress: self._load_work(base))
+        self._load_worker = worker
+        worker.finished.connect(lambda: self._load_finished(worker))
+        worker.start()
+
+    # ---- живая проверка в стороне от окна
+
+    def _load_work(self, base: Path):
+        """Всё, что требует живых проверок, — одной пачкой и без виджетов.
+
+        Карточки, разложение мостов по группам и строка замечаний
+        считаются вместе: каждый из этих шагов читает реестр, и делать
+        их по отдельности значило бы трижды ждать одни и те же проверки.
+        """
+        cards = program_cards.cards(base)
+        placements = self._placements(base)
+        notes, kinds = self._notice_work(base)
+        return cards, placements, notes, kinds
+
+    def _load_finished(self, worker: Worker) -> None:
+        """Применить готовое. Устаревшее выполнение — мимо: за время
+        работы мог прийти новый reload, и его слово главнее.
+        """
+        if getattr(self, "_load_worker", None) is not worker:
+            return
+        self._load_worker = None
+        if isinstance(worker.result, Exception):
+            self.notice.setText(f"Не удалось проверить данные: {worker.result}")
+            self.notice.setStyleSheet(f"color: {ui.ERROR};")
+            return
+        self._apply_load(worker.result)
+
+    def wait_loaded(self, timeout_ms: int = 120000) -> None:
+        """Дождаться конца фоновой проверки. Нужно самотесту и выходу."""
+        worker = getattr(self, "_load_worker", None)
+        if worker is not None:
+            worker.wait(timeout_ms)
+
+    def _apply_load(self, result) -> None:
+        """Нарисовать карточки по готовым данным (уже в потоке окна)."""
+        cards, placements, notes, kinds = result
+        # Прежние карточки убираем только сейчас, когда новые уже есть:
+        # иначе на время проверки экран оставался пустым.
+        self._clear_cards()
+        self._cards = {card.key: card for card in cards}
+        # Текст исчезнувших предметов не должен копиться: ключ мог
+        # остаться от прежней версии реестра.
+        alive = set(self._cards)
+        for gone in [k for k in self._messages if k not in alive]:
+            del self._messages[gone]
+        self.notice.setText("   ".join(notes))
+        self.notice.setStyleSheet(
+            f"color: {ui.ERROR if 'error' in kinds else ui.WARN}" if kinds else ""
+        )
+        if not cards:
+            self.cards_box.addWidget(
+                ui.label("Ни одной карточки. Реестр прочитан, но предметов "
+                         "в нём нет — скажи об этом разработчику, "
+                         "программа тут ни при чём.",
+                         kind="warn", wrap=True)
+            )
+            return
+        # Что пришло из реестра, запоминаем: поиск и категория из
+        # сайдбара только фильтруют этот список, реестр не перечитывают.
+        self._prog_all = cards
+        self._prog_placed = placements
+        self._paint_cards()
+
+    # ---- фоновая сверка данных (не вешает запуск)
+
+    def _notice_work(self, base: Path) -> tuple[list[str], list[str]]:
+        """Что не так с данными о программах: (тексты, виды). Чистая работа,
+        без виджетов — выполняется в Worker за пределами потока окна.
+        """
         problems = program_cards.section_problem(base)
         notes: list[str] = []
         kinds: list[str] = []
@@ -7272,32 +7481,16 @@ class ProgramsTab(ScrollPage):
                 "не сделают. Он входит в Windows 10 версии 1809 и новее."
             )
             kinds.append("warn")
-        text = "   ".join(notes)
-        self.notice.setText(text)
-        if kinds:
-            self.notice.setStyleSheet(
-                f"color: {ui.ERROR if 'error' in kinds else ui.WARN}")
+        return notes, kinds
 
-        cards = program_cards.cards(base)
-        self._cards = {card.key: card for card in cards}
-        # Текст исчезнувших предметов не должен копиться: ключ мог
-        # остаться от прежней версии реестра.
-        alive = set(self._cards)
-        for gone in [k for k in self._messages if k not in alive]:
-            del self._messages[gone]
-        if not cards:
-            self.cards_box.addWidget(
-                ui.label("Ни одной карточки. Реестр прочитан, но предметов "
-                         "в нём нет — скажи об этом разработчику, "
-                         "программа тут ни при чём.",
-                         kind="warn", wrap=True)
-            )
-            return
-        # Что пришло из реестра, запоминаем: поиск и категория из
-        # сайдбара только фильтруют этот список, реестр не перечитывают.
-        self._prog_all = cards
-        self._prog_placed = self._placements(base)
-        self._paint_cards()
+    def _clear_cards(self) -> None:
+        """Убрать нарисованные карточки вместе с их строками."""
+        while self.cards_box.count():
+            item = self.cards_box.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._rows.clear()
 
     def _paint_cards(self) -> None:
         """Рисует карточки по категориям с учётом поиска и фильтра."""
@@ -9319,7 +9512,7 @@ def run() -> int:
         if _base is not None:
             quiet_notes, _ = mcp_registry.quiet_migrate(
                 opencode_caps.opencode_dir(),
-                mcp_registry.load_servers(_base),
+                mcp_registry.load_servers(_base, check=False),
             )
     except Exception:
         # Перепись настроек не обязана быть частью запуска: если она

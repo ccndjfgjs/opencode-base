@@ -246,8 +246,16 @@ class SplashWindow(QWidget):
             value = max(0, min(100, int(percent)))
             self.bar.setValue(value)
             self.percent.setText(f"{value}%")
+        # Окно перерисовывается целиком и синхронно, без прокрутки очереди
+        # событий. Во время сборки вкладок главного окна поток занят, и
+        # repaint() без этого не выполнится — splash висел бы «мёртвой»
+        # картинкой на одной надписи, а человек принимал бы работу за
+        # зависание. processEvents() здесь брать нельзя: он выстрелит
+        # отложенными таймерами страниц, а им нельзя работать на
+        # полусобранном окне (известное падение 0xC0000409).
         for part in (self.step, self.bar, self.percent):
             part.repaint()
+        self.repaint()
 
 
 class TrayIcon(QSystemTrayIcon):
