@@ -38,6 +38,7 @@ if __package__ in (None, ""):
     import program_groups  # type: ignore[import-not-found]
     import programs  # type: ignore[import-not-found]
     import kinocut_install  # type: ignore[import-not-found]
+    import telegram_check  # type: ignore[import-not-found]
     import winget_install  # type: ignore[import-not-found]
 else:  # запуск как модуль
     from . import (core, ui, mcp_categories, mcp_registry, opencode_caps,
@@ -45,7 +46,8 @@ else:  # запуск как модуль
                    auto_improve, bridge_versions, bridges, browsers, caveman,
                    dbhub, editor_plugins, engine_setup, greenlight, lmarena,
                    kinocut_install, omniroute, program_cards, program_groups,
-                   programs, pxpipe, qwen_review, rtk, winget_install)
+                   programs, pxpipe, qwen_review, rtk, telegram_check,
+                   winget_install)
 
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics
@@ -5025,6 +5027,17 @@ class CapsTab(ScrollPage):
             rest = len(server.missing) - 1
             tail = f" и ещё {rest}" if rest > 0 else ""
             return f"не хватает: {first.what}{tail}"
+        if server.id == "telegram":
+            # Конфигурация проверяется чтением файла: без этого строка
+            # говорила бы «можно включить» и до, и после заполнения.
+            # «Готово» не пишем: действительность сессии без входа в
+            # аккаунт не проверяется, и обещать её нельзя.
+            dest = self._reg_dest()
+            if dest is None:
+                return "нужно: папка настроек"
+            result = telegram_check.check(
+                Path(dest) / telegram_check.FILE_NAME, Path(dest))
+            return result.short()
         if server.manual_setup:
             # Конфигурацию программа в состоянии проверить может, иначе
             # строка врала бы "нужно" даже после того, как человек всё
@@ -5371,6 +5384,39 @@ class CapsTab(ScrollPage):
                 "— «Перезапустить». Обновить версию — во вкладке "
                 "«Обновление», блок «Мост OmniRoute»."
             )
+        elif server is not None and server.id == "telegram":
+            # Подробности проверки конфигурации: человек видит, чего не
+            # хватает, ещё до включения. Значения не печатаются — только
+            # имена полей. «Готово» не пишем: сессия не проверялась.
+            dest = self._reg_dest()
+            if dest is None:
+                self.reg_hint.setText(
+                    "Папка настроек opencode не выбрана — проверять "
+                    "конфигурацию негде."
+                )
+            else:
+                result = telegram_check.check(
+                    Path(dest) / telegram_check.FILE_NAME, Path(dest))
+                head = {
+                    telegram_check.MISSING: "Конфигурация не готова",
+                    telegram_check.BAD_FORMAT:
+                        "Формат конфигурации неверный",
+                    telegram_check.PARTIAL:
+                        "Имя сессии допустимо, содержимое не проверялось",
+                    telegram_check.FORMAT_OK:
+                        "Формат верный, сессия не проверялась",
+                }[result.level]
+                parts = [head + "."]
+                if result.problems:
+                    parts.append(" ".join(f"• {item};"
+                                          for item in result.problems))
+                if result.notes:
+                    parts.append(" ".join(result.notes))
+                parts.append(
+                    "Проверка только читает файл: ни сети, ни входа в "
+                    "аккаунт, ни вывода значений."
+                )
+                self.reg_hint.setText(" ".join(parts))
         else:
             self.reg_hint.clear()
         if server is None:
