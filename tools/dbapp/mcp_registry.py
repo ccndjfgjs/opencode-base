@@ -1156,21 +1156,39 @@ def warm_up(server: Server, progress=None) -> str:
     argv = [exe, *command[1:]]
     if exe.lower().endswith((".cmd", ".bat")):
         argv = [os.environ.get("COMSPEC") or "cmd.exe", "/c", exe, *command[1:]]
+    # Окружение прогрева — то же, что уедет в настройки. Без этого
+    # прогрев моста, который поднимается общим лаунчером, запускал бы
+    # лаунчер без MCP_BRIDGE_* и мгновенно получал отказ «запущен без
+    # команды», а программа при этом говорила бы «кэш прогрет», ничего
+    # не скачав. Проверено на 15 мостах с секретами 23.10.2026.
+    env = dict(os.environ)
+    env_map = conn.get("environment")
+    if isinstance(env_map, dict) and env_map:
+        for key, value in env_map.items():
+            env[str(key)] = env_setup.expand(str(value))
     try:
         proc = subprocess.Popen(
             argv, stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, encoding="utf-8", errors="replace", startupinfo=_hidden_startupinfo(),
+            text=True, encoding="utf-8", errors="replace",
+            startupinfo=_hidden_startupinfo(), env=env,
         )
     except OSError as exc:
         return f"Прогрев не запустился: {exc}"
     try:
         try:
             proc.wait(timeout=WARM_UP_TIMEOUT)
+            code = proc.returncode
         except subprocess.TimeoutExpired:
             # Сервер успешно стартовал и молча ждёт команды — значит
             # пакет уже скачан. Останавливаем, как и планировали.
             proc.kill()
+            code = 0
+        if code:
+            # Прогрев не удался — и говорить «скачан» нельзя: лаунчер
+            # мог отказать до скачивания (нет файла секретов). Включению
+            # это не мешает, поэтому молчим, как обещает описание выше.
+            return ""
         say(f"Пакет «{server.name}» скачан, кэш прогрет.")
         return ""
     finally:

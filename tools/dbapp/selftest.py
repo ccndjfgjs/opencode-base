@@ -148,11 +148,14 @@ def _free_port() -> int:
 #: тоже постоянная запись реестра, а не «мост игрока» на время проверки,
 #: поэтому смещается база.
 #: База 25 → 26 21.10.2026: добавлен kinocut (мост монтажа видео).
+#: База 26 → 54 23.10.2026: добавлены 28 недостающих мостов из списка
+#: Ариши — офис, мессенджеры, медиа, разработка, базы, финансы,
+#: безопасность. Это постоянные записи реестра, поэтому база сдвинута.
 #: Сколько серверов умеет настроить кнопка «Настроить автоматически».
 #: Константа с именем, потому что голое число в проверке не читается.
 AUTO_SERVERS_EXPECTED = 18
-EXPECTED_SERVERS_NO_PLAYER = 26
-EXPECTED_SERVERS_WITH_PLAYER = 27
+EXPECTED_SERVERS_NO_PLAYER = 54
+EXPECTED_SERVERS_WITH_PLAYER = 55
 #: Режим проверки задаётся явно, а не вычисляется из наличия записи.
 EXPECTED_SERVERS = EXPECTED_SERVERS_NO_PLAYER
 
@@ -11337,7 +11340,9 @@ def main() -> int:
     # а пять идентификаторов Unity — живым `winget show` 17.10.2026:
     # Unity Hub 3.22.3.65535 (издатель Unity Technologies Inc.), редакторы
     # 6000.6.6f1, 2023.2.22f1, 2022.3.62f3 и 2021.3.45f2 (Unity Technologies
-    # ApS). Это строгий набор: лишний идентификатор в реестре и пропавший —
+    # ApS). 23.10.2026 тем же `winget show` сверены ещё два: LibreOffice
+    # 26.8.1.1 (The Document Foundation) и Docker Desktop 4.96.3 (Docker
+    # Inc.). Это строгий набор: лишний идентификатор в реестре и пропавший —
     # оба провала, иначе проверка перестаёт что-то значить.
     _want_ids = {"Adobe.CreativeCloud", "BlueStack.BlueStacks",
                  "BlenderFoundation.Blender", "EpicGames.EpicGamesLauncher",
@@ -11346,7 +11351,8 @@ def main() -> int:
                  "Roblox.RobloxStudio", "ByteDance.CapCut",
                  "Spotify.Spotify", "OpenAI.Codex",
                  "Unity.UnityHub", "Unity.Unity.6000", "Unity.Unity.2023",
-                 "Unity.Unity.2022", "Unity.Unity.2021"}
+                 "Unity.Unity.2022", "Unity.Unity.2021",
+                 "TheDocumentFoundation.LibreOffice", "Docker.DockerDesktop"}
     check(_winget_ids == _want_ids,
           f"идентификаторы в реестре — те самые, включая варианты: {sorted(_winget_ids)}")
     # ---- 8м. Движок вкладки «Программы»

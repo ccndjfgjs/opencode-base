@@ -81,6 +81,27 @@ CATEGORY_BY_ID = {
     "unreal": "javascript",
     "tiktok": "javascript",
     "spotify": "javascript",
+    # Мосты на npm/npx, добавленные 23.10.2026: поднимаются npx, даже
+    # если сам секрет лежит в файле рядом с настройками.
+    "notion": "javascript",
+    "gmail": "javascript",
+    "slack": "javascript",
+    "discord": "javascript",
+    "comfyui": "javascript",
+    "premiere-pro": "javascript",
+    "desktop-commander": "javascript",
+    "docker": "javascript",
+    "ssh": "javascript",
+    "jetbrains": "javascript",
+    "mongodb": "javascript",
+    "postgres": "javascript",
+    "supabase": "javascript",
+    "firebase": "javascript",
+    "okx": "javascript",
+    "coincap": "javascript",
+    "unusual-whales": "javascript",
+    "shodan": "javascript",
+    "censys": "javascript",
     # На Python: uvx тянет сервер Unity и godot-ai.
     # ghidra-mcp тоже Python: мост поднимается через uv из папки
     # репозитория. Правило раздела — «по тому, чем он поднят», а не по
@@ -101,6 +122,16 @@ CATEGORY_BY_ID = {
     # Kinocut — Python-пакет, лаунчер запускает kino --mcp из окружения
     # человека (путь в mcp-kinocut.json). Раздел по тому, чем поднят.
     "kinocut": "python",
+    # Мосты на uvx, добавленные 23.10.2026: uvx тянет пакет с PyPI (или
+    # из git по тегу) и сам ставит нужный Python.
+    "word": "python",
+    "powerpoint": "python",
+    "libreoffice": "python",
+    "google-workspace": "python",
+    "telegram": "python",
+    "davinci-resolve": "python",
+    "twitch": "python",
+    "coinmarketcap": "python",
     # Настоящего рантайма нет: плагин внутри IDE или сервер на стороне вендора.
     "android-studio": "ide",
     "roblox-studio": "ide",
@@ -112,6 +143,9 @@ CATEGORY_BY_ID = {
     # Claude — такой же облачный разговор, как Codex и Cursor: поднимается
     # локальной командой, а сама программа живёт в облаке.
     "claude": "cloud",
+    # Cloudflare — удалённый сервер самого вендора: локального рантайма
+    # нет вовсе, вход по OAuth при первом вызове инструмента.
+    "cloudflare": "cloud",
 }
 
 BASE_BRIDGES_TITLE = "Мосты базы"

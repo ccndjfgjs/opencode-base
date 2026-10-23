@@ -72,6 +72,10 @@ rows, errors = bu.check_all(None)
 assert errors == []
 assert all({"bridge", "installed", "latest", "verdict"} <= set(r)
            for r in rows)
-assert len(rows) == 8, len(rows)
+# 23.10.2026: мостов с блоком update стало 35 — в реестр добавили 28,
+# и у 27 из них есть способ обновления. У Cloudflare его нет: сервер
+# удалённый, версию ведёт вендор, обновлять на машине нечего.
+EXPECTED_UPDATE_ROWS = 35
+assert len(rows) == EXPECTED_UPDATE_ROWS, len(rows)
 print("6. check_all вернул", len(rows), "строк, все с полями")
 print("ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ")
