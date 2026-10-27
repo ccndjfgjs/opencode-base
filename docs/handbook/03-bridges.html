@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Мосты — opencode-base</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="index.html">
+      <div class="brand-mark">справочник</div>
+      <div class="brand-name">opencode-base</div>
+      <div class="brand-sub">база долговременной памяти</div>
+    </a>
+    <div class="nav-title">Разделы</div>
+    <nav class="nav">
+        <a href="index.html"><span class="num">00</span>Обзор</a>
+        <a href="01-interface.html"><span class="num">01</span>Интерфейс</a>
+        <a href="02-memory.html"><span class="num">02</span>Память</a>
+        <a href="03-bridges.html" class="active"><span class="num">03</span>Мосты</a>
+        <a href="04-mcp-servers.html"><span class="num">04</span>Серверы MCP</a>
+        <a href="05-agents.html"><span class="num">05</span>Агенты</a>
+        <a href="06-skills.html"><span class="num">06</span>Навыки</a>
+        <a href="07-commands.html"><span class="num">07</span>Команды</a>
+        <a href="08-base-structure.html"><span class="num">08</span>Структура базы</a>
+        <a href="09-maintenance.html"><span class="num">09</span>Обслуживание</a>
+    </nav>
+    <div class="side-foot">
+      Собрано по коду и реестрам репозитория<br>
+      версия 1.0.0 · 27.10.2026
+    </div>
+  </aside>
+  <main class="main">
+    <div class="wrap">
+      <div class="kicker">раздел 03</div>
+      <h1>Мосты</h1>
+      <p class="lead">Одиннадцать мостов внутри программы: что дают, чего требуют и почему часть из них работает только при открытом приложении.</p>
+      
+<p>Мост — это отдельная маленькая программа, которая даёт ассистенту доступ
+к чему-то внешнему: к студии OBS, к эмулятору, к браузеру, к шлюзу моделей.
+Мост лежит в <code>tools/thirdparty</code>, работает без сети и запускается
+не напрямую, а через лаунчер из <code>tools/dbapp/launchers</code>: пароль
+OBS передаётся мосту переменной окружения, путь к <code>adb</code> кладётся
+в <code>PATH</code>.</p>
+
+<div class="grid c3">
+  <div class="stat"><div class="n">11</div><div class="t">мостов лежит в программе</div></div>
+  <div class="stat"><div class="n">2</div><div class="t">моста едут с базой всегда</div></div>
+  <div class="stat"><div class="n">18</div><div class="t">папок в tools/thirdparty</div></div>
+</div>
+
+<div class="note">
+<p><strong>Мост ПК включён всегда, мост NCP — только при памяти NCP.</strong>
+<code>pc-bridge</code> читает компьютер и к памяти не относится, поэтому
+остаётся при любом типе. <code>ncp-bridge</code> — это и есть память NCP:
+у Obsidian и Hindsight его нет, иначе в базе оказалось бы два хранилища.
+В каталог серверов MCP оба не входят — там только то, что можно включить
+и выключить.</p>
+</div>
+
+<h2>Мосты внутри программы</h2>
+<p>Одиннадцать мостов, которые программа ставит и настраивает сама. У всех
+есть живая проверка: кнопка не говорит «работает», пока мост не ответил.</p>
+<p class="muted">Восемнадцать папок в <code>tools/thirdparty</code> — это не
+восемнадцать мостов. Одиннадцать мостов занимают двенадцать папок (у моста
+OBS их две: Python-версия и Node-версия), а остальные шесть — вспомогательные
+инструменты: <code>auto-improve</code>, <code>caveman</code>,
+<code>enginewire</code>, <code>greenlight</code>, <code>pxpipe</code>,
+<code>rtk</code>. Они не подключаются как серверы MCP, поэтому в каталог
+не входят.</p>
+<div class="table-wrap"><table class="fixed"><colgroup><col style="width:18%"><col style="width:14%"><col style="width:43%"><col style="width:9%"><col style="width:16%"></colgroup><thead><tr><th>Мост</th><th>Папка</th><th>Что даёт</th><th>Инстр.</th><th>Состояние</th></tr></thead><tbody><tr><td class='name'>Android Studio</td><td class='mono'>android-studio</td><td>Работа с открытым в студии проектом: сборка и ошибки компиляции, проверки кода IntelliJ по файлам и папкам, дерево вызовов (кто кого зовёт), справка по символу. Плюс отладка: точки…</td><td class='mono'>—</td><td><span class="badge">не проверялся</span></td></tr><tr><td class='name'>Android-эмулятор (LDPlayer, BlueStacks)</td><td class='mono'>android-mcp-server</td><td>Управление эмулятором из чата: скриншот экрана, дерево интерфейса с координатами нажимаемых элементов, установка и запуск приложений, любые команды adb. Удобно проверять, как прило…</td><td class='mono'>5</td><td><span class="badge ok">проверен</span></td></tr><tr><td class='name'>DBHub (PostgreSQL, MySQL, MariaDB, SQL Server, Oracle, SQLite)</td><td class='mono'>dbhub</td><td>Один сервер вместо отдельного моста на каждую базу: PostgreSQL, MySQL, MariaDB, SQL Server, Oracle и SQLite. Нейросеть видит таблицы и выполняет запросы, оставаясь в границах, кото…</td><td class='mono'>2</td><td><span class="badge">не проверялся</span></td></tr><tr><td class='name'>Ghidra (мост bethington/ghidra-mcp)</td><td class='mono'>ghidra-mcp</td><td>Прямой доступ к функциям Гидры по MCP: дизассемблирование, переименование функций, декомпиляция, скрипты, эмуляция P-code, отладчик. Без ручных кликов в интерфейсе Гидры</td><td class='mono'>67</td><td><span class="badge ok">проверен</span></td></tr><tr><td class='name'>Godot</td><td class='mono'>godot-ai</td><td>Сцены, узлы, скрипты и сигналы в открытом редакторе Godot 4.7+. Плагин и сервер — проект hi-godot, не официальный Godot.</td><td class='mono'>—</td><td><span class="badge">не проверялся</span></td></tr><tr><td class='name'>LDPlayer (управление и пентест)</td><td class='mono'>mcp-ldplayer</td><td>Управление инстансами LDPlayer из чата: запустить, остановить, перезагрузить, создать, изменить, снять резервную копию и восстановить. Плюс 22 инструмента для проверки приложений н…</td><td class='mono'>38</td><td><span class="badge ok">проверен</span></td></tr><tr><td class='name'>LMArena (мост к моделям арены; стелс-модели форк не отдаёт)</td><td class='mono'>lmarena</td><td>Бесплатный доступ нейросети к моделям сервиса Arena: мост отдаёт их OpenAI-совместимым API, а программа вписывает их провайдером в opencode. Список моделей берётся у живого моста, …</td><td class='mono'>3</td><td><span class="badge">не проверялся</span></td></tr><tr><td class='name'>OBS Studio</td><td class='mono'>obs-mcp</td><td>Управление записью и трансляцией из чата: переключать сцены, создавать источники, управлять звуком, стартовать и останавливать стрим, запись и виртуальную камеру, переключать перех…</td><td class='mono'>125</td><td><span class="badge">не проверялся</span></td></tr><tr><td class='name'>OmniRoute (шлюз к провайдерам моделей, 358 провайдеров)</td><td class='mono'>omniroute</td><td>Один шлюз вместо десятка подключений: OmniRoute собирает провайдеров моделей за одним адресом, сам выбирает модель, считает расходы и переживает отказ провайдера. Бесплатные провай…</td><td class='mono'>110</td><td><span class="badge ok">проверен</span></td></tr><tr><td class='name'>Unity</td><td class='mono'>unity-mcp</td><td>Сцена, объекты, скрипты C#, ассеты и тесты в открытом редакторе Unity. Не аффилировано с Unity Technologies.</td><td class='mono'>—</td><td><span class="badge">не проверялся</span></td></tr><tr><td class='name'>Браузеры (Chrome, Edge, Яндекс.Браузер, Firefox)</td><td class='mono'>browsers</td><td>Нейросеть открывает страницы, читает их и нажимает кнопки в отдельном браузере, а не только в своей headless-копии. По умолчанию у неё свой профиль: личные вкладки и сессии не трон…</td><td class='mono'>25</td><td><span class="badge">не проверялся</span></td></tr></tbody></table></div>
+<p class="muted">Число инструментов указано там, где реестр его измерял.
+Прочерк — не «ноль», а «не считали»: подставлять ноль значило бы утверждать
+то, чего не проверяли.</p>
+
+<h2>Как устроен запуск</h2>
+<div class="split">
+  <div class="card">
+    <h3>Секреты не лежат в конфиге</h3>
+    <p class="small">Пароль OBS хранится рядом с настройками и передаётся мосту
+    через переменную окружения. Токены мостов лежат в отдельных файлах рядом
+    с настройками, а не в <code>opencode.jsonc</code>. Правило простое: в
+    конфиге — только имя переменной или пометка.</p>
+  </div>
+  <div class="card">
+    <h3>Пути не вписаны</h3>
+    <p class="small">В <code>tools/ncp-bridge/config.json</code> вместо пути к
+    библиотеке стоит пометка <code>{{LIBRARY}}</code>, в
+    <code>pc-bridge</code> — <code>{{BASE}}</code> и <code>{{HERE}}</code>.
+    Настоящие пути появляются при подключении, поэтому база переносится
+    на другой компьютер целиком.</p>
+  </div>
+</div>
+
+<h2>Мосты, которым нужна живая программа</h2>
+<p>Часть работы требует запущенного приложения — и программа говорит об этом
+прямо, а не ставит зелёную отметку на пустом месте.</p>
+<div class="table-wrap"><table><thead><tr><th>Мост</th><th>Что должно быть открыто</th><th>Что будет без этого</th></tr></thead><tbody><tr><td>OBS Studio</td><td>студия OBS с WebSocket-сервером</td><td>мост не ответит, кнопка скажет почему</td></tr><tr><td>Эмулятор Android</td><td>запущенный эмулятор и <code>adb</code></td><td>нет снимков экрана и нажатий</td></tr><tr><td>LDPlayer</td><td>запущенный LDPlayer</td><td>нет команд управления инстансами</td></tr><tr><td>Android Studio</td><td>проект, открытый в студии</td><td>мост не отвечает, пока проект закрыт</td></tr><tr><td>Unity</td><td>редактор Unity с открытым проектом</td><td>плагин не отвечает</td></tr><tr><td>Godot</td><td>редактор Godot с плагином в проекте</td><td>мост не отвечает</td></tr><tr><td>DaVinci Resolve</td><td>запущенный Resolve со скриптингом</td><td>мост бесполезен</td></tr><tr><td>Blender</td><td>запущенный Blender с аддоном</td><td>мост не отвечает</td></tr></tbody></table></div>
+<h2>Чего мосты не делают</h2>
+<ul>
+  <li>Не копируют чужой код в репозиторий: исходники OBS лежат подмодулем,
+  закреплённым на конкретном коммите.</li>
+  <li>Не покупают подписки и не обходят оплату: если нужен ключ или подписка,
+  программа говорит об этом до установки.</li>
+  <li>Не трогают ваши папки проектов и резервные копии.</li>
+</ul>
+
+      <div class="pager"><a href="02-memory.html"><span class="dir">Назад</span>Память</a><a href="04-mcp-servers.html" style="text-align:right"><span class="dir">Дальше</span>Серверы MCP</a></div>
+    </div>
+  </main>
+</div>
+</body>
+</html>

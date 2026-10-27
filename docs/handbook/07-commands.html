@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Команды — opencode-base</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="index.html">
+      <div class="brand-mark">справочник</div>
+      <div class="brand-name">opencode-base</div>
+      <div class="brand-sub">база долговременной памяти</div>
+    </a>
+    <div class="nav-title">Разделы</div>
+    <nav class="nav">
+        <a href="index.html"><span class="num">00</span>Обзор</a>
+        <a href="01-interface.html"><span class="num">01</span>Интерфейс</a>
+        <a href="02-memory.html"><span class="num">02</span>Память</a>
+        <a href="03-bridges.html"><span class="num">03</span>Мосты</a>
+        <a href="04-mcp-servers.html"><span class="num">04</span>Серверы MCP</a>
+        <a href="05-agents.html"><span class="num">05</span>Агенты</a>
+        <a href="06-skills.html"><span class="num">06</span>Навыки</a>
+        <a href="07-commands.html" class="active"><span class="num">07</span>Команды</a>
+        <a href="08-base-structure.html"><span class="num">08</span>Структура базы</a>
+        <a href="09-maintenance.html"><span class="num">09</span>Обслуживание</a>
+    </nav>
+    <div class="side-foot">
+      Собрано по коду и реестрам репозитория<br>
+      версия 1.0.0 · 27.10.2026
+    </div>
+  </aside>
+  <main class="main">
+    <div class="wrap">
+      <div class="kicker">раздел 07</div>
+      <h1>Команды</h1>
+      <p class="lead">Пять слэш-команд: запомнить факт, показать память, создать проект, записать работу, просканировать сессии.</p>
+      
+<p>Команда — это заготовка запроса. Набирается в OpenCode через слэш,
+подставляет то, что вы дописали после неё, и уходит агенту с готовой
+инструкцией.</p>
+
+<h2>Пять команд</h2>
+<div class="table-wrap"><table><thead><tr><th>Команда</th><th>Что делает</th></tr></thead><tbody><tr><td class='name mono'>/запомнить</td><td>Запомнить — сохранить факт в базу памяти (напиши факт после команды)</td></tr><tr><td class='name mono'>/память</td><td>Память — сводка базы знаний о тебе (проекты, факты, правила)</td></tr><tr><td class='name mono'>/проект</td><td>Создать проект — нейросеть расспросит по пунктам и создаст папки (в базе и на рабочем столе)</td></tr><tr><td class='name mono'>/работа</td><td>Записать работу нейросети по проекту (для внешних АИ: Алиса, ChatGPT и др.)</td></tr><tr><td class='name mono'>/сессии</td><td>Сессии — сканировать все сессии opencode (создана/использована/удалить)</td></tr></tbody></table></div>
+<h2>Подробнее</h2>
+
+<div class="card">
+  <h3><code>/запомнить</code> — сохранить факт</h3>
+  <p>Диктуете факт после команды, модель сохраняет его через
+  <code>memory_save</code> в подходящий файл: <code>profile</code> — про вас
+  и привычки, <code>projects</code> — про проекты, <code>facts</code> — правила
+  и решения. Если сомневается — кладёт в <code>facts</code>. Противоречия не
+  разруливает на месте: добавляет новую запись, разбираться будут по датам.
+  Ответ — одна строка: что и куда сохранено.</p>
+</div>
+
+<div class="card">
+  <h3><code>/память</code> — сводка</h3>
+  <p>Показывает, что база знает о вас: проекты, факты, правила. Удобно
+  в начале работы на новом месте или когда нужно проверить, что записалось.</p>
+</div>
+
+<div class="card">
+  <h3><code>/проект</code> — создать проект</h3>
+  <p>Модель расспрашивает по пунктам и создаёт папки проекта. Не бросается
+  создавать структуру, не выяснив, что за проект.</p>
+</div>
+
+<div class="card">
+  <h3><code>/работа</code> — записать работу</h3>
+  <p>Для внешних ассистентов — Алисы, ChatGPT и подобных: записывает, что
+  было сделано по проекту, чтобы работа не потерялась между сессиями.</p>
+</div>
+
+<div class="card">
+  <h3><code>/сессии</code> — сканировать сессии</h3>
+  <p>Проходит по всем сессиям OpenCode и показывает, какие созданы, какие
+  использованы и какие можно удалить. Сканер лежит в
+  <code>tools/sessions.js</code>.</p>
+</div>
+
+<h2>Где лежат</h2>
+<p>Файлы команд — <code>config/command/*.md</code>. Ставятся в настройки
+OpenCode вместе с базой; в репозитории вместо настоящих путей стоят пометки
+<code>{{BASE}}</code> и <code>{{DESKTOP}}</code>, которые программа
+подставляет при подключении.</p>
+
+      <div class="pager"><a href="06-skills.html"><span class="dir">Назад</span>Навыки</a><a href="08-base-structure.html" style="text-align:right"><span class="dir">Дальше</span>Структура базы</a></div>
+    </div>
+  </main>
+</div>
+</body>
+</html>

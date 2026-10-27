@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Память — opencode-base</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="index.html">
+      <div class="brand-mark">справочник</div>
+      <div class="brand-name">opencode-base</div>
+      <div class="brand-sub">база долговременной памяти</div>
+    </a>
+    <div class="nav-title">Разделы</div>
+    <nav class="nav">
+        <a href="index.html"><span class="num">00</span>Обзор</a>
+        <a href="01-interface.html"><span class="num">01</span>Интерфейс</a>
+        <a href="02-memory.html" class="active"><span class="num">02</span>Память</a>
+        <a href="03-bridges.html"><span class="num">03</span>Мосты</a>
+        <a href="04-mcp-servers.html"><span class="num">04</span>Серверы MCP</a>
+        <a href="05-agents.html"><span class="num">05</span>Агенты</a>
+        <a href="06-skills.html"><span class="num">06</span>Навыки</a>
+        <a href="07-commands.html"><span class="num">07</span>Команды</a>
+        <a href="08-base-structure.html"><span class="num">08</span>Структура базы</a>
+        <a href="09-maintenance.html"><span class="num">09</span>Обслуживание</a>
+    </nav>
+    <div class="side-foot">
+      Собрано по коду и реестрам репозитория<br>
+      версия 1.0.0 · 27.10.2026
+    </div>
+  </aside>
+  <main class="main">
+    <div class="wrap">
+      <div class="kicker">раздел 02</div>
+      <h1>Память</h1>
+      <p class="lead">Три типа памяти, разница между ними и что происходит на диске при каждом выборе.</p>
+      
+<p>У базы ровно один тип памяти. Сочетаний нет: хранилище одно, иначе никто
+не знал бы, куда писать. Тип выбирается при создании базы, в блоке 2 вкладки
+«Новая база», и запоминается в настройках окна — в следующий раз он уже
+выбран.</p>
+
+<div class="grid c3">
+  <div class="card">
+    <h3>NCP</h3>
+    <p class="small">Библиотека записей. Папка <code>библиотека</code>, поиск и
+    мост NCP, инструменты <code>ncp_*</code> и <code>memory_*</code>.</p>
+    <p><span class="badge acc">по умолчанию</span> <span class="badge ok">18 папок</span></p>
+  </div>
+  <div class="card">
+    <h3>Obsidian</h3>
+    <p class="small">Хранилище заметок. Сама база открывается и читается в
+    Obsidian. Папки «библиотека» нет, мост NCP не ставится.</p>
+    <p><span class="badge">11 папок</span> <span class="badge">без библиотеки</span></p>
+  </div>
+  <div class="card">
+    <h3>Hindsight</h3>
+    <p class="small">Внешний банк памяти. Папки «библиотека» нет, мост ходит на
+    <code>127.0.0.1:8888/mcp/&lt;банк&gt;/</code>.</p>
+    <p><span class="badge">11 папок</span> <span class="badge warn">нужен сервер</span></p>
+  </div>
+</div>
+
+<h2>Чем отличаются</h2>
+<div class="table-wrap"><table><thead><tr><th></th><th>NCP</th><th>Obsidian</th><th>Hindsight</th></tr></thead><tbody><tr><td>Что хранит память</td><td>папка <code>библиотека</code> с записями</td><td>сама база как хранилище заметок</td><td>внешний сервер, банк на базу</td></tr><tr><td>Мост</td><td>мост NCP</td><td>нет</td><td>мост ходит на сервер Hindsight</td></tr><tr><td>Инструменты</td><td><code>ncp_*</code>, <code>memory_*</code></td><td>файлы напрямую</td><td>27 инструментов сервера</td></tr><tr><td>Папок в новой базе</td><td>18</td><td>11</td><td>11</td></tr><tr><td>Мостов при создании</td><td>2 (NCP и ПК)</td><td>1 (ПК)</td><td>1 (ПК)</td></tr><tr><td>Что нужно снаружи</td><td>ничего, только стандартная библиотека Python</td><td>Obsidian — по желанию, для чтения</td><td>uv или Docker и ключ LLM</td></tr><tr><td>Когда подходит</td><td>обычная работа с записями и поиском</td><td>уже есть хранилище заметок Obsidian</td><td>нужен отдельный банк памяти с сервером</td></tr></tbody></table></div>
+<h2>Что создаётся при каждом типе</h2>
+<p>Разница только в хранилище памяти. Файлы памяти — <code>profile.md</code>,
+<code>facts.md</code>, <code>projects.md</code> — и все прочие разделы у всех
+типов одинаковые.</p>
+<div class="table-wrap"><table><thead><tr><th>Папка</th><th>NCP</th><th>Obsidian</th><th>Hindsight</th></tr></thead><tbody><tr><td><code>библиотека</code> и её подпапки (6 штук)</td><td>да</td><td>нет</td><td>нет</td></tr><tr><td><code>память</code>, <code>память/архив</code></td><td>да</td><td>да</td><td>да</td></tr><tr><td><code>журнал-решений</code>, <code>настройки</code>, <code>личное</code></td><td>да</td><td>да</td><td>да</td></tr><tr><td><code>знания</code>, <code>skills</code>, <code>инструкции</code></td><td>да</td><td>да</td><td>да</td></tr><tr><td><code>projects</code>, <code>sessions</code></td><td>да</td><td>да</td><td>да</td></tr></tbody></table></div>
+<h2>Hindsight подробнее</h2>
+<p>Это единственный тип, которому нужен отдельный сервер. Программа ставит
+и поднимает его сама — требование человека от 25.10.2026: не «напиши
+конфиг», а сделай.</p>
+
+<div class="split">
+  <div class="card">
+    <h3>Два способа установки</h3>
+    <ul class="small">
+      <li><strong>uv</strong> — отдельный модуль, Docker не нужен;</li>
+      <li><strong>Docker</strong> — официальный образ, нужен запущенный
+      Docker Desktop.</li>
+    </ul>
+    <p class="muted">Выбор показывается в шаге 2 прямо при создании базы:
+    человек узнаёт о цене в диске и памяти до, а не после.</p>
+  </div>
+  <div class="card">
+    <h3>Что происходит на диске</h3>
+    <ul class="small">
+      <li>MCP-сервер висит на <code>http://127.0.0.1:8888</code>;</li>
+      <li>у каждой базы свой банк: <code>/mcp/&lt;банк&gt;/</code>;</li>
+      <li>база данных — встроенная PostgreSQL (pg0), данные в
+      <code>~/.hindsight/data/</code>;</li>
+      <li>отдельно ставить PostgreSQL не нужно.</li>
+    </ul>
+  </div>
+</div>
+
+<h3>Проверка живости</h3>
+<p>Кнопка не говорит «работает», пока сервер не ответил. Проверяются два
+адреса:</p>
+<div class="table-wrap"><table><thead><tr><th>Адрес</th><th>Что значит</th></tr></thead><tbody><tr><td><code>/health/live</code></td><td>процесс жив, база данных не трогается</td></tr><tr><td><code>/health/ready</code></td><td>то же плюс можно выполнить <code>SELECT 1</code>; 200 — готов</td></tr></tbody></table></div>
+<p class="muted">Берётся второй: «жив» и «готов» — разные вещи, и показывать
+зелёную отметку по первому значило бы врать.</p>
+
+<h3>Ключ модели</h3>
+<p>Hindsight нужен LLM. Программа ищет подходящего домашнего
+OpenAI-совместимого провайдера в <code>opencode.jsonc</code> и передаёт его
+на лету через переменные <code>HINDSIGHT_API_LLM_*</code>. Ключ в базу
+не пишется.</p>
+
+<div class="note warn">
+<p><strong>Ограничение.</strong> Hindsight — единственный тип памяти, который
+без своего сервера бесполезен: папки «библиотека» нет, а мост ведёт на
+внешний адрес. Если сервер не поднялся, память не работает — и программа
+говорит об этом прямо, а не ставит зелёную отметку.</p>
+</div>
+
+<h2>Файлы памяти</h2>
+<div class="table-wrap"><table><thead><tr><th>Файл</th><th>Что в нём</th></tr></thead><tbody><tr><td><code>profile.md</code></td><td>про человека и его привычки</td></tr><tr><td><code>facts.md</code></td><td>правила и решения</td></tr><tr><td><code>projects.md</code></td><td>про проекты</td></tr></tbody></table></div>
+<p>В новой базе эти три файла остаются пустыми заготовками — намеренно:
+чужие личные данные копировать нельзя. Всё остальное приезжает из главной
+базы.</p>
+
+      <div class="pager"><a href="01-interface.html"><span class="dir">Назад</span>Интерфейс</a><a href="03-bridges.html" style="text-align:right"><span class="dir">Дальше</span>Мосты</a></div>
+    </div>
+  </main>
+</div>
+</body>
+</html>

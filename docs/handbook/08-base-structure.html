@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Структура базы — opencode-base</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="index.html">
+      <div class="brand-mark">справочник</div>
+      <div class="brand-name">opencode-base</div>
+      <div class="brand-sub">база долговременной памяти</div>
+    </a>
+    <div class="nav-title">Разделы</div>
+    <nav class="nav">
+        <a href="index.html"><span class="num">00</span>Обзор</a>
+        <a href="01-interface.html"><span class="num">01</span>Интерфейс</a>
+        <a href="02-memory.html"><span class="num">02</span>Память</a>
+        <a href="03-bridges.html"><span class="num">03</span>Мосты</a>
+        <a href="04-mcp-servers.html"><span class="num">04</span>Серверы MCP</a>
+        <a href="05-agents.html"><span class="num">05</span>Агенты</a>
+        <a href="06-skills.html"><span class="num">06</span>Навыки</a>
+        <a href="07-commands.html"><span class="num">07</span>Команды</a>
+        <a href="08-base-structure.html" class="active"><span class="num">08</span>Структура базы</a>
+        <a href="09-maintenance.html"><span class="num">09</span>Обслуживание</a>
+    </nav>
+    <div class="side-foot">
+      Собрано по коду и реестрам репозитория<br>
+      версия 1.0.0 · 27.10.2026
+    </div>
+  </aside>
+  <main class="main">
+    <div class="wrap">
+      <div class="kicker">раздел 08</div>
+      <h1>Структура базы</h1>
+      <p class="lead">Из чего состоит база: восемнадцать папок, одиннадцать указателей, архив потерянных привязок и граница публичного.</p>
+      
+<p>База — обычная папка. Никакой базы данных, никаких бинарных хранилищ:
+всё, что внутри, можно открыть блокнотом, а можно удалить и увидеть, что
+именно сломалось.</p>
+
+<h2>Восемнадцать папок</h2>
+<p>Столько создаёт программа в новой базе. Разница между типами памяти —
+только в первых семи строках: у Obsidian и Hindsight папки
+<code>библиотека</code> нет вовсе.</p>
+<div class="table-wrap"><table><thead><tr><th>Папка</th><th>Что в ней</th><th>При каких типах</th></tr></thead><tbody><tr><td class='mono'>библиотека</td><td>записи NCP: темы, входящие, архив, шаблоны</td><td class='small'>только NCP</td></tr><tr><td class='mono'>библиотека/записи</td><td>сами записи по темам</td><td class='small'>только NCP</td></tr><tr><td class='mono'>библиотека/архив</td><td>записи со статусом archived</td><td class='small'>только NCP</td></tr><tr><td class='mono'>библиотека/входящие</td><td>то, что ещё не разобрано</td><td class='small'>только NCP</td></tr><tr><td class='mono'>библиотека/журнал</td><td>журнал изменений библиотеки</td><td class='small'>только NCP</td></tr><tr><td class='mono'>библиотека/шаблоны</td><td>заготовки записей</td><td class='small'>только NCP</td></tr><tr><td class='mono'>библиотека/записи/личное</td><td>личные записи</td><td class='small'>только NCP</td></tr><tr><td class='mono'>память</td><td>хранилище памяти для Obsidian и Hindsight</td><td class='small'>все</td></tr><tr><td class='mono'>память/архив</td><td>старое, что не удаляется</td><td class='small'>все</td></tr><tr><td class='mono'>журнал-решений</td><td>почему решили так, а не иначе</td><td class='small'>все</td></tr><tr><td class='mono'>настройки</td><td>настройки базы</td><td class='small'>все</td></tr><tr><td class='mono'>личное</td><td>личные файлы</td><td class='small'>все</td></tr><tr><td class='mono'>личное/дневник</td><td>дневник</td><td class='small'>все</td></tr><tr><td class='mono'>знания</td><td>материалы по девяти областям</td><td class='small'>все</td></tr><tr><td class='mono'>projects</td><td>проекты</td><td class='small'>все</td></tr><tr><td class='mono'>sessions</td><td>сессии</td><td class='small'>все</td></tr><tr><td class='mono'>skills</td><td>навыки</td><td class='small'>все</td></tr><tr><td class='mono'>инструкции</td><td>подробные инструкции</td><td class='small'>все</td></tr></tbody></table></div>
+<div class="note">
+<p><strong>Почему хранилище одно.</strong> Раньше можно было включить и NCP,
+и Obsidian сразу — и в базе оказывалось два хранилища, между которыми никто
+не знал, как делить записи. Решением от 25.10.2026 оставлен ровно один тип
+памяти.</p>
+</div>
+
+<h2>Файлы в корне</h2>
+<div class="table-wrap"><table><thead><tr><th>Файл</th><th>Что это</th></tr></thead><tbody><tr><td><code>Управление-базой.cmd</code></td><td>запуск окна; сам ищет Python с PyQt6</td></tr><tr><td><code>ВЕРСИЯ</code></td><td>версия базы — сейчас <code>1.0.0</code></td></tr><tr><td><code>STATE.md</code></td><td>состояние текущей работы: план, что сделано, что осталось</td></tr><tr><td><code>КАРТА-БАЗЫ.md</code></td><td>навигатор: что где лежит (создаётся в базе)</td></tr><tr><td><code>ПРАВИЛА-ИИ.md</code></td><td>как ассистент себя ведёт (создаётся в базе)</td></tr><tr><td><code>ОБРАЗЕЦ-БАЗЫ.md</code></td><td>подробное описание устройства базы</td></tr><tr><td><code>profile.md</code>, <code>facts.md</code>, <code>projects.md</code></td><td>личные файлы памяти; в свежем клоне их нет — создаются пустыми</td></tr></tbody></table></div>
+<h2>Указатели знаний</h2>
+<p>Одиннадцать указателей: корневой, по одному на каждую область и отдельный
+на большую импортированную ветку. Указатель — это карта, и в ней две части:</p>
+<div class="table-wrap"><table><thead><tr><th>Часть</th><th>Кто пишет</th><th>Что внутри</th></tr></thead><tbody><tr><td>Авточасть</td><td>программа</td><td>список папок и число файлов в каждой</td></tr><tr><td>Смысловая часть</td><td>нейросеть</td><td>о чём область и когда туда идти</td></tr></tbody></table></div>
+<p>Складывать строки авточасти нельзя: вложенная папка посчитана дважды.
+Полный путь = папка указателя + строка из раздела «Пути».</p>
+
+<h3>Если папка исчезла</h3>
+<p>Указатели не затирают друг друга молча. Когда папка знаний удаляется,
+строки, которые на неё ссылались, уходят в <code>_потеряно-привязок.md</code> —
+с прежним путём и датой. Это список дел для человека, а не инструкция модели.
+Если в строке упоминались две папки, а исчезла одна, строка остаётся на месте
+с видимой пометкой, а копия уходит в архив.</p>
+
+<h2>Что приезжает в новую базу</h2>
+<p>Пустой остаётся только личное. Всё остальное берётся из главной базы —
+той папки, где установлена программа.</p>
+<div class="table-wrap"><table><thead><tr><th>Что копируется</th><th>Откуда</th></tr></thead><tbody><tr><td>справочники знаний</td><td><code>знания/</code> программы</td></tr><tr><td>навыки</td><td><code>skills/</code></td></tr><tr><td>инструкции</td><td><code>инструкции/</code></td></tr><tr><td>конфиг с плагином</td><td><code>config/</code></td></tr><tr><td>обход блокировок</td><td><code>tools/antiblock</code></td></tr><tr><td>библиотека: документация и записи</td><td><code>библиотека/</code></td></tr><tr><td>служебные файлы и навигаторы</td><td>из пакета программы</td></tr></tbody></table></div>
+<p>Пустыми заготовками остаются ровно три файла: <code>profile.md</code>,
+<code>facts.md</code>, <code>projects.md</code>. Чужие личные данные
+копировать нельзя.</p>
+
+<h2>Что не публикуется в репозиторий</h2>
+<p><code>.gitignore</code> закрывает личное и машинное. Практическое следствие:
+у свежего клона не будет <code>profile.md</code>, <code>facts.md</code>,
+<code>projects.md</code> и папки <code>themes</code> — их нужно создать,
+иначе вкладка «Темы» покажет «тем нет», а <code>opencode.jsonc</code> будет
+ссылаться на несуществующие файлы.</p>
+<div class="table-wrap"><table><thead><tr><th>Что закрыто</th><th>Почему</th></tr></thead><tbody><tr><td><code>profile.md</code>, <code>facts.md</code>, <code>projects.md</code></td><td>личные данные</td></tr><tr><td><code>config/.secrets/</code>, <code>config/cache/</code></td><td>отпечаток железа, пароль прокси, ключи открытым текстом</td></tr><tr><td><code>config/data/</code></td><td>база SQLite с серверами, uuid и паролями</td></tr><tr><td><code>mcp-*-password.txt</code>, <code>mcp-*.json</code></td><td>секреты и пути мостов этой машины</td></tr><tr><td><code>omniroute-data/</code>, <code>lmarena-data/</code></td><td>ключи провайдеров и токены площадок</td></tr><tr><td><code>node_modules/</code>, <code>.venv/</code></td><td>служебные папки пакетов</td></tr><tr><td><code>tools/voice/models/</code></td><td>модель голоса, 73 МБ — качается скриптом</td></tr><tr><td><code>.workbuddy-ai/</code></td><td>память ИИ-агента: заметки о работе, разборы</td></tr></tbody></table></div>
+<p class="muted">Ничего из этого не было в истории — проверено. Правила
+добавлены потому, что ни одно из них раньше не закрывало эти файлы,
+а <code>git add .</code> опубликовал бы их.</p>
+
+      <div class="pager"><a href="07-commands.html"><span class="dir">Назад</span>Команды</a><a href="09-maintenance.html" style="text-align:right"><span class="dir">Дальше</span>Обслуживание</a></div>
+    </div>
+  </main>
+</div>
+</body>
+</html>

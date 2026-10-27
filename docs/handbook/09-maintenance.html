@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Обслуживание — opencode-base</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="index.html">
+      <div class="brand-mark">справочник</div>
+      <div class="brand-name">opencode-base</div>
+      <div class="brand-sub">база долговременной памяти</div>
+    </a>
+    <div class="nav-title">Разделы</div>
+    <nav class="nav">
+        <a href="index.html"><span class="num">00</span>Обзор</a>
+        <a href="01-interface.html"><span class="num">01</span>Интерфейс</a>
+        <a href="02-memory.html"><span class="num">02</span>Память</a>
+        <a href="03-bridges.html"><span class="num">03</span>Мосты</a>
+        <a href="04-mcp-servers.html"><span class="num">04</span>Серверы MCP</a>
+        <a href="05-agents.html"><span class="num">05</span>Агенты</a>
+        <a href="06-skills.html"><span class="num">06</span>Навыки</a>
+        <a href="07-commands.html"><span class="num">07</span>Команды</a>
+        <a href="08-base-structure.html"><span class="num">08</span>Структура базы</a>
+        <a href="09-maintenance.html" class="active"><span class="num">09</span>Обслуживание</a>
+    </nav>
+    <div class="side-foot">
+      Собрано по коду и реестрам репозитория<br>
+      версия 1.0.0 · 27.10.2026
+    </div>
+  </aside>
+  <main class="main">
+    <div class="wrap">
+      <div class="kicker">раздел 09</div>
+      <h1>Обслуживание</h1>
+      <p class="lead">Самотест, обновление, скрипты проверок, клонирование на Windows и перенос базы на другой компьютер.</p>
+      
+<p>Четыре вещи, которые нужны не каждый день, но рано или поздно нужны:
+проверить, что всё работает; обновить программу; пересобрать указатели;
+перенести базу на другой компьютер.</p>
+
+<h2>Самотест</h2>
+<p>Проверка, которая создаёт пробные базы во временной папке, подключает их
+и убирает за собой. Ваши файлы не трогает.</p>
+<pre><code>python tools\dbapp\selftest.py</code></pre>
+<p>Нужен тот же Python, в котором установлен PyQt6. Отчёт появляется на экране
+и сохраняется в <code>selftest-report.txt</code> — файл в
+<code>.gitignore</code>, потому что содержит реальные пути машины.</p>
+
+<div class="note">
+<p><strong>Подмодуль чинится сам.</strong> Перед проверкой программа
+дозабирает подмодуль <code>obs-mcp</code>, если клон был сделан без
+<code>--recurse-submodules</code>. Тихо, если всё на месте, и с честной
+строкой, если пришлось сходить в сеть.</p>
+</div>
+
+<h2>Обновление</h2>
+<p>Вкладка «Обновление» показывает, что стоит, что доступно и что делать.
+Она не решает сама: берёт данные из проверенных слоёв, показывает ответ
+и запускает действие.</p>
+<div class="table-wrap"><table><thead><tr><th>Что видно</th><th>Что значит</th></tr></thead><tbody><tr><td>Кнопки выключены с причиной</td><td>человек получает объяснение до нажатия, а не после</td></tr><tr><td>Прогресс с числом</td><td>сколько скачано из сколького и что делается сейчас</td></tr><tr><td>Отмена при закрытии окна</td><td>недокачанный файл удаляется, чтобы его не приняли за годный</td></tr><tr><td>Только HTTPS и только github.com</td><td>правило проверяется в слое скачивания, а не в окне</td></tr></tbody></table></div>
+<h2>Скрипты проверок</h2>
+<p>Лежат в <code>tools/проверки</code>. Часть из них — одноразовые, часть
+нужна регулярно.</p>
+<div class="table-wrap"><table><thead><tr><th>Скрипт</th><th>Что делает</th></tr></thead><tbody><tr><td><code>проверь-указатели.py</code></td><td>создаёт настоящую базу во временной папке, показывает указатели, удаляет область и показывает архив потерянных привязок</td></tr><tr><td><code>пересобрать-указатели.py &lt;путь&gt;</code></td><td>пересобирает указатели в готовой базе; ничего не удаляет — старая карта уезжает в архив</td></tr><tr><td><code>find_hieroglyphs.py</code></td><td>ищет чужие иероглифы в нашем тексте; папки с чужим текстом пропускает</td></tr><tr><td><code>сверь-копии.py</code></td><td>сверяет мастер-копии навыков с установленными</td></tr><tr><td><code>count_bases.py</code>, <code>count_refs.py</code>, <code>count_targets.py</code></td><td>считают базы, ссылки и цели — для отчётов</td></tr></tbody></table></div>
+<h2>Клонирование на Windows</h2>
+<p>Обычный <code>git clone</code> обрывается двумя местами. Оба известны
+и обходятся один раз.</p>
+
+<h3>Длинные пути</h3>
+<p>В <code>знания/Техника/Безопасность/</code> есть файлы с очень глубокими
+именами — до 222 символов относительно корня. Windows держит путь
+в 260 символов, и клон падает на трёх файлах с сообщением
+<code>unable to checkout working tree</code>.</p>
+<pre><code>git config --global core.longpaths true</code></pre>
+
+<h3>Подмодуль моста OBS</h3>
+<p>Исходники <code>obs-mcp</code> лежат подмодулем: чужой код не копируется
+в репозиторий, а закрепляется ссылкой на конкретный коммит.</p>
+<pre><code>git clone --recurse-submodules https://github.com/ccndjfgjs/opencode-base.git</code></pre>
+<p>Настройка <code>submodule.recurse = true</code> выглядит как то же самое,
+но на клон не работает — проверено на git 2.55.0.windows.3. Поэтому она
+и не выставляется: выглядела бы как починка, которой нет. Клон без флага
+чинит себя сам при первом запуске самотеста.</p>
+
+<h2>Перенос на другой компьютер</h2>
+<p>База переносится целиком: в конфигах вместо путей стоят пометки
+<code>{{BASE}}</code>, <code>{{DESKTOP}}</code>, <code>{{LIBRARY}}</code>,
+<code>{{HERE}}</code>, а настоящие пути программа подставляет при подключении.
+Вписывать реальный путь в эти файлы вручную нельзя — мост перестанет работать
+у другого человека.</p>
+<p>Для развёртывания есть <code>tools/deploy.js</code>; пошагово —
+раздел 11 встроенной инструкции.</p>
+
+<h2>Если что-то не работает</h2>
+<div class="table-wrap"><table><thead><tr><th>Симптом</th><th>Что делать</th></tr></thead><tbody><tr><td>Программа не открывается</td><td>не найден Python с PyQt6; <code>Управление-базой.cmd</code> скажет, что поставить</td></tr><tr><td>Подключение прошло с замечаниями</td><td>чаще всего занятый файл: закройте программу, в которую подключаете базу, и повторите</td></tr><tr><td>Список баз пуст, хотя база есть</td><td>она создана не этой программой; укажите путь вручную</td></tr><tr><td>Нейросеть не достаёт навыки</td><td>проверьте <code>КАРТА-БАЗЫ.md</code>: без навигатора ассистент не знает о папке <code>skills</code></td></tr><tr><td>Мост не отвечает</td><td>проверьте, открыта ли программа, которой он управляет: OBS, эмулятор, редактор</td></tr></tbody></table></div>
+<div class="note warn">
+<p><strong>Порядок при поломке.</strong> Сначала самотест — он отвечает,
+сломана программа или окружение. Потом отчёт: в нём видно, на каком шаге
+всё встало. И только потом правки — иначе лечится симптом, а не причина.</p>
+</div>
+
+      <div class="pager"><a href="08-base-structure.html"><span class="dir">Назад</span>Структура базы</a></div>
+    </div>
+  </main>
+</div>
+</body>
+</html>

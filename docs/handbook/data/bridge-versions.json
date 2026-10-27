@@ -1,0 +1,915 @@
+{
+  "schema": 1,
+  "note": "Что нужно каждому мосту: версия программы, версия MCP-сервера и версия плагина. Это единственное место, где записаны все три. Указатели плагинов (tools/thirdparty/<семейство>/index.json) хранят полосы версий и архивы, а эта таблица отвечает на вопрос «что требуется мосту по имени». Пустая строка с честной пометкой «не закреплена» — тоже результат: сейчас об этом никто не знает.",
+  "how_to_read": {
+    "program": "Какая версия чужой программы нужна. Если any=true — версия не влияет.",
+    "mcp_server": "spec — точная строка пакета, которая должна работать. pinned_in — где она закреплена в коде, чтобы расхождение находилось сразу. pinned=false — версия намеренно не закреплена.",
+    "plugin": "family — семейство указателя в tools/thirdparty. version обязана совпадать с версией сервера: при расхождении Unreal отвечает на каждый вызов versionMismatch. null — плагин мосту не нужен."
+  },
+  "checked": "2026-10-18",
+  "bridges": {
+    "windows-admin": {
+      "program": {
+        "any": true,
+        "text": "Node.js 18+ и права администратора"
+      },
+      "mcp_server": {
+        "spec": "windows-admin-mcp",
+        "pinned": false,
+        "pinned_in": "",
+        "note": "npx -y без метки: приедет последняя на момент запуска"
+      },
+      "plugin": null,
+      "update": {
+        "family": "npm",
+        "package": "windows-admin-mcp"
+      }
+    },
+    "ghidra-mcp": {
+      "program": {
+        "any": false,
+        "text": "полосы версий в указателе ghidra-mcp"
+      },
+      "mcp_server": {
+        "spec": "bridge-mcp-ghidra",
+        "pinned": true,
+        "pinned_in": "внутри расширения",
+        "note": "мост лежит внутри плагина, отдельной версии нет"
+      },
+      "plugin": {
+        "family": "ghidra-mcp",
+        "kind": "archive",
+        "version": "7.0.0-rc.3",
+        "note": "официального хеша нет, сверено с копией, посчитанной на этой машине"
+      }
+    },
+    "excel": {
+      "program": {
+        "any": true,
+        "text": "Excel 2016+ и одноразовое разрешение к VBA"
+      },
+      "mcp_server": {
+        "spec": "@sbroenne/mcp-server-excel",
+        "pinned": false,
+        "pinned_in": "",
+        "note": "npx -y без метки: приедет последняя на момент запуска"
+      },
+      "plugin": null,
+      "update": {
+        "family": "npm",
+        "package": "@sbroenne/mcp-server-excel"
+      }
+    },
+    "blender": {
+      "program": {
+        "any": false,
+        "text": "Blender 3.0+"
+      },
+      "mcp_server": {
+        "spec": "mcp-for-blender",
+        "pinned": false,
+        "pinned_in": "",
+        "note": "uvx без метки: приедет последняя на момент запуска"
+      },
+      "plugin": {
+        "family": "",
+        "kind": "manual",
+        "version": null,
+        "note": "аддон ставится командой uvx, версия аддона не закреплена"
+      },
+      "update": {
+        "family": "pypi",
+        "package": "mcp-for-blender"
+      }
+    },
+    "adobe-creativity": {
+      "program": {
+        "any": true,
+        "text": "приложения Adobe и оплаченная подписка"
+      },
+      "mcp_server": {
+        "spec": "удалённый адрес Adobe",
+        "pinned": true,
+        "pinned_in": "реестр: connection.url",
+        "note": "версию сервера объявляет Adobe, программа её не выбирает"
+      },
+      "plugin": null
+    },
+    "android-studio": {
+      "program": {
+        "any": false,
+        "text": "девять полос сборок в указателе android-studio"
+      },
+      "mcp_server": {
+        "spec": "встроенный сервер студии",
+        "pinned": true,
+        "pinned_in": "студия",
+        "note": "сервер внутри IDE, версия идёт вместе со сборкой плагина"
+      },
+      "plugin": {
+        "family": "android-studio",
+        "kind": "archive",
+        "version": null,
+        "note": "девять сборок на выбор; конкретную выбирает программа по измеренной версии студии"
+      }
+    },
+    "obs": {
+      "program": {
+        "any": true,
+        "text": "любая OBS с вебсокетом 5"
+      },
+      "mcp_server": {
+        "spec": "obs-websocket v5",
+        "pinned": true,
+        "pinned_in": "протокол OBS",
+        "note": "мост говорит на встроенном в OBS сервере"
+      },
+      "plugin": {
+        "family": "",
+        "kind": "built-in",
+        "version": null,
+        "note": "отдельного плагина нет: это вебсокет самой OBS"
+      }
+    },
+    "android-emulator": {
+      "program": {
+        "any": true,
+        "text": "любой эмулятор с adb"
+      },
+      "mcp_server": {
+        "spec": "мост программы поверх adb",
+        "pinned": true,
+        "pinned_in": "код программы",
+        "note": "стороннего пакета нет, версия не меняется"
+      },
+      "plugin": null
+    },
+    "unity": {
+      "program": {
+        "any": true,
+        "text": "плагин выбирается по версии проекта, а не редактора"
+      },
+      "mcp_server": {
+        "spec": "mcpforunityserver==10.3.0",
+        "pinned": true,
+        "pinned_in": "bridge_common.UNITY_FROM",
+        "note": "без метки ставится 9.x — несовместимо с плагином 10"
+      },
+      "plugin": {
+        "family": "unity-mcp",
+        "kind": "package",
+        "version": "10.3.0",
+        "note": "метка релиза закреплена: #v10.3.0"
+      },
+      "update": {
+        "family": "pypi",
+        "package": "mcpforunityserver",
+        "pin": "10.3.0"
+      }
+    },
+    "unreal": {
+      "program": {
+        "any": false,
+        "text": "полоса 5.0 — 5.8 в указателе enginewire"
+      },
+      "mcp_server": {
+        "spec": "встроенный сервер плагина EngineWire, адрес http://127.0.0.1:3000/mcp",
+        "pinned": true,
+        "pinned_in": "сам плагин: релиз v0.6.0-beta-f",
+        "note": "npm не участвует: автор пишет, что TypeScript-мост, Node.js и npm не нужны; пакета под линию 0.6 в npm нет вообще. Порт по умолчанию 3000 взят из документации и на живой машине не проверен — программа спрашивает его"
+      },
+      "plugin": {
+        "family": "enginewire",
+        "kind": "archive",
+        "version": "0.6.0-beta-f",
+        "note": "официальный sha256 релиза; сборку плагина делает редактор; сервер MCP внутри плагина, поэтому отдельной версии сервера нет"
+      }
+    },
+    "roblox-studio": {
+      "program": {
+        "any": true,
+        "text": "студия любой версии, сервер встроенный"
+      },
+      "mcp_server": {
+        "spec": "встроенный сервер студии",
+        "pinned": true,
+        "pinned_in": "студия",
+        "note": "файл запуска создаёт сама студия (mcp.bat)"
+      },
+      "plugin": null
+    },
+    "godot": {
+      "program": {
+        "any": false,
+        "text": "полоса 4.7+ в указателе godot-ai"
+      },
+      "mcp_server": {
+        "spec": "godot-ai==4.3.0",
+        "pinned": true,
+        "pinned_in": "bridge_common.GODOT_PYPI (только проверка)",
+        "note": "в команду пин не подставляем: док редактора сам пишет argv с портами и capability"
+      },
+      "plugin": {
+        "family": "godot-ai",
+        "kind": "archive",
+        "version": "4.3.0"
+      },
+      "update": {
+        "family": "pypi",
+        "package": "godot-ai",
+        "pin": "4.3.0"
+      }
+    },
+    "tiktok": {
+      "program": {
+        "any": true,
+        "text": "Node.js 22.12+ и свой кабинет"
+      },
+      "mcp_server": {
+        "spec": "@getmcpads/tiktok-ads-mcp-server@2.0.1",
+        "pinned": true,
+        "pinned_in": "bridge_common.TIKTOK_PACKAGE"
+      },
+      "plugin": null,
+      "update": {
+        "family": "npm",
+        "package": "@getmcpads/tiktok-ads-mcp-server",
+        "pin": "2.0.1"
+      }
+    },
+    "capcut": {
+      "program": {
+        "any": true,
+        "text": "хост с адресом MCP даёт человек"
+      },
+      "mcp_server": {
+        "spec": "адрес от хоста",
+        "pinned": false,
+        "pinned_in": "",
+        "note": "программа по этому адресу не ходит, версию не знает"
+      },
+      "plugin": null
+    },
+    "spotify": {
+      "program": {
+        "any": true,
+        "text": "своё приложение Spotify и Premium"
+      },
+      "mcp_server": {
+        "spec": "пакет Spotify закреплён в лаунчере",
+        "pinned": true,
+        "pinned_in": "launchers/spotify_bridge_launcher.py",
+        "note": "модель закреплена в том же лаунчере"
+      },
+      "plugin": null
+    },
+    "chatgpt": {
+      "program": {
+        "any": true,
+        "text": "ключ OpenAI и имя модели"
+      },
+      "mcp_server": {
+        "spec": "api.openai.com",
+        "pinned": true,
+        "pinned_in": "сама услуга",
+        "note": "своей версии у моста нет"
+      },
+      "plugin": null
+    },
+    "codex": {
+      "program": {
+        "any": true,
+        "text": "Codex CLI и вход в аккаунт"
+      },
+      "mcp_server": {
+        "spec": "мост поверх Codex CLI",
+        "pinned": true,
+        "pinned_in": "код программы",
+        "note": "версию CLI программа измеряет сама и не закрепляет"
+      },
+      "plugin": null
+    },
+    "cursor": {
+      "program": {
+        "any": true,
+        "text": "Cursor CLI и вход в аккаунт"
+      },
+      "mcp_server": {
+        "spec": "мост поверх cursor-agent",
+        "pinned": true,
+        "pinned_in": "код программы",
+        "note": "версия CLI берётся из папки установки"
+      },
+      "plugin": null
+    },
+    "ldplayer": {
+      "program": {
+        "any": true,
+        "text": "LDPlayer с включённым adb"
+      },
+      "mcp_server": {
+        "spec": "мост поверх adb",
+        "pinned": true,
+        "pinned_in": "код программы",
+        "note": "стороннего пакета нет"
+      },
+      "plugin": null
+    },
+    "dbhub": {
+      "program": {
+        "any": true,
+        "text": "Node.js и подключение к базе"
+      },
+      "mcp_server": {
+        "spec": "dbhub-mcp",
+        "pinned": false,
+        "pinned_in": "",
+        "note": "запуск через npx без метки: приедет последняя"
+      },
+      "plugin": null,
+      "update": {
+        "family": "npm",
+        "package": "@bytebase/dbhub"
+      }
+    },
+    "kinocut": {
+      "program": {
+        "any": true,
+        "text": "FFmpeg на PATH (проверяет лаунчер живьём)"
+      },
+      "mcp_server": {
+        "spec": "kino --mcp (сервер kinocut, прежний mcp-video)",
+        "pinned": false,
+        "pinned_in": "",
+        "note": "версию выбирает pip при установке (на 21.10.2026 PyPI даёт 1.16.1); путь к kino.exe лежит в mcp-kinocut.json рядом с настройками"
+      },
+      "plugin": null,
+      "update": {
+        "family": "pypi",
+        "package": "kinocut",
+        "venv_hint": "config"
+      }
+    },
+    "browsers": {
+      "program": {
+        "any": true,
+        "text": "любой поддерживаемый браузер"
+      },
+      "mcp_server": {
+        "spec": "мост программы",
+        "pinned": true,
+        "pinned_in": "код программы",
+        "note": "стороннего пакета нет, версией не управляем"
+      },
+      "plugin": null
+    },
+    "omniroute": {
+      "program": {
+        "any": true,
+        "text": "Node.js и ключи провайдеров"
+      },
+      "mcp_server": {
+        "spec": "шлюз программы",
+        "pinned": true,
+        "pinned_in": "код программы",
+        "note": "пакет шлюза ставится из npm, версия в нём не закреплена"
+      },
+      "plugin": null
+    },
+    "lmarena": {
+      "program": {
+        "any": true,
+        "text": "токен арены и живой ответ модели"
+      },
+      "mcp_server": {
+        "spec": "наш форк моста арены",
+        "pinned": true,
+        "pinned_in": "tools/thirdparty/lmarena",
+        "note": "версию форка держим свою, она не публикуется"
+      },
+      "plugin": null
+    },
+    "claude": {
+      "program": {
+        "any": true,
+        "text": "Claude Code CLI и вход в аккаунт"
+      },
+      "mcp_server": {
+        "spec": "мост поверх Claude Code",
+        "pinned": true,
+        "pinned_in": "код программы",
+        "note": "версию CLI программа измеряет сама"
+      },
+      "plugin": null
+    },
+    "mcp-doctor": {
+      "program": {
+        "any": true,
+        "text": "ничего: мост часть программы"
+      },
+      "mcp_server": {
+        "spec": "мост программы",
+        "pinned": true,
+        "pinned_in": "код программы",
+        "note": "стороннего пакета нет, версией не управляем"
+      },
+      "plugin": null
+    },
+    "notion": {
+      "program": {
+        "any": true,
+        "text": "Node.js и аккаунт Notion с токеном интеграции"
+      },
+      "mcp_server": {
+        "spec": "@notionhq/notion-mcp-server@2.5.2",
+        "pinned": true,
+        "pinned_in": "реестр: connection.environment MCP_BRIDGE_ARGS",
+        "note": "версия закреплена в реестре; свежая сама не приедет"
+      },
+      "plugin": null,
+      "update": {
+        "family": "npm",
+        "package": "@notionhq/notion-mcp-server"
+      }
+    },
+    "word": {
+      "program": {
+        "any": true,
+        "text": "Word нужен только для экспорта в PDF"
+      },
+      "mcp_server": {
+        "spec": "office-word-mcp-server==1.1.11",
+        "pinned": true,
+        "pinned_in": "реестр: connection.command",
+        "note": "версия закреплена в реестре; uvx ставит ровно её"
+      },
+      "plugin": null,
+      "update": {
+        "family": "pypi",
+        "package": "office-word-mcp-server"
+      }
+    },
+    "powerpoint": {
+      "program": {
+        "any": true,
+        "text": "PowerPoint нужен только для экспорта"
+      },
+      "mcp_server": {
+        "spec": "office-powerpoint-mcp-server==2.0.7",
+        "pinned": true,
+        "pinned_in": "реестр: connection.command",
+        "note": "версия закреплена в реестре; uvx ставит ровно её"
+      },
+      "plugin": null,
+      "update": {
+        "family": "pypi",
+        "package": "office-powerpoint-mcp-server"
+      }
+    },
+    "libreoffice": {
+      "program": {
+        "any": true,
+        "text": "LibreOffice 26.8 для PDF и конвертации"
+      },
+      "mcp_server": {
+        "spec": "libreoffice-mcp==0.2.1",
+        "pinned": true,
+        "pinned_in": "реестр: connection.command",
+        "note": "версия закреплена в реестре; uvx ставит ровно её"
+      },
+      "plugin": null,
+      "update": {
+        "family": "pypi",
+        "package": "libreoffice-mcp"
+      }
+    },
+    "gmail": {
+      "program": {
+        "any": true,
+        "text": "Node.js и ключ OAuth от Google Cloud"
+      },
+      "mcp_server": {
+        "spec": "@gongrzhe/server-gmail-autoauth-mcp@1.1.11",
+        "pinned": true,
+        "pinned_in": "реестр: connection.environment MCP_BRIDGE_ARGS",
+        "note": "версия закреплена в реестре; свежая сама не приедет"
+      },
+      "plugin": null,
+      "update": {
+        "family": "npm",
+        "package": "@gongrzhe/server-gmail-autoauth-mcp"
+      }
+    },
+    "google-workspace": {
+      "program": {
+        "any": true,
+        "text": "uv и ключи OAuth от Google Cloud"
+      },
+      "mcp_server": {
+        "spec": "workspace-mcp==2.1.2",
+        "pinned": true,
+        "pinned_in": "реестр: connection.environment MCP_BRIDGE_ARGS",
+        "note": "версия закреплена в реестре; uvx ставит ровно её"
+      },
+      "plugin": null,
+      "update": {
+        "family": "pypi",
+        "package": "workspace-mcp"
+      }
+    },
+    "slack": {
+      "program": {
+        "any": true,
+        "text": "Node.js и токен бота Slack"
+      },
+      "mcp_server": {
+        "spec": "slack-mcp-server@1.3.0",
+        "pinned": true,
+        "pinned_in": "реестр: connection.environment MCP_BRIDGE_ARGS",
+        "note": "обёртка скачивает бинарник той же версии; метка в реестре"
+      },
+      "plugin": null,
+      "update": {
+        "family": "npm",
+        "package": "slack-mcp-server"
+      }
+    },
+    "discord": {
+      "program": {
+        "any": true,
+        "text": "Node.js 18+ и токен бота Discord"
+      },
+      "mcp_server": {
+        "spec": "mcp-discord@1.3.4",
+        "pinned": true,
+        "pinned_in": "реестр: connection.environment MCP_BRIDGE_ARGS",
+        "note": "версия закреплена в реестре; свежая сама не приедет"
+      },
+      "plugin": null,
+      "update": {
+        "family": "npm",
+        "package": "mcp-discord"
+      }
+    },
+    "telegram": {
+      "program": {
+        "any": true,
+        "text": "uv, git, api_id/api_hash и строка сессии"
+      },
+      "mcp_server": {
+        "spec": "git+https://github.com/chigwell/telegram-mcp.git@e55d9c7a66a8eb0855debb268a4ed5b63749af2d",
+        "pinned": true,
+        "pinned_in": "реестр: connection.environment MCP_BRIDGE_ARGS",
+        "note": "закреплено коммитом e55d9c7 (тег v3.2.97); теги git таблица не проверяет, коммит неизменен"
+      },
+      "plugin": null,
+      "update": {
+        "family": "git",
+        "package": "https://github.com/chigwell/telegram-mcp"
+      }
+    },
+    "comfyui": {
+      "program": {
+        "any": true,
+        "text": "Node.js 22+ и запущенный ComfyUI"
+      },
+      "mcp_server": {
+        "spec": "comfyui-mcp@0.52.206",
+        "pinned": true,
+        "pinned_in": "реестр: connection.command",
+        "note": "версия закреплена в реестре; свежая сама не приедет"
+      },
+      "plugin": null,
+      "update": {
+        "family": "npm",
+        "package": "comfyui-mcp"
+      }
+    },
+    "davinci-resolve": {
+      "program": {
+        "any": true,
+        "text": "DaVinci Resolve 18+ с включённым скриптингом"
+      },
+      "mcp_server": {
+        "spec": "davinci-resolve-mcp==0.1.1",
+        "pinned": true,
+        "pinned_in": "реестр: connection.command",
+        "note": "версия закреплена в реестре; uvx ставит ровно её"
+      },
+      "plugin": null,
+      "update": {
+        "family": "pypi",
+        "package": "davinci-resolve-mcp"
+      }
+    },
+    "premiere-pro": {
+      "program": {
+        "any": true,
+        "text": "Node.js 20.19+, Premiere Pro и CEP-плагин"
+      },
+      "mcp_server": {
+        "spec": "premiere-pro-mcp@1.24.3",
+        "pinned": true,
+        "pinned_in": "реестр: connection.command",
+        "note": "версия закреплена в реестре; свежая сама не приедет"
+      },
+      "plugin": {
+        "family": "",
+        "kind": "manual",
+        "version": null,
+        "note": "CEP-плагин ставится один раз командой npx premiere-pro-mcp --install-cep; отдельной версии у него нет"
+      },
+      "update": {
+        "family": "npm",
+        "package": "premiere-pro-mcp"
+      }
+    },
+    "twitch": {
+      "program": {
+        "any": true,
+        "text": "uv и приложение Twitch с токеном"
+      },
+      "mcp_server": {
+        "spec": "twitch-mcp==0.2.0",
+        "pinned": true,
+        "pinned_in": "реестр: connection.environment MCP_BRIDGE_ARGS",
+        "note": "версия закреплена в реестре; uvx ставит ровно её"
+      },
+      "plugin": null,
+      "update": {
+        "family": "pypi",
+        "package": "twitch-mcp"
+      }
+    },
+    "desktop-commander": {
+      "program": {
+        "any": true,
+        "text": "Node.js 22.12+"
+      },
+      "mcp_server": {
+        "spec": "@wonderwhy-er/desktop-commander@0.3.1",
+        "pinned": true,
+        "pinned_in": "реестр: connection.command",
+        "note": "версия закреплена в реестре; свежая сама не приедет"
+      },
+      "plugin": null,
+      "update": {
+        "family": "npm",
+        "package": "@wonderwhy-er/desktop-commander"
+      }
+    },
+    "docker": {
+      "program": {
+        "any": true,
+        "text": "Node.js и запущенный Docker Desktop"
+      },
+      "mcp_server": {
+        "spec": "mcp-docker-server@1.0.1",
+        "pinned": true,
+        "pinned_in": "реестр: connection.command",
+        "note": "версия закреплена в реестре; свежая сама не приедет"
+      },
+      "plugin": null,
+      "update": {
+        "family": "npm",
+        "package": "mcp-docker-server"
+      }
+    },
+    "ssh": {
+      "program": {
+        "any": true,
+        "text": "Node.js 18+ и файл ~/.ssh-manager/.env"
+      },
+      "mcp_server": {
+        "spec": "mcp-ssh-manager@3.8.6",
+        "pinned": true,
+        "pinned_in": "реестр: connection.command",
+        "note": "версия закреплена в реестре; свежая сама не приедет"
+      },
+      "plugin": null,
+      "update": {
+        "family": "npm",
+        "package": "mcp-ssh-manager"
+      }
+    },
+    "jetbrains": {
+      "program": {
+        "any": true,
+        "text": "Node.js и запущенная JetBrains IDE 2025.2+"
+      },
+      "mcp_server": {
+        "spec": "@jetbrains/mcp-proxy@1.8.0",
+        "pinned": true,
+        "pinned_in": "реестр: connection.command",
+        "note": "версия закреплена в реестре; свежая сама не приедет"
+      },
+      "plugin": {
+        "family": "",
+        "kind": "manual",
+        "version": "26071",
+        "note": "плагин 26071 нужен только для IDE старше 2025.2; в новых MCP-сервер встроен"
+      },
+      "update": {
+        "family": "npm",
+        "package": "@jetbrains/mcp-proxy"
+      }
+    },
+    "cloudflare": {
+      "program": {
+        "any": true,
+        "text": "аккаунт Cloudflare и согласие OAuth"
+      },
+      "mcp_server": {
+        "spec": "удалённый адрес Cloudflare",
+        "pinned": true,
+        "pinned_in": "реестр: connection.url",
+        "note": "версию сервера объявляет Cloudflare, программа её не выбирает"
+      },
+      "plugin": null
+    },
+    "mongodb": {
+      "program": {
+        "any": true,
+        "text": "Node.js 20.19+ и строка подключения MongoDB"
+      },
+      "mcp_server": {
+        "spec": "mongodb-mcp-server@3.1.0",
+        "pinned": true,
+        "pinned_in": "реестр: connection.environment MCP_BRIDGE_ARGS",
+        "note": "версия закреплена в реестре; свежая сама не приедет"
+      },
+      "plugin": null,
+      "update": {
+        "family": "npm",
+        "package": "mongodb-mcp-server"
+      }
+    },
+    "postgres": {
+      "program": {
+        "any": true,
+        "text": "Node.js и параметры базы PostgreSQL"
+      },
+      "mcp_server": {
+        "spec": "postgres-mcp-server@1.0.2",
+        "pinned": true,
+        "pinned_in": "реестр: connection.environment MCP_BRIDGE_ARGS",
+        "note": "версия закреплена в реестре; свежая сама не приедет"
+      },
+      "plugin": null,
+      "update": {
+        "family": "npm",
+        "package": "postgres-mcp-server"
+      }
+    },
+    "supabase": {
+      "program": {
+        "any": true,
+        "text": "Node.js и токен доступа Supabase"
+      },
+      "mcp_server": {
+        "spec": "@supabase/mcp-server-supabase@0.14.0",
+        "pinned": true,
+        "pinned_in": "реестр: connection.environment MCP_BRIDGE_ARGS",
+        "note": "версия закреплена в реестре; свежая сама не приедет"
+      },
+      "plugin": null,
+      "update": {
+        "family": "npm",
+        "package": "@supabase/mcp-server-supabase"
+      }
+    },
+    "firebase": {
+      "program": {
+        "any": true,
+        "text": "Node.js и конфигурация firebase-mcp.json"
+      },
+      "mcp_server": {
+        "spec": "firebase-mcp@0.4.4",
+        "pinned": true,
+        "pinned_in": "реестр: connection.command",
+        "note": "версия закреплена в реестре; свежая сама не приедет"
+      },
+      "plugin": null,
+      "update": {
+        "family": "npm",
+        "package": "firebase-mcp"
+      }
+    },
+    "okx": {
+      "program": {
+        "any": true,
+        "text": "Node.js 18+ и профиль ~/.okx/config.toml"
+      },
+      "mcp_server": {
+        "spec": "@okx_ai/okx-trade-mcp@1.4.9",
+        "pinned": true,
+        "pinned_in": "реестр: connection.command",
+        "note": "версия закреплена в реестре; исходники в npm без репозитория"
+      },
+      "plugin": null,
+      "update": {
+        "family": "npm",
+        "package": "@okx_ai/okx-trade-mcp"
+      }
+    },
+    "coincap": {
+      "program": {
+        "any": true,
+        "text": "Node.js 18+ и ключ CoinCap API"
+      },
+      "mcp_server": {
+        "spec": "@coincap/coincap-mcp-server@1.0.9",
+        "pinned": true,
+        "pinned_in": "реестр: connection.environment MCP_BRIDGE_ARGS",
+        "note": "версия закреплена в реестре; свежая сама не приедет"
+      },
+      "plugin": null,
+      "update": {
+        "family": "npm",
+        "package": "@coincap/coincap-mcp-server"
+      }
+    },
+    "coinmarketcap": {
+      "program": {
+        "any": true,
+        "text": "uv и ключ CoinMarketCap API"
+      },
+      "mcp_server": {
+        "spec": "coinmarketcap-mcp==0.1.1",
+        "pinned": true,
+        "pinned_in": "реестр: connection.environment MCP_BRIDGE_ARGS",
+        "note": "версия закреплена в реестре; uvx ставит ровно её"
+      },
+      "plugin": null,
+      "update": {
+        "family": "pypi",
+        "package": "coinmarketcap-mcp"
+      }
+    },
+    "unusual-whales": {
+      "program": {
+        "any": true,
+        "text": "Node.js 20+ и ключ Unusual Whales API"
+      },
+      "mcp_server": {
+        "spec": "@unusualwhales/mcp@1.2.0",
+        "pinned": true,
+        "pinned_in": "реестр: connection.environment MCP_BRIDGE_ARGS",
+        "note": "версия закреплена в реестре; свежая сама не приедет"
+      },
+      "plugin": null,
+      "update": {
+        "family": "npm",
+        "package": "@unusualwhales/mcp"
+      }
+    },
+    "shodan": {
+      "program": {
+        "any": true,
+        "text": "Node.js 20+ и ключ Shodan API"
+      },
+      "mcp_server": {
+        "spec": "@burtthecoder/mcp-shodan@1.0.34",
+        "pinned": true,
+        "pinned_in": "реестр: connection.environment MCP_BRIDGE_ARGS",
+        "note": "версия закреплена в реестре; свежая сама не приедет"
+      },
+      "plugin": null,
+      "update": {
+        "family": "npm",
+        "package": "@burtthecoder/mcp-shodan"
+      }
+    },
+    "censys": {
+      "program": {
+        "any": true,
+        "text": "Node.js 20+ и ключи Censys API"
+      },
+      "mcp_server": {
+        "spec": "censys-mcp@1.0.4",
+        "pinned": true,
+        "pinned_in": "реестр: connection.environment MCP_BRIDGE_ARGS",
+        "note": "версия закреплена в реестре; свежая сама не приедет"
+      },
+      "plugin": null,
+      "update": {
+        "family": "npm",
+        "package": "censys-mcp"
+      }
+    },
+    "hindsight": {
+      "program": {
+        "any": true,
+        "text": "uv (модуль) или Docker (образ) — ставит программа"
+      },
+      "mcp_server": {
+        "spec": "hindsight-api==1.1.0",
+        "pinned": true,
+        "pinned_in": "tools/dbapp/hindsight_base.py",
+        "note": "версия закреплена в коде установки, её держит программа"
+      },
+      "plugin": null,
+      "update": null
+    }
+  }
+}

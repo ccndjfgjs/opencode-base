@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Агенты — opencode-base</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="index.html">
+      <div class="brand-mark">справочник</div>
+      <div class="brand-name">opencode-base</div>
+      <div class="brand-sub">база долговременной памяти</div>
+    </a>
+    <div class="nav-title">Разделы</div>
+    <nav class="nav">
+        <a href="index.html"><span class="num">00</span>Обзор</a>
+        <a href="01-interface.html"><span class="num">01</span>Интерфейс</a>
+        <a href="02-memory.html"><span class="num">02</span>Память</a>
+        <a href="03-bridges.html"><span class="num">03</span>Мосты</a>
+        <a href="04-mcp-servers.html"><span class="num">04</span>Серверы MCP</a>
+        <a href="05-agents.html" class="active"><span class="num">05</span>Агенты</a>
+        <a href="06-skills.html"><span class="num">06</span>Навыки</a>
+        <a href="07-commands.html"><span class="num">07</span>Команды</a>
+        <a href="08-base-structure.html"><span class="num">08</span>Структура базы</a>
+        <a href="09-maintenance.html"><span class="num">09</span>Обслуживание</a>
+    </nav>
+    <div class="side-foot">
+      Собрано по коду и реестрам репозитория<br>
+      версия 1.0.0 · 27.10.2026
+    </div>
+  </aside>
+  <main class="main">
+    <div class="wrap">
+      <div class="kicker">раздел 05</div>
+      <h1>Агенты</h1>
+      <p class="lead">Тринадцать ролей: кто планирует, кто пишет, кто проверяет — и почему это разные агенты.</p>
+      
+<p>Агент — это роль с собственными правилами и правами. В OpenCode агент
+вызывается через <code>@имя</code>, и дальше работа идёт по его инструкции:
+проектировщик не пишет код, программист не проверяет, проверяльщик не правит.</p>
+
+<div class="grid c3">
+  <div class="stat"><div class="n">13</div><div class="t">агентов</div></div>
+  <div class="stat"><div class="n">9</div><div class="t">работают с кодом и текстом</div></div>
+  <div class="stat"><div class="n">4</div><div class="t">смотрят на компьютер и данные</div></div>
+</div>
+
+<h2>Кто есть</h2>
+<div class="table-wrap"><table class="fixed"><colgroup><col style="width:18%"><col style="width:30%"><col style="width:32%"><col style="width:12%"><col style="width:8%"></colgroup><thead><tr><th>Агент</th><th>Что делает</th><th>Как работает</th><th>Режим</th><th>Темп.</th></tr></thead><tbody><tr><td class='name'>@bazy</td><td>Проектирует таблицы, миграции и чинит медленные запросы</td><td class='small'>Ты — база данных. Твоя работа: порядок в данных.</td><td class='mono'>subagent</td><td class='mono'>0.2</td></tr><tr><td class='name'>@devops</td><td>Настраивает сборку, деплой и дежурство проекта</td><td class='small'>Ты — девопс. Твоя работа: чтобы проект собирался и запускался.</td><td class='mono'>subagent</td><td class='mono'>0.2</td></tr><tr><td class='name'>@dizayner</td><td>Проектирует и правит интерфейсы</td><td class='small'>Ты — дизайнер. Твоя работа: чтобы было красиво и понятно.</td><td class='mono'>subagent</td><td class='mono'>0.5</td></tr><tr><td class='name'>@dokop</td><td>Ищет ответы в документации и интернете</td><td class='small'>Ты — докоп. Твоя работа: документация и внешний поиск.</td><td class='mono'>subagent</td><td class='mono'>0.2</td></tr><tr><td class='name'>@golosovoy</td><td>Принимает команды голосом через микрофон</td><td class='small'>Ты — голосовой. Твоя работа: уши opencode.</td><td class='mono'>subagent</td><td class='mono'>0.2</td></tr><tr><td class='name'>@iskatel</td><td>Ищет по коду и файлам, ничего не меняет</td><td class='small'>Ты — искатель. Твоя работа: находить, а не чинить.</td><td class='mono'>subagent</td><td class='mono'>0.1</td></tr><tr><td class='name'>@ohrannik</td><td>Ищет секреты и дыры в безопасности</td><td class='small'>Ты — охранник. Твоя работа: секреты и дыры.</td><td class='mono'>subagent</td><td class='mono'>0.0</td></tr><tr><td class='name'>@proektirovschik</td><td>Составляет план работы и список проверок, код не пишет</td><td class='small'>Ты — проектировщик. Твоя работа: план до кода.</td><td class='mono'>subagent</td><td class='mono'>0.1</td></tr><tr><td class='name'>@programmist</td><td>Пишет код строго по шагам плана</td><td class='small'>Ты — программист. Твоя работа: код по плану, ничего лишнего.</td><td class='mono'>subagent</td><td class='mono'>0.3</td></tr><tr><td class='name'>@proveryalschik</td><td>Запускает тесты, сборку и проверки, докладывает итог</td><td class='small'>Ты — проверяльщик. Твоя работа: доказательства, а не слова.</td><td class='mono'>subagent</td><td class='mono'>0.1</td></tr><tr><td class='name'>@provodnik-pk</td><td>Смотрит компьютер через мост ПК, всё спрашивает</td><td class='small'>Ты — проводник по ПК. Твоя работа: глаза через мост pc_*.</td><td class='mono'>subagent</td><td class='mono'>0.1</td></tr><tr><td class='name'>@retsenzent-qwen</td><td>Второй ревьюер через Qwen Code — читает git diff и приносит замечания</td><td class='small'>Ты — второй ревьюер. Твоя работа: свежий взгляд на изменения **чужими глазами**, а не пересказ того, что и так видно.</td><td class='mono'>subagent</td><td class='mono'>0.1</td></tr><tr><td class='name'>@retsenzent</td><td>Проверяет код глазами, правит только словами</td><td class='small'>Ты — рецензент. Твоя работа: свежий взгляд.</td><td class='mono'>subagent</td><td class='mono'>0.1</td></tr></tbody></table></div>
+<h2>Зачем разделение</h2>
+<p>Один агент, который и планирует, и пишет, и проверяет, — это агент,
+который проверяет сам себя. Разделение ролей нужно не для красоты: у
+<code>proektirovschik</code> запрещена правка файлов, у
+<code>programmist</code> есть только шаги плана, а <code>proveryalschik</code>
+запускает тесты и не может «поправить, чтобы прошло».</p>
+
+<div class="split">
+  <div class="card">
+    <h3>Планирование</h3>
+    <p class="small"><code>@proektirovschik</code> составляет план и список
+    проверок, код не пишет. <code>@programmist</code> идёт строго по шагам
+    плана.</p>
+  </div>
+  <div class="card">
+    <h3>Проверка</h3>
+    <p class="small"><code>@proveryalschik</code> запускает тесты и сборку.
+    <code>@retsenzent</code> читает код глазами и правит только словами.
+    <code>@retsenzent-qwen</code> — второй ревьюер через Qwen Code: читает
+    <code>git diff</code> и приносит замечания.</p>
+  </div>
+  <div class="card">
+    <h3>Поиск</h3>
+    <p class="small"><code>@iskatel</code> ищет по коду и файлам и ничего
+    не меняет. <code>@dokop</code> ищет ответы в документации и интернете,
+    сначала в библиотеке NCP.</p>
+  </div>
+  <div class="card">
+    <h3>Компьютер</h3>
+    <p class="small"><code>@provodnik-pk</code> смотрит компьютер через мост
+    ПК и всё спрашивает. <code>@golosovoy</code> принимает команды голосом.</p>
+  </div>
+  <div class="card">
+    <h3>Данные и безопасность</h3>
+    <p class="small"><code>@bazy</code> проектирует таблицы и миграции.
+    <code>@ohrannik</code> ищет секреты и дыры.</p>
+  </div>
+  <div class="card">
+    <h3>Оформление и эксплуатация</h3>
+    <p class="small"><code>@dizayner</code> проектирует интерфейсы.
+    <code>@devops</code> настраивает сборку, деплой и дежурство.</p>
+  </div>
+</div>
+
+<h2>Как вызвать</h2>
+<pre><code>@proektirovschik спланируй перенос отчётов в новую папку
+@programmist сделай шаг 2 из плана
+@proveryalschik прогони тесты и скажи, что упало</code></pre>
+<p class="muted">Агенты лежат в <code>tools/agents</code> и ставятся в настройки
+OpenCode вкладкой <a href="01-interface.html">opencode</a>, блок 1.</p>
+
+      <div class="pager"><a href="04-mcp-servers.html"><span class="dir">Назад</span>Серверы MCP</a><a href="06-skills.html" style="text-align:right"><span class="dir">Дальше</span>Навыки</a></div>
+    </div>
+  </main>
+</div>
+</body>
+</html>

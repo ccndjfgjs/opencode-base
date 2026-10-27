@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Интерфейс — opencode-base</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="index.html">
+      <div class="brand-mark">справочник</div>
+      <div class="brand-name">opencode-base</div>
+      <div class="brand-sub">база долговременной памяти</div>
+    </a>
+    <div class="nav-title">Разделы</div>
+    <nav class="nav">
+        <a href="index.html"><span class="num">00</span>Обзор</a>
+        <a href="01-interface.html" class="active"><span class="num">01</span>Интерфейс</a>
+        <a href="02-memory.html"><span class="num">02</span>Память</a>
+        <a href="03-bridges.html"><span class="num">03</span>Мосты</a>
+        <a href="04-mcp-servers.html"><span class="num">04</span>Серверы MCP</a>
+        <a href="05-agents.html"><span class="num">05</span>Агенты</a>
+        <a href="06-skills.html"><span class="num">06</span>Навыки</a>
+        <a href="07-commands.html"><span class="num">07</span>Команды</a>
+        <a href="08-base-structure.html"><span class="num">08</span>Структура базы</a>
+        <a href="09-maintenance.html"><span class="num">09</span>Обслуживание</a>
+    </nav>
+    <div class="side-foot">
+      Собрано по коду и реестрам репозитория<br>
+      версия 1.0.0 · 27.10.2026
+    </div>
+  </aside>
+  <main class="main">
+    <div class="wrap">
+      <div class="kicker">раздел 01</div>
+      <h1>Интерфейс</h1>
+      <p class="lead">Восемь вкладок, одиннадцать диалогов и точные надписи на кнопках — как в коде, а не как помнится.</p>
+      
+<p>Окно — восемь вкладок. Порядок не случайный: он повторяет путь человека —
+создать базу, подключить её, поставить мост, настроить OpenCode, поставить
+нужные программы, выбрать оформление, обновиться, прочитать справку.</p>
+
+<div class="note">
+<p>Шесть вкладок из восьми — это прокручиваемые страницы: содержимое не
+обрезается, а уходит в прокрутку. Вкладка «Программы» показывает карточки,
+«Обновление» — список того, что стоит и что доступно.</p>
+</div>
+
+<h2>Восемь вкладок</h2>
+
+<div class="tabcard">
+  <div class="head"><span class="cls">01</span><h3>Новая база</h3><span class="cls">CreateTab</span></div>
+  <p class="purpose">Создаёт пустую базу и сразу подключает её к программе-ассистенту. Имя проверяется на ходу: недопустимые знаки и имена, занятые Windows, отсекаются до создания папки.</p>
+  <div class="blocks"><span class="b">1. Где создать базу</span><span class="b">2. Память этой базы</span><span class="b">3. Чем наполнить новую базу</span><span class="b">4. Подключить к OpenCode</span><span class="b">5. Ярлык на новую базу</span></div>
+  <div class="btns"><span class="btn">Обзор…</span><span class="btn">Проверить</span><span class="btn primary">Создать базу</span><span class="btn">Запустить Hindsight</span><span class="btn">Остановить</span><span class="btn">Открыть папку</span><span class="btn">Открыть в Obsidian</span></div>
+  <p class="muted">В блоке 2 три карточки памяти: NCP (стандарт), Obsidian, Hindsight. Для Hindsight — выбор способа установки: uv (отдельный модуль) или Docker (официальный образ). В блоке 3 — «Пустая база» или «Скопировать содержимое существующей». Флажки: «Разрешить в этой базе пароли и ключи», «Перенести скиллы из образца», «Подключить базу к программе сразу», «Создать ярлык, открывающий эту базу».</p>
+</div>
+
+<div class="tabcard">
+  <div class="head"><span class="cls">02</span><h3>Подключить</h3><span class="cls">ImportTab</span></div>
+  <p class="purpose">Подключает готовую базу к выбранной программе, не трогая саму базу и не задевая папки проектов. Прежние файлы памяти программы сохраняются в <code>_previous-version</code>.</p>
+  <div class="blocks"><span class="b">1. Какую базу подключить</span><span class="b">2. Подключение к OpenCode</span><span class="b">3. Навыки</span></div>
+  <div class="btns"><span class="btn">Сканировать</span><span class="btn">Обновить список</span><span class="btn">Обзор…</span><span class="btn primary">Подключить</span><span class="btn">Отключить от opencode</span><span class="btn">Убрать из списка</span><span class="btn">Убрать временные</span><span class="btn">Удалить базу</span></div>
+  <p class="muted">Список ведёт только те базы, что создала эта программа; чужую можно указать путём вручную. Неотмеченные навыки не удаляются, а уходят в <code>_previous-version\skills</code>, откуда их можно вернуть. Флажок «Показывать временные» открывает базы, созданные самотестом.</p>
+</div>
+
+<div class="tabcard">
+  <div class="head"><span class="cls">03</span><h3>Мост NCP</h3><span class="cls">BridgeTab</span></div>
+  <p class="purpose">Создаёт маленькую программу-переводчик, через которую ассистент получает доступ к библиотеке: спросить состояние, найти запись, сохранить. Лежит отдельно, саму базу не трогает.</p>
+  <div class="blocks"><span class="b">1. Куда положить мост</span><span class="b">2. К какой библиотеке подключить</span><span class="b">3. Куда подключить</span></div>
+  <div class="btns"><span class="btn">Обзор…</span><span class="btn primary">Создать мост</span><span class="btn">Проверить</span><span class="btn">Сохранить YAML для Харнеса</span><span class="btn">Открыть папку</span></div>
+  <p class="muted">Формат подключения выбирается: «Для opencode (JSON)» или «Для Харнеса (YAML-оверлей)». Готовые настройки показываются в блоке «Настройки моста — их можно скопировать». Ни одного вписанного пути здесь нет: иначе мост не заработает на другом компьютере.</p>
+</div>
+
+<div class="tabcard">
+  <div class="head"><span class="cls">04</span><h3>opencode</h3><span class="cls">CapsTab</span></div>
+  <p class="purpose">Всё, что ставится в папку настроек OpenCode: агенты, команда голосового ввода, обход блокировок, навыки и серверы MCP. Убранная галочка при нажатии «Убрать» снимает только наше — чужое не трогает.</p>
+  <div class="blocks"><span class="b">1. Что поставить в opencode</span><span class="b">2. Куда ставится</span><span class="b">3. Провайдеры моделей (новые пресеты)</span><span class="b">4. Обход блокировок — что именно поставить</span><span class="b">5. Навыки — какие поставить в opencode</span><span class="b">6. Серверы MCP — что можно включить</span></div>
+  <div class="btns"><span class="btn">Отметить все</span><span class="btn">Снять все</span><span class="btn primary">Установить отмеченных</span><span class="btn">Убрать отмеченных</span><span class="btn">Настроить через скилл</span><span class="btn">Проверить доступность</span><span class="btn">Проверить подключение</span><span class="btn">Проверить DNS</span><span class="btn">Сохранить</span><span class="btn">Поставить отмеченные</span><span class="btn">Убрать отмеченные</span><span class="btn">Проверить обновления скилов</span></div>
+  <p class="muted">Блок 1 ставит тринадцать агентов. Блок 4 отвечает за обход блокировок и умеет проверить подключение и DNS. Блок 5 — навыки, с проверкой обновлений. Блок 6 — каталог серверов MCP (см. <a href="04-mcp-servers.html">Серверы MCP</a>). Кнопки «Проверить изменения…», «Возразить и продолжить…» и «Забыть ход спора» относятся к второму ревьюеру через Qwen Code.</p>
+</div>
+
+<div class="tabcard">
+  <div class="head"><span class="cls">05</span><h3>Программы</h3><span class="cls">ProgramsTab</span></div>
+  <p class="purpose">Программы, без которых мосты не работают: карточки с состоянием и кнопкой установки. Вкладка ничего не решает сама — карточки приходят из реестра, установку запускает winget.</p>
+  
+  <div class="btns"><span class="btn primary">Перепроверить всё</span></div>
+  <p class="muted">У кнопки установки три честных ограничения, и все три видны человеку: права администратора вкладка не берёт сама (если winget упрётся в права, покажет готовую команду с <code>--scope machine</code>); сверка подписи не блокирует установку; версия сверяется с каталогом, а не берётся на глаз.</p>
+</div>
+
+<div class="tabcard">
+  <div class="head"><span class="cls">06</span><h3>Темы</h3><span class="cls">ThemesTab</span></div>
+  <p class="purpose">Оформление интерфейса OpenCode: файлы тем из папки <code>themes/</code> главной базы. Вкладка — просмотр и место, откуда удобно взять заготовку.</p>
+  <div class="blocks"><span class="b">Доступные темы</span></div>
+  <div class="btns"><span class="btn primary">Применить</span><span class="btn">Обновить список</span><span class="btn">Открыть папку тем</span></div>
+  <p class="muted">Сами темы сюда не применяются — вкладка показывает, что есть, и открывает папку в проводнике.</p>
+</div>
+
+<div class="tabcard">
+  <div class="head"><span class="cls">07</span><h3>Обновление</h3><span class="cls">UpdateTab</span></div>
+  <p class="purpose">Что стоит, что доступно и что делать. Берёт данные только из уже проверенных слоёв: сама ничего не решает, а спрашивает, показывает ответ и запускает действие.</p>
+  
+  <div class="btns"></div>
+  <p class="muted">Кнопки выключены с причиной, а не спрятаны: человек получает объяснение до нажатия. Индикатор показывает, сколько скачано из сколького и что делается сейчас, — молчаливая полоса выглядела бы как зависание. При закрытии окна недокачанный файл удаляется, чтобы его не приняли за годный.</p>
+</div>
+
+<div class="tabcard">
+  <div class="head"><span class="cls">08</span><h3>Инструкция</h3><span class="cls">HelpTab</span></div>
+  <p class="purpose">Встроенная справка на двенадцать разделов. Не требует интернета и не расходится с программой: лежит в том же файле, что и окно.</p>
+  <div class="blocks"><span class="b">1. Что это</span><span class="b">2. Первый запуск</span><span class="b">3. Создать новую базу</span><span class="b">4. Подключить существующую базу</span><span class="b">5. Мост NCP</span><span class="b">6. Возможности для OpenCode (вкладка «opencode»)</span><span class="b">7. Серверы MCP — блок на вкладке «opencode»</span><span class="b">8. Обход блокировок</span><span class="b">9. Темы (вкладка «Темы»)</span><span class="b">10. Обновление самой программы</span><span class="b">11. Перенос на другой компьютер</span><span class="b">12. Если что-то не работает</span></div>
+  <div class="btns"></div>
+  
+</div>
+
+<h2>Диалоги</h2>
+<p>Одиннадцать окон открываются поверх главного, когда программе нужно
+что-то уточнить. Каждое спрашивает только то, чего у неё нет.</p>
+<div class="table-wrap"><table><thead><tr><th>Диалог</th><th>Когда появляется</th><th>Что спрашивает</th></tr></thead><tbody><tr><td>ManualConfigDialog</td><td>чужая программа выдала готовую конфигурацию</td><td>вставить конфигурацию, чтобы программа её разобрала</td></tr><tr><td>ObsPasswordDialog</td><td>настраивается мост OBS</td><td>пароль WebSocket-сервера OBS</td></tr><tr><td>EngineSetupDialog</td><td>для моста не хватает движка</td><td>путь, команду или токен — только недостающее</td></tr><tr><td>DbhubConnectionDialog</td><td>настраивается мост DBHub</td><td>параметры подключения к базе</td></tr><tr><td>BrowserChoiceDialog</td><td>настраивается мост браузеров</td><td>какой браузер и какой профиль</td></tr><tr><td>LmarenaWarningDialog</td><td>перед первым запуском LMArena</td><td>предупреждения моста — до запуска, а не после</td></tr><tr><td>LmarenaTokenDialog</td><td>нужен токен арены</td><td>свежую куку <code>arena-auth-prod-v1</code></td></tr><tr><td>PxpipeWarningDialog</td><td>перед запуском pxpipe</td><td>предупреждение — до запуска прокси и до галочки</td></tr><tr><td>QwenReviewDialog</td><td>включается второй ревьюер</td><td>папку проекта и базу сравнения</td></tr><tr><td>QwenReplyDialog</td><td>идёт раунд спора с ревьюером</td><td>возражение основного агента</td></tr><tr><td>QwenSetupDialog</td><td>настройка скилла ревьюера</td><td>фразы-триггеры: что сказать агенту</td></tr></tbody></table></div>
+<h2>Как это связано</h2>
+<div class="grid c3">
+  <div class="card"><h3>Создать</h3><p>Вкладка 1 создаёт папку базы, наполняет её
+  и сразу предлагает подключить. Кнопка «Проверить» показывает план, ничего
+  не записывая.</p></div>
+  <div class="card"><h3>Подключить</h3><p>Вкладка 2 вписывает базу в настройки
+  программы-ассистента. Прежние файлы уходят в <code>_previous-version</code>.</p></div>
+  <div class="card"><h3>Настроить</h3><p>Вкладка 4 ставит агентов, навыки и серверы
+  MCP. Вкладка 5 — программы, без которых мосты не работают.</p></div>
+</div>
+
+      <div class="pager"><a href="index.html"><span class="dir">Назад</span>Обзор</a><a href="02-memory.html" style="text-align:right"><span class="dir">Дальше</span>Память</a></div>
+    </div>
+  </main>
+</div>
+</body>
+</html>

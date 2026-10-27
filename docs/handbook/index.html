@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Справочник по программе — opencode-base</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="index.html">
+      <div class="brand-mark">справочник</div>
+      <div class="brand-name">opencode-base</div>
+      <div class="brand-sub">база долговременной памяти</div>
+    </a>
+    <div class="nav-title">Разделы</div>
+    <nav class="nav">
+        <a href="index.html" class="active"><span class="num">00</span>Обзор</a>
+        <a href="01-interface.html"><span class="num">01</span>Интерфейс</a>
+        <a href="02-memory.html"><span class="num">02</span>Память</a>
+        <a href="03-bridges.html"><span class="num">03</span>Мосты</a>
+        <a href="04-mcp-servers.html"><span class="num">04</span>Серверы MCP</a>
+        <a href="05-agents.html"><span class="num">05</span>Агенты</a>
+        <a href="06-skills.html"><span class="num">06</span>Навыки</a>
+        <a href="07-commands.html"><span class="num">07</span>Команды</a>
+        <a href="08-base-structure.html"><span class="num">08</span>Структура базы</a>
+        <a href="09-maintenance.html"><span class="num">09</span>Обслуживание</a>
+    </nav>
+    <div class="side-foot">
+      Собрано по коду и реестрам репозитория<br>
+      версия 1.0.0 · 27.10.2026
+    </div>
+  </aside>
+  <main class="main">
+    <div class="wrap">
+      <div class="kicker">обзор</div>
+      <h1>Справочник по программе</h1>
+      <p class="lead">Полное описание интерфейса и всего, что программа умеет: память, мосты, серверы MCP, агенты, навыки, команды, устройство базы.</p>
+      
+<p>Это окно на PyQt6, которое создаёт и обслуживает локальную базу
+долговременной памяти для ИИ-ассистента. База — обычная папка с файлами:
+знания, навыки, правила, библиотека записей. Программа подключает её
+к OpenCode, ставит мосты и следит, чтобы ничего не потерялось.</p>
+
+<div class="grid c4">
+  <div class="stat"><div class="n">55</div><div class="t">серверов MCP в реестре</div></div>
+  <div class="stat"><div class="n">11</div><div class="t">мостов лежит в программе</div></div>
+  <div class="stat"><div class="n">13</div><div class="t">агентов для OpenCode</div></div>
+  <div class="stat"><div class="n">43</div><div class="t">навыков в индексе</div></div>
+</div>
+<div class="grid c4" style="margin-top:0">
+  <div class="stat"><div class="n">8</div><div class="t">вкладок в окне</div></div>
+  <div class="stat"><div class="n">5</div><div class="t">команд OpenCode</div></div>
+  <div class="stat"><div class="n">3</div><div class="t">типа памяти</div></div>
+  <div class="stat"><div class="n">22</div><div class="t">серверов отклонено</div></div>
+</div>
+
+<h2>Что здесь лежит</h2>
+<p>Десять разделов. Каждый отвечает на свой вопрос и не повторяет соседние.</p>
+
+<div class="grid c2">
+  <div class="card">
+    <h3><a href="01-interface.html">Интерфейс</a></h3>
+    <p>Все восемь вкладок: что на каждой, из каких блоков состоит, какие кнопки
+    и что они делают. Плюс диалоги, которые открываются поверх окна.</p>
+  </div>
+  <div class="card">
+    <h3><a href="02-memory.html">Память</a></h3>
+    <p>Три типа памяти — NCP, Obsidian, Hindsight. Чем отличаются, что создаётся
+    в базе при каждом выборе, как работает банк памяти Hindsight.</p>
+  </div>
+  <div class="card">
+    <h3><a href="03-bridges.html">Мосты</a></h3>
+    <p>Одиннадцать мостов, которые лежат внутри программы: OBS, Android,
+    браузеры, OmniRoute, LMArena и другие. Что дают и что требуют.</p>
+  </div>
+  <div class="card">
+    <h3><a href="04-mcp-servers.html">Серверы MCP</a></h3>
+    <p>Полный реестр из 55 серверов по двенадцати категориям: что даёт каждый,
+    какие требования, какая лицензия. И 22 отклонённых с причинами.</p>
+  </div>
+  <div class="card">
+    <h3><a href="05-agents.html">Агенты</a></h3>
+    <p>Тринадцать ролей для OpenCode — от проектировщика до охранника.
+    Кто что делает, какие права и как вызывать.</p>
+  </div>
+  <div class="card">
+    <h3><a href="06-skills.html">Навыки</a></h3>
+    <p>Сорок три навыка: когда какой применяется и что получается на выходе.
+    Индекс, по которому модель выбирает нужный.</p>
+  </div>
+  <div class="card">
+    <h3><a href="07-commands.html">Команды</a></h3>
+    <p>Пять слэш-команд OpenCode: запомнить факт, показать память, создать
+    проект, записать работу, просканировать сессии.</p>
+  </div>
+  <div class="card">
+    <h3><a href="08-base-structure.html">Структура базы</a></h3>
+    <p>Из чего состоит база: восемнадцать папок, указатели знаний, архив
+    потерянных привязок, что не публикуется в репозиторий.</p>
+  </div>
+  <div class="card">
+    <h3><a href="09-maintenance.html">Обслуживание</a></h3>
+    <p>Самотест, обновление программы, скрипты проверок, подмодуль obs-mcp
+    и перенос базы на другой компьютер.</p>
+  </div>
+</div>
+
+<h2>Как запустить</h2>
+<p>Двойной щелчок по <code>Управление-базой.cmd</code> в корне базы. Файл сам
+находит Python с PyQt6 — сначала во вложенных средах, потом среди
+установленных, затем в PATH — и открывает окно без консоли.</p>
+<p>Запасной способ — запустить <code>tools\dbapp\Запустить-окно.pyw</code>
+через Python, в котором стоит PyQt6.</p>
+
+<div class="note">
+<p><strong>Чего программа не делает.</strong> Не удаляет и не перемещает ваши
+папки, не трогает папки проектов и резервные копии, не пишет в служебные
+папки пакетов, не перезаписывает базу поверх базы и не меняет чужие файлы
+настроек — только добавляет своё или убирает его же.</p>
+</div>
+
+<h2>Требования</h2>
+<div class="table-wrap"><table><thead><tr><th>Что</th><th>Зачем</th></tr></thead><tbody><tr><td>Windows 10/11</td><td>программа работает с реестром, ярлыками и путями Windows</td></tr><tr><td>Python 3 с PyQt6</td><td>для окна; обычный системный Python часто не подходит</td></tr><tr><td>Node.js</td><td>для плагина памяти, вспомогательных скриптов и моста OBS</td></tr></tbody></table></div>
+<p class="muted">Мосты из раздела <a href="03-bridges.html">Мосты</a> лежат в
+репозитории, но требуют установленного приложения: мост OBS работает только
+с открытой студией, мост эмулятора — с запущенным эмулятором. Без этих
+программ сама база работает нормально, и окно честно говорит, чего не хватает.</p>
+
+      <div class="pager"><span></span><a href="01-interface.html" style="text-align:right"><span class="dir">Дальше</span>Интерфейс</a></div>
+    </div>
+  </main>
+</div>
+</body>
+</html>
