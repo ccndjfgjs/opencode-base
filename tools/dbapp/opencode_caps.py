@@ -576,24 +576,32 @@ def unmerge_caps(text: str, names: list[str]) -> str:
     return text
 
 
-def set_instructions(text: str, base: Path) -> str:
+def set_instructions(text: str, base: Path, memory: str = "") -> str:
     """Переписывает массив instructions в файле на пути этой базы.
 
     Всё остальное — провайдеры, права, другие серверы mcp — остаётся
     как было. Возвращает новый текст; если файл не читается или в нём
     нет массива instructions — бросает ValueError.
+
+    `memory` — тип памяти базы. Пусто означает «взять из отметки базы»
+    (так зовут старые места, и они по-прежнему получают NCP). Список
+    файлов зависит от типа: у Obsidian и Hindsight библиотеки в базе
+    нет, ссылка на неё в instructions вела бы в пустоту.
     """
     if not check_jsonc(text):
         raise ValueError("opencode.jsonc сломан — правим руками, не автоматом")
     import core  # noqa: PLC0415 — рядом лежит
 
+    if not memory:
+        memory = core.base_memory(base)
+    memory = core.valid_memory(memory)
     bounds = find_key_array(text, "instructions")
     if bounds is None:
         raise ValueError("в opencode.jsonc нет массива instructions")
     opening, closing = bounds
     base_posix = str(base).replace("\\", "/")
     lines = ["["]
-    for name in core.INSTRUCTION_TARGETS:
+    for name in core.instruction_targets(memory):
         lines.append(f'    "{base_posix}/{name}",')
     lines[-1] = lines[-1][:-1]
     lines.append("  ]")
@@ -700,21 +708,31 @@ def _remove_entry_by_name(text: str, obj_key: str, name: str) -> str:
     return text
 
 
-def rewire_config(dest: Path, base: Path) -> list[str]:
+def rewire_config(dest: Path, base: Path, memory: str = "") -> list[str]:
     """Переводит opencode.jsonc в папке настроек на эту базу.
 
-    Меняет массив instructions и блоки мостов ncp/pc с правами, чтобы
-    всё указывало на новую базу. Чужие серверы и провайдеры не трогает.
+    Меняет массив instructions и блоки мостов с правами, чтобы всё
+    указывало на новую базу. Чужие серверы и провайдеры не трогает.
     Возвращает список сообщений. Бросает ValueError, если файл не читается.
+
+    `memory` — тип памяти базы (пусто — взять из её отметки). Мост NCP
+    вписывается только при памяти NCP: у Obsidian и Hindsight библиотеки
+    нет, и мост, указывающий в пустоту, хуже отсутствующего. У Hindsight
+    вместо него вписывается удалённый сервер «hindsight» с банком базы.
     """
     messages: list[str] = []
+    import core  # noqa: PLC0415 — рядом лежит
+
+    if not memory:
+        memory = core.base_memory(base)
+    memory = core.valid_memory(memory)
     cfg = dest / "opencode.jsonc"
     if not cfg.is_file():
         raise ValueError("нет opencode.jsonc — мосты подключать некуда")
     text = cfg.read_text(encoding="utf-8")
     if not check_jsonc(text):
         raise ValueError("opencode.jsonc сломан — правим руками, не автоматом")
-    text = set_instructions(text, base)
+    text = set_instructions(text, base, memory)
     # Объекты mcp и permission могут отсутствовать: эталонный opencode.jsonc
     # в базе описывает только instructions, и мостов в нём ещё нет. Без
     # ensure_object вставка падала бы с «нет объекта mcp», и подключение
@@ -722,12 +740,22 @@ def rewire_config(dest: Path, base: Path) -> list[str]:
     text = ensure_object(text, "mcp")
     text = ensure_object(text, "permission")
     python = find_python()
-    for obj_key, name, entry in (
-        ("mcp", "ncp", ncp_server_block(base, python)),
-        ("mcp", "pc", pc_server_block(base, python)),
-        ("permission", "ncp_*", '"ncp_*": "ask"'),
-        ("permission", "pc_*", '"pc_*": "ask"'),
-    ):
+    entries: list[tuple[str, str, str]] = []
+    if memory == "ncp":
+        entries.append(("mcp", "ncp", ncp_server_block(base, python)))
+    else:
+        # Мост прежней базы убираем: иначе он остаётся в настройках и
+        # ищет библиотеку там, где её больше нет. Чужой блок с таким
+        # именем тоже уходит — имя «ncp» наше по смыслу.
+        text = remove_entry(text, "mcp", "ncp")
+        text = remove_entry(text, "permission", "ncp_*")
+        if memory == "hindsight":
+            entries.append(("mcp", "hindsight", hindsight_server_block(base)))
+    entries.append(("mcp", "pc", pc_server_block(base, python)))
+    if memory == "ncp":
+        entries.append(("permission", "ncp_*", '"ncp_*": "ask"'))
+    entries.append(("permission", "pc_*", '"pc_*": "ask"'))
+    for obj_key, name, entry in entries:
         # Старую запись (если есть) убирает сам insert_entry — иначе путь
         # к базе не обновится при повторном подключении. fix_trailing_commas
         # здесь не зовём: insert_entry и так ставит разделитель сам, а эта
@@ -736,7 +764,11 @@ def rewire_config(dest: Path, base: Path) -> list[str]:
         messages.append(f"В настройки вписан блок: {obj_key}.{name}")
     text = ensure_commas(text)
     cfg.write_text(text, encoding="utf-8")
-    messages.append("Пути, мосты ncp/pc и права переведены на эту базу")
+    names = {"ncp": "NCP", "obsidian": "Obsidian", "hindsight": "Hindsight"}
+    messages.append(
+        "Пути и права переведены на эту базу; память — "
+        + names.get(memory, memory)
+    )
     return messages
 
 
@@ -781,6 +813,35 @@ def ncp_server_block(base: Path, python: str) -> str:
         '"ncp": {\n'
         '      "type": "local",\n'
         f'      {server_entry(python, base / "tools" / "ncp-bridge" / "server.py")},\n'
+        '      "enabled": true\n'
+        "    },"
+    )
+
+
+#: Порт и адрес MCP-сервера Hindsight. Порт постоянный (документация
+#: Hindsight: 8888 — API и MCP, 8889 — воркеры).
+HINDSIGHT_URL = "http://127.0.0.1:8888"
+
+
+def hindsight_server_block(base: Path, bank: str = "") -> str:
+    """Блок MCP-сервера Hindsight: банк этой базы по адресу /mcp/<bank>/.
+
+    Банк — именованная часть сервера, у каждой базы своя. Имя берётся из
+    отметки базы (memory_bank), а если её нет — считается из имени папки
+    тем же способом, что при создании. Второй выдуманный банк означал бы
+    «память пишется в одно место, а читается из другого».
+    """
+    import core  # noqa: PLC0415 — рядом лежит
+
+    if not bank:
+        marker = core.read_marker(base) or {}
+        bank = str(marker.get("memory_bank") or "").strip()
+    if not bank:
+        bank = core.bank_slug(base.name)
+    return (
+        '"hindsight": {\n'
+        '      "type": "remote",\n'
+        f'      "url": "{HINDSIGHT_URL}/mcp/{bank}/",\n'
         '      "enabled": true\n'
         "    },"
     )

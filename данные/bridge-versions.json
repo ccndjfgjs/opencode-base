@@ -896,6 +896,20 @@
         "family": "npm",
         "package": "censys-mcp"
       }
+    },
+    "hindsight": {
+      "program": {
+        "any": true,
+        "text": "uv (модуль) или Docker (образ) — ставит программа"
+      },
+      "mcp_server": {
+        "spec": "hindsight-api==1.1.0",
+        "pinned": true,
+        "pinned_in": "tools/dbapp/hindsight_base.py",
+        "note": "версия закреплена в коде установки, её держит программа"
+      },
+      "plugin": null,
+      "update": null
     }
   }
 }

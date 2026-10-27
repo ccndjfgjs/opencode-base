@@ -123,6 +123,9 @@ BY_ID: dict[str, str] = {
     "omniroute": "service",
     "lmarena": "service",
     "mcp-doctor": "service",
+    # Память базы: сервер поднимает сама программа при выборе типа
+    # памяти Hindsight в окне создания базы.
+    "hindsight": "service",
 }
 
 

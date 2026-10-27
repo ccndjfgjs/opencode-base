@@ -53,6 +53,7 @@ from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics
 from PyQt6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -79,6 +80,7 @@ from PyQt6.QtWidgets import (
     QToolButton,
     QVBoxLayout,
     QFrame,
+    QGridLayout,
     QWidget,
 )
 
@@ -509,8 +511,100 @@ class CreateTab(ScrollPage):
             "токены — даже по прямой просьбе.", kind="dim", wrap=True))
         outer.addWidget(box_path)
 
-        # --- шаг 2: чем наполнить
-        box_content = QGroupBox("2. Чем наполнить новую базу")
+        # --- шаг 2: память этой базы. Строго один тип, хранилище одно.
+        box_memory = QGroupBox("2. Память этой базы")
+        memory_layout = QVBoxLayout(box_memory)
+
+        memory_layout.addWidget(ui.label(
+            "Хранилище памяти у базы одно. От него зависит, куда ассистент "
+            "складывает заметки между сессиями. Остальная структура базы "
+            "у всех типов одинаковая.",
+            kind="dim",
+            wrap=True,
+        ))
+
+        self.memory_radio: dict[str, QRadioButton] = {}
+        self.memory_install_radio: dict[str, QRadioButton] = {}
+        self.memory_extra: dict[str, ui.label] = {}
+
+        # Три карточки-радио: NCP, Obsidian, Hindsight. Каждая несёт
+        # data - тип памяти, подпись и подсказку про цену. Кнопки живут в
+        # разных ячейках (свои карточки), поэтому связываем их группой —
+        # иначе Qt не считает их взаимоисключающими.
+        self.memory_group = QButtonGroup(self)
+        cards = self._memory_cards_text()
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(8)
+        for idx, (mem, title, desc) in enumerate(cards):
+            rb = QRadioButton(title)
+            rb.setObjectName(f"memory-{mem}")
+            rb.setProperty("memory", mem)
+            self.memory_group.addButton(rb)
+            self.memory_radio[mem] = rb
+            hint = ui.label(desc, kind="dim", wrap=True)
+            self.memory_extra[mem] = hint
+            cell = QWidget()
+            cell_layout = QVBoxLayout(cell)
+            cell_layout.setContentsMargins(10, 6, 10, 6)
+            cell_layout.setSpacing(2)
+            cell_layout.addWidget(rb)
+            cell_layout.addWidget(hint)
+            row = idx // 1
+            grid.addWidget(cell, row, 0)
+        memory_layout.addLayout(grid)
+
+        # Выбор способа установки Hindsight: uv или docker. Показывается
+        # только когда выбрана память hindsight (иначе мешает).
+        self.hindsight_install_box = QWidget()
+        hi_layout = QVBoxLayout(self.hindsight_install_box)
+        hi_layout.setContentsMargins(0, 0, 0, 0)
+        hi_layout.addWidget(ui.label(
+            "Как поставить Hindsight (программа сделает это сама):",
+            kind="dim",
+            wrap=True,
+        ))
+        self.radio_hindsight_uv = QRadioButton(
+            "uv — отдельный модуль"
+        )
+        self.radio_hindsight_docker = QRadioButton(
+            "Docker — официальный образ"
+        )
+        self.radio_hindsight_uv.setChecked(True)
+        hi_layout.addWidget(self.radio_hindsight_uv)
+        hi_layout.addWidget(self.radio_hindsight_docker)
+        self.hindsight_install_box.setVisible(False)
+        memory_layout.addWidget(self.hindsight_install_box)
+
+        # Кнопки управления службой Hindsight для уже созданной базы.
+        self.hindsight_buttons_box = QWidget()
+        hb_layout = QHBoxLayout(self.hindsight_buttons_box)
+        hb_layout.setContentsMargins(0, 0, 0, 0)
+        hb_layout.setSpacing(8)
+        self.btn_hindsight_start = QPushButton("Запустить Hindsight")
+        self.btn_hindsight_start.clicked.connect(self._hindsight_start)
+        self.btn_hindsight_stop = QPushButton("Остановить")
+        self.btn_hindsight_stop.clicked.connect(self._hindsight_stop)
+        self.btn_hindsight_check = QPushButton("Проверить")
+        self.btn_hindsight_check.clicked.connect(self._hindsight_check)
+        hb_layout.addWidget(self.btn_hindsight_start)
+        hb_layout.addWidget(self.btn_hindsight_check)
+        hb_layout.addWidget(self.btn_hindsight_stop)
+        hb_layout.addStretch(1)
+        self.hindsight_status_label = ui.label("", kind="dim", wrap=True)
+        hb_layout.addWidget(self.hindsight_status_label)
+        self.hindsight_buttons_box.setVisible(False)
+        memory_layout.addWidget(self.hindsight_buttons_box)
+
+        # Разделитель
+        memory_layout.addSpacing(2)
+        memory_layout.addWidget(ui.line())
+        self.memory_hint = ui.label("", kind="dim", wrap=True)
+        memory_layout.addWidget(self.memory_hint)
+        outer.addWidget(box_memory)
+
+        # --- шаг 3: чем наполнить
+        box_content = QGroupBox("3. Чем наполнить новую базу")
         content_layout = QVBoxLayout(box_content)
 
         self.radio_blank = QRadioButton("Пустая база")
@@ -551,8 +645,8 @@ class CreateTab(ScrollPage):
         content_layout.addWidget(self.copy_skills)
         outer.addWidget(box_content)
 
-        # --- шаг 3: куда подключить
-        box_attach = QGroupBox("3. Подключить к OpenCode")
+        # --- шаг 4: куда подключить
+        box_attach = QGroupBox("4. Подключить к OpenCode")
         attach_layout = QVBoxLayout(box_attach)
 
         self.attach_check = QCheckBox("Подключить базу к программе сразу")
@@ -579,8 +673,8 @@ class CreateTab(ScrollPage):
         attach_layout.addWidget(note)
         outer.addWidget(box_attach)
 
-        # --- шаг 4: ярлык
-        box_link = QGroupBox("4. Ярлык на новую базу")
+        # --- шаг 5: ярлык
+        box_link = QGroupBox("5. Ярлык на новую базу")
         link_layout = QVBoxLayout(box_link)
 
         self.link_check = QCheckBox("Создать ярлык, открывающий эту базу")
@@ -616,31 +710,6 @@ class CreateTab(ScrollPage):
         self.link_hint = ui.label("", kind="dim", wrap=True)
         link_layout.addWidget(self.link_hint)
         outer.addWidget(box_link)
-
-        # --- Obsidian. Два независимых переключателя, не один.
-        box_obs = QGroupBox("Интеграция с Obsidian")
-        obs_layout = QVBoxLayout(box_obs)
-        self.chk_obsidian = QCheckBox("Поддержка Obsidian")
-        self.chk_obsidian.setObjectName("obsidian-support")
-        obs_layout.addWidget(self.chk_obsidian)
-        obs_layout.addWidget(ui.label(
-            "Создать базу знаний, совместимую с Obsidian, с возможностью "
-            "открытия и редактирования заметок непосредственно в Obsidian.",
-            kind="dim",
-            wrap=True,
-        ))
-        self.chk_obsidian_agent = QCheckBox("Obsidian Agent")
-        self.chk_obsidian_agent.setObjectName("obsidian-agent")
-        obs_layout.addWidget(self.chk_obsidian_agent)
-        obs_layout.addWidget(ui.label(
-            "Подключить ИИ-агента для создания, редактирования, поиска "
-            "и организации заметок в базе знаний.",
-            kind="dim",
-            wrap=True,
-        ))
-        self.obsidian_hint = ui.label("", kind="dim", wrap=True)
-        obs_layout.addWidget(self.obsidian_hint)
-        outer.addWidget(box_obs)
 
         # --- кнопка и отчёт
         buttons = QHBoxLayout()
@@ -686,9 +755,11 @@ class CreateTab(ScrollPage):
         self.program_list.itemSelectionChanged.connect(self._program_changed)
         self.link_check.toggled.connect(self._link_toggled)
         self.link_place.currentIndexChanged.connect(self._link_place_changed)
-        self.chk_obsidian.toggled.connect(self._obsidian_toggled)
-        self.chk_obsidian_agent.toggled.connect(self._obsidian_toggled)
-        self._load_obsidian_prefs()
+        for mem, rb in self.memory_radio.items():
+            rb.toggled.connect(self._memory_toggled)
+        self.radio_hindsight_uv.toggled.connect(self._hindsight_install_changed)
+        self.radio_hindsight_docker.toggled.connect(self._hindsight_install_changed)
+        self._load_memory_prefs()
         self._fill_programs()
         self._mode_changed()
         self._link_toggled()
@@ -698,47 +769,172 @@ class CreateTab(ScrollPage):
         outer.activate()
         self.refresh_height()
 
-    # ---- Obsidian: три метода, которых в патче не было
+    # ---- память этой базы: выбор типа и управление Hindsight
 
-    def _load_obsidian_prefs(self) -> None:
-        """Переключатели — как в прошлый раз. Битые настройки — оба сняты.
+    def _memory_cards_text(self) -> list[tuple[str, str, str]]:
+        """Три карточки выбора типа памяти: (id, заголовок, подпись)."""
+        return [
+            (
+                "ncp",
+                "NCP — библиотека записей (стандарт)",
+                "Папка «библиотека» с поиском и мост NCP. "
+                "Инструменты ncp_* / memory_*. Рекомендуется.",
+            ),
+            (
+                "obsidian",
+                "Obsidian — хранилище заметок",
+                "Сама база открывается и читается в Obsidian. "
+                "Папки «библиотека» нет, мост NCP не ставится.",
+            ),
+            (
+                "hindsight",
+                "Hindsight — банк памяти",
+                "Внешний банк памяти Hindsight. Папки «библиотека» нет, "
+                "мост ходит на http://127.0.0.1:8888/mcp/<банк>/.",
+            ),
+        ]
 
-        Настройка лежит рядом с программой, а не в базе: это состояние
-        окна, а не данные пользователя.
-        """
-        import obsidian_base
+    def _load_memory_prefs(self) -> None:
+        """Тип памяти и способ установки — как в прошлый раз."""
+        import memory_prefs
 
-        obsidian, agent = obsidian_base.load_prefs()
-        self.chk_obsidian.setChecked(obsidian)
-        self.chk_obsidian_agent.setChecked(agent)
-        self._obsidian_hint_only()
+        memory, install = memory_prefs.load()
+        rb = self.memory_radio.get(memory)
+        if rb is not None:
+            rb.setChecked(True)
+        else:
+            default = self.memory_radio.get(core.MEMORY_DEFAULT)
+            if default is not None:
+                default.setChecked(True)
+        if install == "docker":
+            self.radio_hindsight_docker.setChecked(True)
+        else:
+            self.radio_hindsight_uv.setChecked(True)
+        self._memory_refresh()
 
-    def _obsidian_toggled(self) -> None:
-        """Сохраняет выбор и объясняет, чего ждать. Молчание here — враньё."""
-        import obsidian_base
+    def _memory_toggled(self) -> None:
+        import memory_prefs
 
-        obsidian = self.chk_obsidian.isChecked()
-        agent = self.chk_obsidian_agent.isChecked()
-        error = obsidian_base.save_prefs(obsidian, agent)
-        self._obsidian_hint_only(error)
+        memory = self._selected_memory()
+        install = self._selected_hindsight_install()
+        error = memory_prefs.save(memory, install)
+        self._memory_refresh(error)
 
-    def _obsidian_hint_only(self, error: str | None = None) -> None:
-        """Подпись под переключателями. Отдельно от сохранения."""
-        import obsidian_base
+    def _hindsight_install_changed(self) -> None:
+        import memory_prefs
 
+        memory = self._selected_memory()
+        install = self._selected_hindsight_install()
+        error = memory_prefs.save(memory, install)
+        self._memory_refresh(error)
+
+    def _selected_memory(self) -> str:
+        for mem, rb in self.memory_radio.items():
+            if rb.isChecked():
+                return mem
+        return core.MEMORY_DEFAULT
+
+    def _selected_hindsight_install(self) -> str:
+        if self.radio_hindsight_docker.isChecked():
+            return "docker"
+        return "uv"
+
+    def _memory_refresh(self, error: str | None = None) -> None:
+        """Показывает/скрывает блоки под выбранным типом памяти и пишет
+        подсказку. Честно: отсутствие Obsidian или Docker называется вслух."""
+        memory = self._selected_memory()
+        install = self._selected_hindsight_install()
+
+        # блок выбора способа установки и кнопок Hindsight — только для
+        # hindsight
+        self.hindsight_install_box.setVisible(memory == "hindsight")
+        self.hindsight_buttons_box.setVisible(memory == "hindsight")
+
+        # подсказка внизу блока памяти
         if error:
-            self.obsidian_hint.setText(error)
+            self.memory_hint.setText(error)
             return
-        if not (self.chk_obsidian.isChecked() or self.chk_obsidian_agent.isChecked()):
-            self.obsidian_hint.setText("")
+        if memory == "hindsight":
+            if install == "docker":
+                self.memory_hint.setText(
+                    "Docker: ~9 ГБ на диске, нужен работающий Docker Desktop. "
+                    "Установку сделает программа."
+                )
+            else:
+                self.memory_hint.setText(
+                    "uv: ~2–3 ГБ на диске и ~1,5–2 ГБ оперативной памяти "
+                    "в момент запуска. Установку сделает программа."
+                )
+        elif memory == "obsidian":
+            import obsidian_base
+            if obsidian_base.find_obsidian() is None:
+                self.memory_hint.setText(obsidian_base.missing_obsidian_text())
+            else:
+                self.memory_hint.setText(
+                    "Obsidian найден. Будет создана совместимая база с "
+                    "кнопкой «Открыть в Obsidian» под созданной базой."
+                )
+        else:
+            self.memory_hint.setText(
+                "Стандартное хранилище. Мост NCP подключается автоматически."
+            )
+            self.hindsight_status_label.setText("")
+        self._hindsight_status()
+
+    def _hindsight_status(self) -> None:
+        """Живой статус Hindsight для кнопок. Молчания здесь быть не может."""
+        if self._selected_memory() != "hindsight":
+            self.hindsight_status_label.setText("")
+            self.btn_hindsight_start.setEnabled(True)
+            self.btn_hindsight_stop.setEnabled(False)
             return
-        if obsidian_base.find_obsidian() is None:
-            self.obsidian_hint.setText(obsidian_base.missing_obsidian_text())
+        import hindsight_base
+
+        try:
+            status = hindsight_base.status_text()
+        except Exception as exc:
+            status = f"Не удалось проверить: {exc}"
+        self.hindsight_status_label.setText(status)
+        running = "работает" in status
+        self.btn_hindsight_start.setEnabled(not running)
+        self.btn_hindsight_stop.setEnabled(running)
+
+    def _hindsight_start(self) -> None:
+        import hindsight_base
+
+        install = self._selected_hindsight_install()
+        try:
+            ok, log = hindsight_base.install(
+                lambda s: self.log.add(s, "info"), method=install,
+            )
+            if not ok and log:
+                self._warn("\n".join(log[-3:]))
+        except Exception as exc:
+            self._warn(f"Не удалось поставить Hindsight:\n{exc}")
             return
-        self.obsidian_hint.setText(
-            "Obsidian найден. Открыть хранилище можно кнопкой под "
-            "созданной базой. Ответ самого Obsidian программа не проверяет."
-        )
+        self._hindsight_status()
+
+    def _hindsight_stop(self) -> None:
+        import hindsight_base
+
+        try:
+            note = hindsight_base.stop()
+            self.log.add(note, "info")
+        except Exception as exc:
+            self._warn(f"Не удалось остановить Hindsight:\n{exc}")
+        self._hindsight_status()
+
+    def _hindsight_check(self) -> None:
+        import hindsight_base
+
+        try:
+            note = hindsight_base.status_text()
+        except Exception as exc:
+            note = f"Не удалось проверить: {exc}"
+        self.hindsight_status_label.setText(note)
+        running = "работает" in note
+        self.btn_hindsight_start.setEnabled(not running)
+        self.btn_hindsight_stop.setEnabled(running)
 
     def _open_obsidian(self) -> None:
         """Открывает хранилище официальным адресом, а не командой.
@@ -992,6 +1188,8 @@ class CreateTab(ScrollPage):
             return core.build_plan(
                 parent, self.name_edit.text(), template,
                 allow_sensitive=self.chk_sensitive.isChecked(),
+                memory=self._selected_memory(),
+                hindsight_install=self._selected_hindsight_install(),
             )
         except core.NameError_ as exc:
             if not quiet:
@@ -1029,23 +1227,32 @@ class CreateTab(ScrollPage):
         else:
             self.log.add("Ярлык создаваться не будет.", "dim")
 
-        if self.chk_obsidian.isChecked() or self.chk_obsidian_agent.isChecked():
-            if self.chk_obsidian.isChecked():
+        memory = plan.memory
+        self.log.add(
+            f"Память базы: {core.MEMORY_TITLES.get(memory, memory)}", "info"
+        )
+        if memory == "obsidian":
+            import obsidian_base
+            if obsidian_base.find_obsidian() is None:
+                self.log.add(obsidian_base.missing_obsidian_text(), "warn")
+            else:
                 self.log.add(
-                    "Obsidian: создастся Главная.md, если её нет. "
-                    "Чужие заметки не перезаписываются.",
+                    "Obsidian: будет создана совместимая база (Главная.md), "
+                    "чужие заметки не перезаписываются.",
                     "info",
                 )
-            if self.chk_obsidian_agent.isChecked():
-                self.log.add(
-                    "Obsidian Agent: файл @obsidian ляжет в .opencode/agents этой базы. "
-                    "Общие настройки OpenCode не меняются. Живой правки заметок нет.",
-                    "info",
-                )
-            if self.chk_obsidian.isChecked():
-                import obsidian_base
-                if obsidian_base.find_obsidian() is None:
-                    self.log.add(obsidian_base.missing_obsidian_text(), "warn")
+        elif memory == "hindsight":
+            bank = ""
+            try:
+                bank = core.bank_slug(plan.name)
+            except Exception:
+                bank = "банк"
+            self.log.add(
+                f"Hindsight: банк «{bank}» на http://127.0.0.1:8888/mcp/{bank}/. "
+                + ("Способ: Docker." if plan.hindsight_install == "docker"
+                   else "Способ: uv."),
+                "info",
+            )
 
         if self.attach_check.isChecked():
             program = self._selected_program()
@@ -1107,26 +1314,41 @@ class CreateTab(ScrollPage):
         link_place = self.link_place.currentData() or ""
         link_custom = self.link_custom_edit.text()
         link_name = plan.name
-        # То же с переключателями Obsidian: во время работы поля уже
-        # недоступны, а решение принято до неё.
-        want_obsidian = self.chk_obsidian.isChecked()
-        want_agent = self.chk_obsidian_agent.isChecked()
-        self._obsidian_extra = {"notes": [], "errors": [], "wanted": want_obsidian}
+        # То же с типом памяти: решение принято до запуска, во время
+        # работы поля окна недоступны.
+        memory = plan.memory
+        self._obsidian_extra = {"notes": [], "errors": [], "wanted": memory == "obsidian"}
 
         def job(progress):
             core.create_base(plan, progress)
-            if want_obsidian or want_agent:
+            if memory == "obsidian":
                 import obsidian_base
                 notes, errors = obsidian_base.apply(
-                    plan.target, obsidian=want_obsidian, agent=want_agent,
+                    plan.target, obsidian=True, agent=False,
                 )
                 self._obsidian_extra = {
-                    "notes": notes, "errors": errors, "wanted": want_obsidian,
+                    "notes": notes, "errors": errors, "wanted": True,
                 }
                 for line in notes:
                     progress(line)
                 for line in errors:
                     progress(line)
+            if memory == "hindsight":
+                progress("Установка Hindsight…")
+                try:
+                    import hindsight_base
+                    ok, log = hindsight_base.install(
+                        progress, method=plan.hindsight_install or "uv",
+                    )
+                    if not ok:
+                        self._obsidian_extra = {
+                            "notes": [], "errors": log[-3:], "wanted": False,
+                        }
+                except Exception as exc:
+                    self._obsidian_extra = {
+                        "notes": [], "errors": [f"Hindsight: {exc}"], "wanted": False,
+                    }
+                    progress(f"Hindsight: {exc}")
             attached = None
             if attach and program is not None:
                 progress(f"Подключение к «{program.title}»…")
@@ -1189,27 +1411,27 @@ class CreateTab(ScrollPage):
         self.base_ready.emit(str(plan.target))
 
         extra = getattr(self, "_obsidian_extra", None) or {}
-        obsidian_errors = list(extra.get("errors") or [])
+        memory_errors = list(extra.get("errors") or [])
         if isinstance(result, core.AttachResult):
-            if result.errors or obsidian_errors:
+            if result.errors or memory_errors:
                 self.log.add("Готово, но с замечаниями:", "warn")
                 for error in result.errors:
                     self.log.add(f"  {error}", "error")
-                for error in obsidian_errors:
+                for error in memory_errors:
                     self.log.add(f"  {error}", "error")
                 parts = []
                 if result.errors:
                     parts.append("Подключить удалось не всё:\n" + "\n".join(result.errors))
-                if obsidian_errors:
-                    parts.append("Obsidian:\n" + "\n".join(obsidian_errors))
+                if memory_errors:
+                    parts.append("Память базы:\n" + "\n".join(memory_errors))
                 self._warn("База создана, но не всё прошло:\n\n" + "\n\n".join(parts))
             else:
                 self.log.add("Готово: база создана и подключена.", "ok")
                 self._inform_done(plan.target, result)
         else:
-            if obsidian_errors:
-                self.log.add("База создана, Obsidian — с замечаниями:", "warn")
-                self._warn("База создана, но Obsidian:\n\n" + "\n".join(obsidian_errors))
+            if memory_errors:
+                self.log.add("База создана, память — с замечаниями:", "warn")
+                self._warn("База создана, но память:\n\n" + "\n".join(memory_errors))
             else:
                 self.log.add("Готово: база создана.", "ok")
                 self._inform_done(plan.target, None)
@@ -3745,11 +3967,11 @@ class CapsTab(ScrollPage):
         "ncp": "Мост NCP — память, библиотека, 7 инструментов",
         "agents": "13 агентов — поиск, план, код, проверка и другие",
         "antiblock": "Обход блокировок — запуск OpenCode через прокси",
-        "rtk": "rtk — поставить плагин короткого вывода (нужен rtk в PATH; сама работа — в скилле rtk)",
-        "caveman": "caveman — поставить правила краткости (уровень — в скилле caveman)",
-        "pxpipe": "pxpipe — поставить плагин прокси (прокси, остановка и числа — в скилле pxpipe)",
-        "auto-improve": "auto-improve — поставить плагин (цикл улучшения, ключ судьи и ход — в скилле auto-improve)",
-        "greenlight": "greenlight — поставить плагин (сборка и проверки — в скилле greenlight)",
+        "rtk": "rtk — вывод команд короче",
+        "caveman": "caveman — правила краткости ответов",
+        "pxpipe": "pxpipe — запросы картинками",
+        "auto-improve": "auto-improve — улучшение текста",
+        "greenlight": "greenlight — проверка iOS перед App Store",
         "qwen-review": "Qwen Code — второй ревьюер (вторая пара глаз)",
     }
 

@@ -20,6 +20,38 @@ from pathlib import Path
 
 # ---------------------------------------------------------------- программы
 
+
+
+
+# --- Тип памяти базы ---
+MEMORY_TYPES = ("ncp", "obsidian", "hindsight")
+
+MEMORY_DEFAULT = "ncp"
+
+MEMORY_TITLES = {
+    "ncp": "NCP — библиотека записей",
+    "obsidian": "Obsidian — хранилище заметок",
+    "hindsight": "Hindsight — банк памяти",
+}
+
+MEMORY_NAMES = {"ncp": "NCP", "obsidian": "Obsidian", "hindsight": "Hindsight"}
+
+_BANK_TRANSLIT = {
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e",
+    "ё": "e", "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k",
+    "л": "l", "м": "m", "н": "n", "о": "o", "п": "p", "р": "r",
+    "с": "s", "т": "t", "у": "u", "ф": "f", "х": "h", "ц": "ts",
+    "ч": "ch", "ш": "sh", "щ": "sch", "ъ": "", "ы": "y", "ь": "",
+    "э": "e", "ю": "yu", "я": "ya",
+}
+
+MEMORY_RULES_BEGIN = "<!-- opencode-base: память базы -->"
+
+MEMORY_RULES_END = "<!-- opencode-base: конец правил памяти -->"
+
+MEMORY_CARD_BEGIN = "<!-- opencode-base: память-этой-базы -->"
+
+MEMORY_CARD_END = "<!-- opencode-base: конец памяти -->"
 SKILL_MARKER = "SKILL.md"
 
 #: Файл в папке skills, где записано, что именно мы ставили и каким был
@@ -321,13 +353,20 @@ def has_plugin(cfg: Path) -> bool:
     return (cfg / Path(*PLUGIN_REL)).is_file()
 
 
-def build_instructions(base: Path) -> str:
+def build_instructions(base: Path, memory: str = MEMORY_DEFAULT) -> str:
     """Собирает текст opencode.jsonc с путями именно к этой базе.
 
     Батник берёт готовый файл из базы — и пути там от старого места,
     если база переехала. Здесь файл собирается заново, поэтому пути
     всегда указывают на настоящую папку базы.
+
+    `memory` выбирает список файлов: у Obsidian и Hindsight вместо
+    «библиотека/АКТИВНАЯ-ПАМЯТЬ.md» подключается
+    «память/АКТИВНАЯ-ПАМЯТЬ.md» и правила памяти. Ссылка на несуществующий
+    файл в instructions — это тихая ошибка: opencode промолчит, а
+    нейросеть будет считать, что памяти нет.
     """
+    memory = valid_memory(memory)
     base_posix = str(base).replace("\\", "/")
     lines = [
         "{",
@@ -336,7 +375,7 @@ def build_instructions(base: Path) -> str:
         "  // в КАЖДУЮ сессию (все модели, CLI и десктоп), без ручных действий.",
         '  "instructions": [',
     ]
-    items = [f"{base_posix}/{name}" for name in INSTRUCTION_TARGETS]
+    items = [f"{base_posix}/{name}" for name in instruction_targets(memory)]
     for index, item in enumerate(items):
         comma = "," if index < len(items) - 1 else ""
         lines.append(f'    "{item}"{comma}')
@@ -400,6 +439,10 @@ def install_plugin(base: Path, dest: Path, progress=None) -> tuple[list[str], li
 
     say(f"Плагин найден: {cfg}")
     dest.mkdir(parents=True, exist_ok=True)
+    # Тип памяти влияет на список файлов instructions и на определение
+    # «основного» файла: у Obsidian вместо библиотеки/АКТИВНАЯ-ПАМЯТЬ.md
+    # подключается память/АКТИВНАЯ-ПАМЯТЬ.md.
+    memory = base_memory(base)
 
     # Прежние настройки сохраняем, чтобы ничего не потерялось.
     old = [f for f in CONFIG_FILES if (dest / f).is_file()]
@@ -462,7 +505,7 @@ def install_plugin(base: Path, dest: Path, progress=None) -> tuple[list[str], li
                 errors.append(f"Не удалось скопировать {INSTRUCTIONS_FILE}: {exc}")
         else:
             try:
-                cfg_target.write_text(build_instructions(base), encoding="utf-8")
+                cfg_target.write_text(build_instructions(base, memory), encoding="utf-8")
             except OSError as exc:
                 errors.append(f"Не удалось записать {INSTRUCTIONS_FILE}: {exc}")
     if cfg_target.is_file():
@@ -472,11 +515,11 @@ def install_plugin(base: Path, dest: Path, progress=None) -> tuple[list[str], li
             from opencode_caps import set_instructions  # noqa: PLC0415
 
             text = cfg_target.read_text(encoding="utf-8")
-            cfg_target.write_text(set_instructions(text, base), encoding="utf-8")
+            cfg_target.write_text(set_instructions(text, base, memory), encoding="utf-8")
             say("Пути к базе прописаны в настройках")
         except (OSError, ValueError) as exc:
             try:
-                cfg_target.write_text(build_instructions(base), encoding="utf-8")
+                cfg_target.write_text(build_instructions(base, memory), encoding="utf-8")
                 say("Пути к базе прописаны заново — прежний файл не читался")
             except OSError as exc2:
                 errors.append(f"Не удалось записать {INSTRUCTIONS_FILE}: {exc2}")
@@ -1177,6 +1220,12 @@ class CreationPlan:
     # По умолчанию нет. Выбирается при создании базы и дальше лежит
     # в базе файлом настройки, чтобы правило было видно без программы.
     allow_sensitive: bool = False
+    #: Единственный тип памяти базы: ncp / obsidian / hindsight.
+    #: Хранилищ два не бывает (решение человека 25.10.2026).
+    memory: str = MEMORY_DEFAULT
+    #: Способ установки Hindsight для памяти hindsight: "uv" или "docker".
+    #: Пусто — установка отложена, программа поднимет по умолчанию.
+    hindsight_install: str = ""
     files: list[str] = field(default_factory=list)
     dirs: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -1184,12 +1233,17 @@ class CreationPlan:
 
 
 def build_plan(parent: Path, name: str, template: Path | None,
-              allow_sensitive: bool = False) -> CreationPlan:
+               allow_sensitive: bool = False, *,
+               memory: str = MEMORY_DEFAULT,
+               hindsight_install: str = "") -> CreationPlan:
     """Готовит план создания базы, ничего не записывая на диск."""
     name = validate_name(name)
+    memory = valid_memory(memory)
     target = Path(parent) / name
     plan = CreationPlan(target=target, name=name,
-                        allow_sensitive=allow_sensitive)
+                        allow_sensitive=allow_sensitive,
+                        memory=memory,
+                        hindsight_install=valid_hindsight_install(hindsight_install))
 
     if target.exists():
         if any((target / f).exists() for f in REQUIRED_FILES):
@@ -1205,6 +1259,22 @@ def build_plan(parent: Path, name: str, template: Path | None,
     else:
         plan.dirs.append(str(target))
 
+    # Цена памяти Hindsight видна сразу, до создания: диск, память и
+    # Docker Desktop (для способа docker) — это решение человека, а не
+    # сюрприз после записи. Способ uv живёт в собственном окружении и
+    # Docker не трогает.
+    if memory == "hindsight" and hindsight_install == "docker":
+        plan.warnings.append(
+            "Hindsight через Docker: ~9 ГБ на диске (образ), нужен "
+            "работающий Docker Desktop. Установку сделает программа."
+        )
+    elif memory == "hindsight" and hindsight_install == "uv":
+        plan.warnings.append(
+            "Hindsight через uv: завизит ~2–3 ГБ на диске и ~1,5–2 ГБ "
+            "оперативной памяти в момент запуска. Установку сделает программа."
+        )
+
+    dirs_for_memory = new_dirs_for(memory)
     if template and (template / REQUIRED_FILES[0]).is_file():
         plan.template_from = template
         plan.files = [
@@ -1212,14 +1282,15 @@ def build_plan(parent: Path, name: str, template: Path | None,
             "facts.md (из образца)",
             "projects.md (из образца)",
             "ОБРАЗЕЦ-БАЗЫ.md",
-            "библиотека/ (пустая, с активной памятью)",
+            "библиотека/ (пустая, с активной памятью)"
+            if memory == "ncp" else "память/ (активная память)",
             "skills/ (пустая — наполните копированием)",
             "заготовки личных данных (_ШАБЛОН-….md)",
         ]
-        plan.dirs += [str(target / d) for d in NEW_DIRS]
+        plan.dirs += [str(target / d) for d in dirs_for_memory]
     else:
         plan.files = [f"{f} (пустой шаблон)" for f in REQUIRED_FILES]
-        plan.dirs += [str(target / d) for d in NEW_DIRS]
+        plan.dirs += [str(target / d) for d in dirs_for_memory]
     return plan
 
 
@@ -1457,13 +1528,16 @@ def create_base(plan: CreationPlan, progress=None) -> list[str]:
             progress(text)
 
     target = plan.target
+    memory = plan.memory
     target.mkdir(parents=True, exist_ok=True)
     say(f"Создана папка: {target}")
+    say(f"Память базы: {MEMORY_TITLES.get(memory, memory)}")
 
-    for name in NEW_DIRS:
+    dirs_here = new_dirs_for(memory)
+    for name in dirs_here:
         folder = target / name
         folder.mkdir(parents=True, exist_ok=True)
-    say(f"Создано папок: {len(NEW_DIRS)}")
+    say(f"Создано папок: {len(dirs_here)}")
 
     # Области знаний — по папке на область, чтобы сразу было видно,
     # куда раскладывать материалы. Создаются только если их ещё нет.
@@ -1492,7 +1566,7 @@ def create_base(plan: CreationPlan, progress=None) -> list[str]:
         say(f"Подпапок в областях создано: {subs_made}")
 
     if plan.template_from:
-        copied = _copy_template(plan.template_from, target)
+        copied = _copy_template(plan.template_from, target, memory)
         say(f"Скопировано из образца: {', '.join(copied)}")
     else:
         for name, body in BLANK.items():
@@ -1501,14 +1575,16 @@ def create_base(plan: CreationPlan, progress=None) -> list[str]:
         # Наполнение пустой базы из главной базы (где живёт программа):
         # справочники знаний, скиллы, конфиг с плагином и записи библиотеки.
         # Личные файлы (profile/facts/projects) остаются пустыми заготовками.
+        # Записи библиотеки — часть хранилища NCP: у других типов памяти
+        # папки «библиотека» нет, и копировать туда нечего.
         filled = (
-            _copy_service_files(program_root(), target)
+            _copy_service_files(program_root(), target, memory)
             + _copy_ref_files(program_root(), target)
-            + _copy_lib_docs(program_root(), target)
-            + _copy_lib_records(program_root(), target)
+            + (_copy_lib_docs(program_root(), target) if memory == "ncp" else [])
+            + (_copy_lib_records(program_root(), target) if memory == "ncp" else [])
             + _copy_skills(program_root(), target)
             + _copy_instructions(program_root(), target)
-            + _copy_config(program_root(), target)
+            + _copy_config(program_root(), target, memory)
             + _copy_antiblock(program_root(), target)
         )
         if filled:
@@ -1530,7 +1606,7 @@ def create_base(plan: CreationPlan, progress=None) -> list[str]:
     # Проверяем не «папка пуста», а «нет ли уже пояснения»: у папки
     # с подпапками внутри файла может не быть.
     hints_made = 0
-    folders = list(NEW_DIRS) + knowledge_folders()
+    folders = list(dirs_here) + knowledge_folders()
     for name in folders:
         folder = target / name
         if not folder.is_dir():
@@ -1550,8 +1626,9 @@ def create_base(plan: CreationPlan, progress=None) -> list[str]:
         say(f"Создано пояснений к папкам: {hints_made}")
 
     # Мосты NCP и PC живут внутри базы — копируем из конструктора,
-    # чтобы при подключении базы они уже были на месте.
-    for bridge in ("ncp-bridge", "pc-bridge"):
+    # чтобы при подключении базы они уже были на месте. Мост NCP —
+    # только при памяти NCP: без неё мосту некуда смотреть.
+    for bridge in bridges_for(memory):
         src_bridge = program_root() / "tools" / bridge
         dst_bridge = target / "tools" / bridge
         if src_bridge.is_dir() and not dst_bridge.is_dir():
@@ -1570,9 +1647,9 @@ def create_base(plan: CreationPlan, progress=None) -> list[str]:
 
     # Мосты должны быть рабочими сразу после создания базы, а не только
     # после подключения: достраиваем config.json и вписываем путь к библиотеке.
-    for message in refresh_bridge_code(target):
+    for message in refresh_bridge_code(target, memory=memory):
         say(message)
-    for message in configure_bridges(target):
+    for message in configure_bridges(target, memory=memory):
         say(message)
 
     # Скиллы и индекс: новая база рождается с полным набором, и обновляется
@@ -1614,6 +1691,9 @@ def create_base(plan: CreationPlan, progress=None) -> list[str]:
                 except OSError as exc:
                     say(f"AGENTS.md в корень не скопирован ({exc})")
                 break
+    if root_agents.is_file():
+        for message in prepend_memory_rules(root_agents, memory):
+            say(message)
 
     # Решение человека о чувствительных данных: пишется файлом, чтобы
     # правило жило вместе с базой и было видно без программы.
@@ -1628,39 +1708,71 @@ def create_base(plan: CreationPlan, progress=None) -> list[str]:
             + ("разрешено" if plan.allow_sensitive else "запрещено")
         )
 
-    memory = target / "библиотека/АКТИВНАЯ-ПАМЯТЬ.md"
-    if not memory.exists():
-        memory.write_text(ACTIVE_MEMORY, encoding="utf-8")
+    if memory == "ncp":
+        memory_file = target / "библиотека/АКТИВНАЯ-ПАМЯТЬ.md"
+        if not memory_file.exists():
+            memory_file.write_text(ACTIVE_MEMORY, encoding="utf-8")
 
-    # Указатель библиотеки собираем из файлов, а не берём из шаблона.
-    # Найдено 29.09: записи библиотеки копируются из конструктора, а
-    # индекс писался пустым шаблоном и объявлял count: 0 при двух
-    # записях на диске. Каждая новая база рождалась с врущим
-    # указателем, и заметить это было некому: спрашивали только
-    # «есть ли файл», а он был.
-    index = target / "библиотека/index.json"
-    if not index.exists():
-        rebuilt = _rebuild_library_index(target)
-        if rebuilt:
-            say(f"Указатель библиотеки собран из файлов: записей {rebuilt}")
-        else:
-            data = dict(LIBRARY_INDEX)
-            data["updated"] = datetime.now().isoformat(timespec="seconds")
-            index.write_text(
-                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-            say("Указатель библиотеки записан пустым: пересборка не удалась, "
-                "записи появятся в нём после первого сохранения")
+        # Указатель библиотеки собираем из файлов, а не берём из шаблона.
+        # Найдено 29.09: записи библиотеки копируются из конструктора, а
+        # индекс писался пустым шаблоном и объявлял count: 0 при двух
+        # записях на диске. Каждая новая база рождалась с врущим
+        # указателем, и заметить это было некому: спрашивали только
+        # «есть ли файл», а он был.
+        index = target / "библиотека/index.json"
+        if not index.exists():
+            rebuilt = _rebuild_library_index(target)
+            if rebuilt:
+                say(f"Указатель библиотеки собран из файлов: записей {rebuilt}")
+            else:
+                data = dict(LIBRARY_INDEX)
+                data["updated"] = datetime.now().isoformat(timespec="seconds")
+                index.write_text(
+                    json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+                say("Указатель библиотеки записан пустым: пересборка не удалась, "
+                    "записи появятся в нём после первого сохранения")
+    else:
+        # У типов без NCP активная память живёт в «память/»: библиотеки
+        # у базы нет, и ссылка на неё вела бы в пустоту.
+        memory_file = target / "память" / "АКТИВНАЯ-ПАМЯТЬ.md"
+        if not memory_file.exists():
+            memory_file.parent.mkdir(parents=True, exist_ok=True)
+            memory_file.write_text(ACTIVE_MEMORY, encoding="utf-8")
+            say("Активная память записана: память/АКТИВНАЯ-ПАМЯТЬ.md")
 
+    # Правила памяти базы — файлом, чтобы они переезжали вместе с базой
+    # и были видны нейросети с первой сессии (файл едет в инструкции).
+    bank = ""
+    if memory == "hindsight":
+        bank = bank_slug(plan.name)
+    memory_doc = target / "настройки" / "память.md"
+    memory_doc.parent.mkdir(parents=True, exist_ok=True)
+    memory_doc.write_text(
+        memory_doc_text(memory, name=plan.name, bank=bank, install=plan.hindsight_install),
+        encoding="utf-8",
+    )
+    say(f"Правила памяти записаны: настройки/память.md")
+
+    # Строка «Память этой базы» — в карту базы, чтобы тип был виден и
+    # без программы, и без чтения JSON.
+    for message in ensure_memory_section(target, memory, bank=bank):
+        say(message)
+
+    marker_data = {
+        "kind": "opencode-base",
+        "name": plan.name,
+        "created": datetime.now().isoformat(timespec="seconds"),
+        "created_by": "tools/dbapp",
+        "memory": memory,
+    }
+    if memory == "hindsight":
+        marker_data["memory_bank"] = bank
+        marker_data["hindsight_install"] = plan.hindsight_install
     marker = target / "база.json"
     marker.write_text(
         json.dumps(
-            {
-                "kind": "opencode-base",
-                "name": plan.name,
-                "created": datetime.now().isoformat(timespec="seconds"),
-                "created_by": "tools/dbapp",
-            },
+            marker_data,
             ensure_ascii=False,
             indent=2,
         ),
@@ -1827,14 +1939,15 @@ def _copy_instructions(source: Path, target: Path) -> list[str]:
     return copied
 
 
-def _copy_service_files(source: Path, target: Path) -> list[str]:
+def _copy_service_files(source: Path, target: Path,
+                        memory: str = MEMORY_DEFAULT) -> list[str]:
     """Служебные файлы папок: пояснения «_О-ПАПКЕ.md» и заготовки
     «_ШАБЛОН-….md». Имя, начинающееся с «_», — признак служебного
     файла: свои записи пользователь так не называет. Поэтому копируем
     именно по этому признаку и ничего лишнего не задеваем.
     """
     copied: list[str] = []
-    places = list(NEW_DIRS) + knowledge_folders()
+    places = list(new_dirs_for_memory := new_dirs_for(memory)) + knowledge_folders()
     for name in places:
         folder = source / name
         if not folder.is_dir():
@@ -2185,7 +2298,7 @@ def _copy_antiblock(source: Path, target: Path) -> list[str]:
     return copied
 
 
-def _copy_config(source: Path, target: Path) -> list[str]:
+def _copy_config(source: Path, target: Path, memory: str = MEMORY_DEFAULT) -> list[str]:
     """Папка config с плагином памяти и зависимостями.
 
     Пути в настройках переписываем под новое место базы: в источнике
@@ -2227,7 +2340,7 @@ def _copy_config(source: Path, target: Path) -> list[str]:
     if (dst_cfg / INSTRUCTIONS_FILE).is_file():
         try:
             (dst_cfg / INSTRUCTIONS_FILE).write_text(
-                build_instructions(target), encoding="utf-8"
+                build_instructions(target, memory), encoding="utf-8"
             )
             copied.append("config/opencode.jsonc (пути обновлены)")
         except OSError:
@@ -2235,7 +2348,7 @@ def _copy_config(source: Path, target: Path) -> list[str]:
     return copied
 
 
-def _copy_template(template: Path, target: Path) -> list[str]:
+def _copy_template(template: Path, target: Path, memory: str = MEMORY_DEFAULT) -> list[str]:
     """Переносит образец базы, не перезаписывая существующее."""
     copied: list[str] = []
     for name in REQUIRED_FILES:
@@ -2252,17 +2365,22 @@ def _copy_template(template: Path, target: Path) -> list[str]:
             shutil.copy2(src, target / name)
             copied.append(name)
 
-    copied += _copy_service_files(template, target)
+    copied += _copy_service_files(template, target, memory)
     copied += _copy_ref_files(template, target)
-    copied += _copy_lib_records(template, target)
+    # Записи библиотеки — часть хранилища NCP. У Obsidian и Hindsight
+    # папки «библиотека» в базе нет, и под видом «из образца» она бы
+    # появилась тайно.
+    if memory == "ncp":
+        copied += _copy_lib_records(template, target)
 
     copied += _copy_skills(template, target)
 
-    copied += _copy_config(template, target)
+    copied += _copy_config(template, target, memory)
 
     copied += _copy_antiblock(template, target)
 
-    copied += _copy_lib_docs(template, target)
+    if memory == "ncp":
+        copied += _copy_lib_docs(template, target)
     copied += _copy_instructions(template, target)
     return copied
 
@@ -2503,21 +2621,23 @@ def configure_ncp_bridge(base: Path) -> list[str]:
     return messages
 
 
-def configure_bridges(base: Path) -> list[str]:
+def configure_bridges(base: Path, memory: str = MEMORY_DEFAULT) -> list[str]:
     """Готовит мосты внутри базы: достраивает config.json, вписывает путь.
 
     Точка входа одна и для создания базы, и для подключения — мосты должны
     быть рабочими в обоих случаях. Мост ПК сам разворачивает {{BASE}} в свою
-    базу, поэтому для него достаточно достроить файл.
+    базу, поэтому для него достаточно достроить файл. Мост NCP настраивается
+    только при памяти NCP: без библиотеки путь вписывать некуда.
     """
     messages: list[str] = []
-    for name in BASE_BRIDGES:
+    for name in bridges_for(memory):
         messages.extend(ensure_bridge_config(base, name))
-    messages.extend(configure_ncp_bridge(base))
+    if memory == "ncp":
+        messages.extend(configure_ncp_bridge(base))
     return messages
 
 
-def refresh_bridge_code(base: Path) -> list[str]:
+def refresh_bridge_code(base: Path, memory: str = MEMORY_DEFAULT) -> list[str]:
     """Обновляет код мостов в базе из конструктора.
 
     Код моста — часть программы, а не данные базы: он обязан совпадать с
@@ -2528,7 +2648,7 @@ def refresh_bridge_code(base: Path) -> list[str]:
     config.json НЕ трогаем: там путь к библиотеке этой базы, он живой.
     """
     messages: list[str] = []
-    for name in BASE_BRIDGES:
+    for name in bridges_for(memory):
         src = program_root() / "tools" / name
         dst = base / "tools" / name
         if not src.is_dir() or not dst.is_dir():
@@ -2885,6 +3005,11 @@ def attach_base(
         errors.append(f"Папка {base} не похожа на базу: нет {REQUIRED_FILES[0]}.")
         return result
 
+    # Тип памяти берём из отметки базы: без поля memory это NCP, как во
+    # всех старых базах. От него зависит, какие папки и мосты нужны.
+    memory = base_memory(base)
+    say(f"Память базы: {MEMORY_NAMES.get(memory, memory)}")
+
     # Отказ до всякого копирования: защита от записи в чужую папку.
     if not program.can_attach():
         result.ok = False
@@ -2936,7 +3061,14 @@ def attach_base(
                 errors.append(f"Не удалось скопировать {name}: {exc}")
     say("Файлы памяти перенесены" if copied_any else "Файлы памяти не найдены")
 
-    for folder in ("знания", "библиотека", "projects", "инструкции", "sessions"):
+    # Папка «библиотека» есть только у NCP: у Obsidian память живёт
+    # заметками в корне, у Hindsight — в банке на своём сервере. Копировать
+    # её всегда значило бы тащить в программу пустую папку и путать
+    # человека вопросом «а здесь что лежит».
+    folders = ["знания", "projects", "инструкции", "sessions"]
+    if memory == "ncp":
+        folders.append("библиотека")
+    for folder in folders:
         src = base / folder
         if src.is_dir():
             try:
@@ -3054,7 +3186,7 @@ def attach_base(
 # Мосты живут ВНУТРИ базы: при подключении копируем их из конструктора
         # в базу (если ещё нет), затем config.json моста NCP указывает
         # на библиотеку ЭТОЙ базы, а opencode.jsonc запускает мост из базы.
-        for bridge in ("ncp-bridge", "pc-bridge"):
+        for bridge in bridges_for(memory):
             src_bridge = program_root() / "tools" / bridge
             dst_bridge = base / "tools" / bridge
             if src_bridge.is_dir() and not dst_bridge.is_dir():
@@ -3069,7 +3201,7 @@ def attach_base(
                     say(f"Мост {bridge} скопирован в базу")
                 except OSError as exc:
                     errors.append(f"Не удалось скопировать мост {bridge}: {exc}")
-        for message in refresh_bridge_code(base):
+        for message in refresh_bridge_code(base, memory=memory):
             say(message)
         for message in refresh_skills(base):
             say(message)
@@ -3080,14 +3212,14 @@ def attach_base(
         # привязок в архив так и не включался бы на живой базе.
         for message in refresh_knowledge_indexes(base):
             say(message)
-        for message in configure_bridges(base):
+        for message in configure_bridges(base, memory=memory):
             say(message)
         cfg_target = dest / INSTRUCTIONS_FILE
         if cfg_target.is_file():
             try:
                 from opencode_caps import rewire_config  # noqa: PLC0415
 
-                for message in rewire_config(dest, base):
+                for message in rewire_config(dest, base, memory=memory):
                     say(message)
             except (ValueError, OSError) as exc:
                 errors.append(f"Мосты opencode не переведены: {exc}")
@@ -4552,3 +4684,314 @@ def harness_overlay_snippet(python_exe: Path, server_py: Path) -> str:
         f'      command: ["{exe}", "{srv}"]\n'
     )
 
+
+def valid_memory(memory: str) -> str:
+    """Проверяет тип памяти и возвращает нормализованное значение."""
+    value = (memory or "").strip().lower()
+    if value not in MEMORY_TYPES:
+        raise NameError_(
+            "Тип памяти должен быть одним из: "
+            + ", ".join(MEMORY_TYPES) + f". Получено: {value!r}."
+        )
+    return value
+
+
+#: Способы установки Hindsight, которые умеет программа. «uv» — свой
+#: виртуальный модуль (docker не нужен), «docker» — официальный образ.
+HINDSIGHT_INSTALLS = ("uv", "docker")
+
+
+def valid_hindsight_install(value: str) -> str:
+    """Проверяет способ установки Hindsight: "" / "uv" / "docker"."""
+    value = (value or "").strip().lower()
+    if not value:
+        return ""
+    if value not in HINDSIGHT_INSTALLS:
+        raise NameError_(
+            "Способ установки Hindsight должен быть одним из: "
+            + ", ".join(HINDSIGHT_INSTALLS) + f". Получено: {value!r}."
+        )
+    return value
+
+def new_dirs_for(memory: str) -> tuple[str, ...]:
+    """Папки новой базы с учётом типа памяти.
+
+    Хранилище памяти у базы одно. У NCP это папка «библиотека», у
+    Obsidian и Hindsight её нет вовсе — иначе в базе оказалось бы два
+    хранилища, и никто не знал бы, куда писать (решение человека
+    25.10.2026). Файлы памяти (profile, facts, projects) и все прочие
+    разделы у всех типов одинаковые.
+    """
+    if memory == "ncp":
+        return NEW_DIRS
+    return tuple(d for d in NEW_DIRS if not d.startswith("библиотека"))
+
+def bridges_for(memory: str) -> tuple[str, ...]:
+    """Мосты, которые едут в базу при этом типе памяти.
+
+    Мост NCP — это и есть память NCP: без неё и мост не нужен. Мост ПК
+    к памяти не относится (он читает компьютер), поэтому остаётся у
+    всех типов.
+    """
+    if memory == "ncp":
+        return BASE_BRIDGES
+    return tuple(name for name in BASE_BRIDGES if name != "ncp-bridge")
+
+def base_memory(base: Path) -> str:
+    """Тип памяти базы. Без отметки — NCP, как во всех старых базах.
+
+    Плюс распознавание старой схемы «NCP + Obsidian»: в базе нет поля
+    memory, но есть и указатель библиотеки, и Главная.md. Такой базе
+    возвращает «ncp» — поведение прежнее, — а о двойной памяти говорит
+    отдельный признак has_legacy_obsidian, который окно показывает
+    карточкой выбора.
+    """
+    marker = read_marker(base)
+    value = ""
+    if isinstance(marker, dict):
+        value = str(marker.get("memory") or "")
+    if value in MEMORY_TYPES:
+        return value
+    return MEMORY_DEFAULT
+
+def has_legacy_obsidian(base: Path) -> bool:
+    """Старая схема «NCP + Obsidian»: обе памяти включены одновременно.
+
+    Признак — корневой Главная.md (след галочки Obsidian) при том, что
+    у базы есть библиотека NCP и поле «memory» в отметке не записано.
+    """
+    if base_memory(base) != MEMORY_DEFAULT:
+        return False
+    if not (base / "Главная.md").is_file():
+        return False
+    return (base / "библиотека" / "index.json").is_file()
+
+def bank_slug(name: str) -> str:
+    """Имя банка памяти из имени базы: латиница, цифры и дефис.
+
+    Hindsight кладёт банк в адрес MCP-сервера, поэтому кириллицу
+    транслитерируем, а прочие знаки заменяем на дефис. Пустой результат
+    невозможен: крайний случай — «base».
+    """
+    import re as _re
+
+    text = (name or "").strip() or "base"
+    lowered = text.lower()
+    translit = "".join(_BANK_TRANSLIT.get(ch, ch) for ch in lowered)
+    slug = _re.sub(r"[^a-z0-9]+", "-", translit)
+    slug = slug.strip("-")
+    return slug or "base"
+
+def memory_doc_text(
+    memory: str, *, name: str = "", bank: str = "", install: str = ""
+) -> str:
+    """Содержимое файла настройки/память.md — правила памяти базы.
+
+    Файл едет в инструкции и читается нейросетью в каждой сессии,
+    поэтому правила здесь — рабочие, а не украшение.
+    """
+    stamp = datetime.now().strftime("%Y-%m-%d")
+    title = MEMORY_TITLES.get(memory, memory)
+    common = (
+        f"Тип памяти записан в «база.json» (поле «memory»). Он не меняется\n"
+        f"сам по себе: смена типа — отдельное решение, а не тихая замена.\n\n"
+        "## Общее для всех типов\n\n"
+        "- Файлы памяти (`profile.md`, `facts.md`, `projects.md`) есть у\n"
+        "  всех типов и ведутся одинаково.\n"
+        "- Папка базы одна и общая: знания, проекты, инструкции.\n"
+    )
+    if memory == "ncp":
+        return (
+            "# Память этой базы: NCP\n\n"
+            f"Выбрано при создании базы ({stamp}).\n\n"
+            "Хранилище памяти — папка «библиотека/» и мост NCP.\n\n"
+            f"{common}"
+            "- Инструменты памяти: `ncp_*` и `memory_*` (мост NCP).\n"
+            "- Записи памяти — в `библиотека/записи/<Тема>/`.\n"
+            "- Активная память: `библиотека/АКТИВНАЯ-ПАМЯТЬ.md`.\n"
+        )
+    if memory == "obsidian":
+        return (
+            f"# Память этой базы: Obsidian\n\n"
+            f"Выбрано при создании базы ({stamp}).\n\n"
+            f"{common}\n"
+            "## Как это работает\n\n"
+            "- Хранилище памяти — сама база: файлы `profile.md`, `facts.md`,\n"
+            "  `projects.md` и заметки. Папка «библиотека/» в базе нет —\n"
+            "  её не должно быть, память не тут.\n"
+            "- Инструментов `ncp_*` и `memory_*` НЕТ — их даёт мост NCP,\n"
+            "  а эта база к нему не подключена. Не вызывай их.\n"
+            "- Читай `profile.md`, `facts.md`, `projects.md` и\n"
+            "  `память/АКТИВНАЯ-ПАМЯТЬ.md` обычным чтением файлов.\n"
+            "- Пиши в них обычной правкой файла — перед дописыванием\n"
+            "  прочитай файл, дубли не создавай.\n"
+            "- Агент `@obsidian` работает с заметками хранилища.\n"
+        )
+    if memory == "hindsight":
+        return (
+            "# Память этой базы: Hindsight\n\n"
+            f"Выбрано при создании базы ({stamp}).\n\n"
+            "Хранилище памяти — отдельный сервер Hindsight: он извлекает\n"
+            "факты из записанного и ищет по смыслу. Банк — именованная\n"
+            "часть сервера, у этой базы свой банк.\n\n"
+            f"{common}"
+            + (f"- Банк памяти: `{bank}`\n" if bank else "- Банк памяти: не записан\n")
+            + "- Инструментов `ncp_*` и `memory_*` НЕТ — их даёт мост NCP,\n"
+            "  а эта база к нему не подключена. Не вызывай их.\n"
+            "- Память живёт в банке на сервере Hindsight: пиши через\n"
+            "  `retain`, ищи через `recall` и `reflect` (MCP-сервер\n"
+            "  «hindsight»). Файлы памяти (profile/facts/projects) веди\n"
+            "  как обычно, файлами.\n"
+            "- Если инструменты hindsight недоступны — сервер памяти\n"
+            "  не запущен. Скажи об этом человеку прямо, не имитируй\n"
+            "  запись и не выдумывай ответ.\n"
+        )
+    raise ValueError(f"неизвестный тип памяти: {memory!r}")
+
+def memory_agents_note(memory: str, *, bank: str = "") -> str:
+    """Правила памяти для AGENTS.md. Для NCP — ничего: шаблон уже про NCP.
+
+    У Obsidian и Hindsight инструменты memory_* и ncp_* недоступны,
+    а шаблонный AGENTS.md требует вызывать их в начале каждой сессии.
+    Без явной оговорки нейросеть ищет инструмент, которого нет.
+    """
+    if memory == "ncp":
+        return ""
+    if memory == "obsidian":
+        rules = (
+            "**ПАМЯТЬ ЭТОЙ БАЗЫ — OBSIDIAN, НЕ NCP.** Инструментов\n"
+            "`memory_read`, `memory_save`, `ncp_*` и `library_*` в этой базе\n"
+            "НЕТ, и они не появятся. Пункты ниже, требующие их вызова, — не\n"
+            "про эту базу.\n\n"
+            "- Память базы — её файлы: `profile.md`, `facts.md`,\n"
+            "  `projects.md` и `память/АКТИВНАЯ-ПАМЯТЬ.md`. Читай их в\n"
+            "  начале сессии обычным чтением файлов, пиши обычной правкой.\n"
+            "  Папки «библиотека/» в базе нет — память не там.\n"
+            "- Заметки Obsidian — тоже память: агент `@obsidian` помогает\n"
+            "  искать и вести их.\n"
+            "- Полные правила — `настройки/память.md`.\n"
+        )
+    else:  # hindsight
+        rules = (
+            "**ПАМЯТЬ ЭТОЙ БАЗЫ — HINDSIGHT, НЕ NCP.** Инструменты\n"
+            "`memory_read`, `memory_save`, `ncp_*`, `library_*` в этой базе\n"
+            "НЕДОСТУПНЫ — их даёт мост NCP, а здесь его нет. Не вызывай их.\n\n"
+            "- Долговременная память — банк Hindsight на сервере\n"
+            "  http://127.0.0.1:8888 (MCP-сервер «hindsight»): записывай\n"
+            "  через `retain`, ищи через `recall`, размышляй через `reflect`.\n"
+            + (f"- Банк памяти: `{bank}`.\n" if bank else "")
+            + "- Если инструментов hindsight нет — сервер памяти не запущен.\n"
+            "  Скажи об этом прямо, не имитируй запись.\n"
+            "- Файлы `profile.md`, `facts.md`, `projects.md` ведутся\n"
+            "  файлами, как обычно.\n"
+        )
+    return f"{MEMORY_RULES_BEGIN}\n{rules}{MEMORY_RULES_END}\n"
+
+def prepend_memory_rules(path: Path, memory: str) -> list[str]:
+    """Вставляет в AGENTS.md правила памяти этой базы. Ничего не двоит.
+
+    Вставка идёт сразу после заголовка файла: правила памяти должны быть
+    видны раньше всего остального. У NCP вставки нет — шаблон AGENTS.md
+    уже написан про NCP, дублировать нечего. Метки вокруг блока дают
+    повторную правку: блок заменяется целиком.
+    """
+    note = memory_agents_note(memory)
+    if not note:
+        return []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return [f"AGENTS.md не прочитан: {exc}"]
+    if MEMORY_RULES_BEGIN in text:
+        begin = text.find(MEMORY_RULES_BEGIN)
+        end = text.find(MEMORY_RULES_END, begin)
+        if begin == -1 or end == -1:
+            return ["AGENTS.md: метка правил памяти не закрыта — не тронуто"]
+        end += len(MEMORY_RULES_END)
+        head = text[: text.rfind("\n", 0, begin) + 1] if begin > 0 else ""
+        tail = text[end:]
+        tail = tail[1:] if tail.startswith("\n") else tail
+        path.write_text(head + note + tail, encoding="utf-8")
+        return ["AGENTS.md: правила памяти обновлены"]
+    lines = text.split("\n")
+    if lines and lines[0].startswith("#"):
+        head, tail = lines[0] + "\n", "\n".join(lines[1:])
+        tail = tail[1:] if tail.startswith("\n") else tail
+    else:
+        head, tail = "", text
+    path.write_text(head + note + tail, encoding="utf-8")
+    return ["AGENTS.md: вписаны правила памяти этой базы"]
+
+def memory_card_text(memory: str, *, bank: str = "") -> str:
+    """Секция «Память этой базы» для КАРТА-БАЗЫ.md."""
+    title = MEMORY_TITLES.get(memory, memory)
+    body = {
+        "ncp": (
+            "Хранилище памяти — папка `библиотека/` и мост NCP\n"
+            "(`ncp_*`, `memory_*`). Записи — в `библиотека/записи/`."
+        ),
+        "obsidian": (
+            "Хранилище памяти — сама база (файлы `profile.md`, `facts.md`,\n"
+            "`projects.md`, заметки Obsidian). Папки `библиотека/` в базе нет.\n"
+            "Мост NCP не подключён, инструментов `ncp_*`/`memory_*` нет —\n"
+            "файлы читаются и правятся напрямую; заметками ведает `@obsidian`."
+        ),
+        "hindsight": (
+            "Хранилище памяти — сервер Hindsight (MCP-сервер «hindsight»).\n"
+            "Запись — `retain`, поиск — `recall`, размышление — `reflect`.\n"
+            + (f"Банк памяти: `{bank}`.\n" if bank else "")
+            + "Папки `библиотека/` в базе нет: память живёт в банке на сервере.\n"
+            "Сервер должен быть запущен ДО старта opencode."
+        ),
+    }[memory]
+    return (
+        f"{MEMORY_CARD_BEGIN}\n"
+        f"## Память этой базы\n\n"
+        f"**{MEMORY_TITLES.get(memory, memory)}** (выбрано при создании).\n\n"
+        f"{body}\n\n"
+        f"Подробные правила — `настройки/память.md`.\n"
+        f"{MEMORY_CARD_END}\n"
+    )
+
+def ensure_memory_section(base: Path, memory: str, *, bank: str = "") -> list[str]:
+    """Добавляет в КАРТА-БАЗЫ.md раздел «Память этой базы».
+
+    Секция живёт между метками: повторное создание её заменяет, а не
+    двоит. Чужие секции не трогаются. Возвращает сообщения.
+    """
+    card = base / "КАРТА-БАЗЫ.md"
+    if not card.is_file():
+        return ["КАРТА-БАЗЫ.md нет — строка о памяти не записана"]
+    try:
+        text = card.read_text(encoding="utf-8")
+    except OSError as exc:
+        return [f"КАРТА-БАЗЫ.md не прочитан: {exc}"]
+    if MEMORY_CARD_BEGIN in text:
+        begin = text.find(MEMORY_CARD_BEGIN)
+        end = text.find(MEMORY_CARD_END, begin)
+        if begin == -1 or end == -1:
+            return ["КАРТА-БАЗЫ.md: метка блока памяти не закрыта — не тронуто"]
+        end += len(MEMORY_CARD_END)
+        text = text[:begin] + memory_card_text(memory, bank=bank) + text[end + 1:]
+    else:
+        text = text.rstrip("\n") + "\n\n" + memory_card_text(memory, bank=bank)
+    card.write_text(text, encoding="utf-8")
+    return ["КАРТА-БАЗЫ.md: добавлена строка «Память этой базы»"]
+
+def instruction_targets(memory: str = MEMORY_DEFAULT) -> tuple[str, ...]:
+    """Файлы инструкций для базы с этим типом памяти.
+
+    У NCP — постоянный список INSTRUCTION_TARGETS. У Obsidian и Hindsight
+    вместо «библиотека/АКТИВНАЯ-ПАМЯТЬ.md» подключается
+    «память/АКТИВНАЯ-ПАМЯТЬ.md» (библиотеки в базе нет), и впереди
+    ставятся правила памяти — они объясняют, почему инструментов NCP нет.
+    """
+    if memory == "ncp":
+        return INSTRUCTION_TARGETS
+    items: list[str] = ["настройки/память.md"]
+    for name in INSTRUCTION_TARGETS:
+        if name == "библиотека/АКТИВНАЯ-ПАМЯТЬ.md":
+            items.append("память/АКТИВНАЯ-ПАМЯТЬ.md")
+        else:
+            items.append(name)
+    return tuple(items)

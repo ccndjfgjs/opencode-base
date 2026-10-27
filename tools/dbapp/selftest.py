@@ -151,11 +151,13 @@ def _free_port() -> int:
 #: База 26 → 54 23.10.2026: добавлены 28 недостающих мостов из списка
 #: Ариши — офис, мессенджеры, медиа, разработка, базы, финансы,
 #: безопасность. Это постоянные записи реестра, поэтому база сдвинута.
+#: База 54 → 55 26.10.2026: добавлен hindsight (банк памяти Hindsight —
+#: запись для базы с типом памяти hindsight; ставит и поднимает программа).
 #: Сколько серверов умеет настроить кнопка «Настроить автоматически».
 #: Константа с именем, потому что голое число в проверке не читается.
 AUTO_SERVERS_EXPECTED = 18
-EXPECTED_SERVERS_NO_PLAYER = 54
-EXPECTED_SERVERS_WITH_PLAYER = 55
+EXPECTED_SERVERS_NO_PLAYER = 55
+EXPECTED_SERVERS_WITH_PLAYER = 56
 #: Режим проверки задаётся явно, а не вычисляется из наличия записи.
 EXPECTED_SERVERS = EXPECTED_SERVERS_NO_PLAYER
 
@@ -4478,6 +4480,9 @@ def main() -> int:
                 # данных: это настройка базы, а не личные данные.
                 if name == "настройки" and path.name == "чувствительные-данные.md":
                     continue
+                # И описание памяти базы — тоже настройка, а не личные данные.
+                if name == "настройки" and path.name == "память.md":
+                    continue
                 _fresh_priv.append(path.relative_to(_fresh).as_posix())
         check(not _fresh_priv,
               f"в личных папках новой базы нет данных пользователя: "
@@ -5051,12 +5056,19 @@ def main() -> int:
 
     # Команда запуска пишется с плейсхолдерами, а в настройки — с
     # настоящими путями. Плейсхолдер в настройках недопустим: мост не
-    # запустится.
-    check("{PROGRAM}" in (json.loads(
-              core.program_file("mcp-registry.json").read_text(
-                  encoding="utf-8"))["servers"][-1].get("connection", {})
-              .get("command", [""])[-1]),
-          "в реестре команда записана плейсхолдером {PROGRAM}")
+    # запустится. Брать надо сервер obs по id, а не последний в списке:
+    # порядок серверов меняется (в хвост добавлялись hindsight и другие),
+    # и привязка к "последнему" молча проверяла бы другого.
+    _lazy_obs_cmd = ""
+    for _lazy_srv in json.loads(
+            core.program_file("mcp-registry.json").read_text(
+                encoding="utf-8")).get("servers", []):
+        if _lazy_srv.get("id") == "obs":
+            _lazy_cmd = _lazy_srv.get("connection", {}).get("command") or []
+            _lazy_obs_cmd = _lazy_cmd[-1] if _lazy_cmd else ""
+            break
+    check("{PROGRAM}" in _lazy_obs_cmd,
+          "в реестре команда obs записана плейсхолдером {PROGRAM}")
     _obs = next((s for s in _mcp_registry.load_servers(core.program_root())
                  if s.id == "obs"), None)
     _emu = next((s for s in _mcp_registry.load_servers(core.program_root())
@@ -12626,9 +12638,14 @@ def main() -> int:
     # `str / str` в Python означает деление. Первая версия написала
     # `(".github" / ...)` и падала TypeError на самой проверке, а не на
     # файле, который она проверяет.
+    # База ссылки — `_readme_early.parent`, папка самого README, а не
+    # `Path(".github")` от текущего каталога: селфтест запускается из
+    # `tools/dbapp`, и `Path(".github")` там указывал на
+    # `tools/dbapp/.github`, а README с `../LICENSE` сравнивался с
+    # корневым LICENSE и по каталогу-совпадению врал «не сошлось».
     _readme_lic_link = re.search(r"\[MIT\]\(([^)]+)\)", _rtext_for_lic)
     check(_readme_lic_link is not None
-          and (Path(".github") / _readme_lic_link.group(1)
+          and (_readme_early.parent / _readme_lic_link.group(1)
                ).resolve() == _lic.resolve(),
           f"и README ссылается на корневой файл, а не на исчезнувший "
           f"относительный путь: "

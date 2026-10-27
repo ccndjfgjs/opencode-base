@@ -4213,6 +4213,71 @@
         ],
         "version_note": "версия моста программы, живёт в коде лаунчера"
       }
+    },
+    {
+      "id": "hindsight",
+      "name": "Hindsight (банк памяти)",
+      "source": "https://github.com/vectorize-io/hindsight",
+      "install": "Программа ставит и поднимает сама при выборе памяти Hindsight в окне создания базы. Способ uv — отдельный виртуальный модуль (около 2–3 ГБ на диске и 1,5–2 ГБ ОЗУ при работе, Docker не нужен). Способ docker — официальный образ (~9 ГБ на диске, нужен работающий Docker Desktop). Ключ LLM берётся из настроек opencode, в базу не пишется.",
+      "program_install": {
+        "program": "Hindsight",
+        "method": "none",
+        "winget_id": "",
+        "catalog_version": "",
+        "expected_publisher": "",
+        "expected_signer": "",
+        "signer_checked": "",
+        "needs_admin": false,
+        "needs_admin_verified": false,
+        "official_url": "https://github.com/vectorize-io/hindsight",
+        "hand_over": false,
+        "publisher_trusted": true,
+        "bridge": "",
+        "instructions": "Hindsight ставит сама программа: через uv (по умолчанию) или Docker — выбор делается в окне создания базы, где цена каждого способа показана сразу. Память базы при этом выставляется в hindsight, а мост ходит на http://127.0.0.1:8888/mcp/<банк>/. Ключ LLM для генерации берётся из настроек opencode (например, провайдера dahl); в базу ключ не пишется.",
+        "checked": "2026-10-26",
+        "installed_version": "",
+        "version_measured": "",
+        "bridge_checked": false,
+        "known_good": [],
+        "version_note": "На машине uv есть (в папке сторонней программы), Docker Desktop установлен, но демон не запущен. Окружение hindsight-api на 2026-10-26 не поставлено — поставится кнопкой «Запустить Hindsight» или при создании базы с памятью hindsight. Установка проверяется живым ответом /health/ready."
+      },
+      "connection": {
+        "kind": "remote",
+        "url": "http://127.0.0.1:8888/mcp/",
+        "note": "Мост remote на локальный сервер hindsight-api. Адрес http://127.0.0.1:8888/mcp/<банк>/, где <банк> — латинское имя базы (bank_slug). Живой respond проверяется по /health/ready на 127.0.0.1:8888."
+      },
+      "license": "Apache-2.0 (см. репозиторий vectorize-io/hindsight)",
+      "tools_count": 27,
+      "why": "Банк памяти Hindsight как единственное хранилище базы (решение человека 25.10.2026): билеты, тезисы, краткосрочная и долгосрочная память, размышления агентов. Память базы при этом не NCP и не Obsidian — библиотеки и моста NCP в базе нет.",
+      "auth": "Ключей нет: сервер живёт на localhost. Ключ LLM читается из настроек opencode, в базу не пишется.",
+      "opencode": {
+        "type": "remote",
+        "url": "http://127.0.0.1:8888/mcp/<банк>/"
+      },
+      "requires": [
+        {
+          "what": "uv или Docker (выбор в окне)",
+          "check": null,
+          "type": "manual",
+          "blocks": true,
+          "note": "способ установки выбирает человек при создании базы. uv — модуль без Docker (~2–3 ГБ), docker — образ (~9 ГБ, нужен работающий Docker Desktop)."
+        },
+        {
+          "what": "ключ LLM в настройках opencode",
+          "check": null,
+          "type": "manual",
+          "blocks": false,
+          "note": "без ключа сервер поднимется, но память не отвечает — об этом программа говорит честно."
+        }
+      ],
+      "setup_steps": [
+        "В окне создания базы выбери память Hindsight и способ установки: uv (по умолчанию, без Docker) или Docker.",
+        "Нажми «Создать базу»: программа поставит окружение сама.",
+        "Кнопкой «Запустить Hindsight» подними сервер; вписывать блок в opencode.jsonc на этом этапе не нужно — он появится при подключении базы с этой памятью."
+      ],
+      "ready_here": false,
+      "ready_here_note": "2026-10-26 окружение hindsight-api не поставлено, живой ответ /health/ready не получен. Готовность выключена.",
+      "verdict": "Программа ставит и поднимает сама. Нужен выбор способа (uv/Docker) и ключ LLM из настроек opencode."
     }
   ],
   "excluded": [
