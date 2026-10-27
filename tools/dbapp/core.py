@@ -4995,3 +4995,94 @@ def instruction_targets(memory: str = MEMORY_DEFAULT) -> tuple[str, ...]:
         else:
             items.append(name)
     return tuple(items)
+
+
+# ---------------------------------------------------------------- подмодули
+# Исходники моста OBS лежат подмодулем, и это сделано намеренно: чужой код
+# не копируется в репозиторий, а закрепляется ссылкой на конкретный коммит
+# (проверяет селфтест, блок про подмодуль).
+#
+# Почему нужна починка. Обычный `git clone` подмодуль не забирает: папка
+# остаётся пустой, и программа кажется сломанной — пропадает package.json.
+# Обычно помогает `git clone --recurse-submodules`, но человек об этом не
+# знает, а переклонировать тяжёлую базу ради одного подмодуля — обидно.
+#
+# Почему не `submodule.recurse = true`. Настройка выглядит именно так, как
+# нужно, и на `git pull` действительно работает. На `git clone` — нет:
+# проверено на этой машине (git 2.55.0.windows.3) четырьмя способами задать
+# её (true/1/yes/on в .gitconfig и через -c) — подмодуль не приезжает ни
+# разу, а `git clone --recurse-submodules` приезжает сразу. Клон читает
+# подмодули раньше, чем настройка попадает в новый репозиторий.
+# Настройка поэтому не ставится «на всякий случай»: молчаливая половинчатая
+# настройка хуже её отсутствия — человек будет искать причину не там.
+#
+# Что здесь. Одна функция, которая доводит клон до рабочего состояния сама.
+# Программа зовёт её перед проверкой и при настройке моста, а человек может
+# позвать руками. Ничего не проверяется наугад: сначала git спрашивается,
+# репозиторий ли это вообще, потом — есть ли что догружать.
+def is_git_repo(folder: Path) -> bool:
+    """Папка — рабочая копия git (а не распакованная копия программы)."""
+    try:
+        done = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=str(folder), capture_output=True, text=True, timeout=20)
+    except (OSError, ValueError):
+        return False
+    return done.returncode == 0 and done.stdout.strip() == "true"
+
+
+def missing_submodules(folder: Path) -> list[str]:
+    """Какие подмодули не забраны: путь относительно папки репозитория.
+
+    Пустой список — либо подмодулей нет, либо все на месте. Смотрится
+    состояние, а не наличие папки: git создаёт папку подмодуля сразу, даже
+    когда не забрал его содержимое, поэтому «папка есть» ничего не значит.
+    """
+    try:
+        done = subprocess.run(
+            ["git", "submodule", "status"],
+            cwd=str(folder), capture_output=True, text=True, timeout=30)
+    except (OSError, ValueError):
+        return []
+    if done.returncode != 0:
+        return []
+    out: list[str] = []
+    for row in done.stdout.splitlines():
+        # Минус в начале строки означает «подмодуль есть, но не забран».
+        # Плюс — расходится с записанным коммитом; это не наша поломка,
+        # это правка на стороне репозитория, и молча чинить её нельзя.
+        if row.startswith("-"):
+            parts = row.split()
+            if len(parts) >= 2:
+                out.append(parts[1])
+    return out
+
+
+def update_submodules(folder: Path, timeout: int = 300) -> tuple[bool, str]:
+    """Дозабрать подмодули: `git submodule update --init --recursive`.
+
+    Возвращает (получилось ли, что сказать человеку). Ничего не бросает
+    наружу: сеть и git могут быть недоступны, и это повод сказать об этом
+    словами, а не уронить программу.
+    """
+    if not is_git_repo(folder):
+        return False, "эта папка не git-репозиторий: дозабирать нечего"
+    todo = missing_submodules(folder)
+    if not todo:
+        return True, "подмодули и так на месте"
+    try:
+        done = subprocess.run(
+            ["git", "submodule", "update", "--init", "--recursive"],
+            cwd=str(folder), capture_output=True, text=True, timeout=timeout)
+    except (OSError, ValueError) as exc:
+        return False, f"git не запустился: {exc}"
+    if done.returncode != 0:
+        # Человеку нужен вывод git, а не «что-то пошло не так»: чаще всего
+        # это нет сети, и достаточно одного честного предложения.
+        tail = (done.stderr or done.stdout or "").strip().splitlines()
+        return False, (f"подмодули не забрались ({', '.join(todo)}). "
+                       f"Последнее от git: {tail[-1] if tail else 'пусто'}")
+    left = missing_submodules(folder)
+    if left:
+        return False, f"подмодули не забрались: {', '.join(left)}"
+    return True, f"подмодули забраты: {', '.join(todo)}"
